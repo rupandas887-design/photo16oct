@@ -85,10 +85,12 @@ export const RoleSwitcher: React.FC<RoleSwitcherProps> = ({ sidebarOpen, setSide
         <div className="flex items-center gap-2 shrink-0">
           <NotificationBell />
 
+          {/* GitHub button hidden from header as requested */}
           <button
             onClick={() => setIsGitModalOpen(true)}
-            className="p-2 sm:px-3 sm:py-1.5 flex items-center gap-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 border border-amber-500/20 hover:border-amber-500/40 rounded-xl transition-all cursor-pointer shadow-md select-none touch-manipulation min-w-max min-h-[38px] sm:min-w-0 sm:min-h-0"
+            className="hidden p-2 sm:px-3 sm:py-1.5 items-center gap-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 border border-amber-500/20 hover:border-amber-500/40 rounded-xl transition-all cursor-pointer shadow-md select-none touch-manipulation min-w-max min-h-[38px] sm:min-w-0 sm:min-h-0"
             title="Publish Code to GitHub"
+            aria-hidden="true"
           >
             <Github className="w-4 h-4" />
             <span className="hidden sm:inline text-xs font-mono font-bold uppercase tracking-wider">GitHub</span>
