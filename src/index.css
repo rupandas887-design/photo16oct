@@ -1,0 +1,902 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@200;300;400;500;600;700;800;900&family=JetBrains+Mono:wght@200;300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  
+  /* Retain exact names for safety with existing code but elevate to cinematic dark colors */
+  --color-slate-805: #121214;
+  --color-slate-850: #18181b;
+  --color-slate-750: #27272a;
+  --color-slate-755: #212124;
+  --color-indigo-650: #d97706; /* Elevated to Warm Bronze/Amber representing aperture/light */
+  --color-indigo-555: #b45309;
+  --color-sky-650: #6366f1; /* Premium Indigo-Violet for video light */
+  --color-sky-555: #4f46e5;
+  --color-rose-450: #f43f5e;
+}
+
+body {
+  background-color: #030303; /* Deep ink luxury black */
+  color: #f4f4f5;
+  font-family: var(--font-sans);
+}
+
+/* Fluid responsive typography and spacing system */
+html {
+  font-size: 13.5px; /* Mobile: slightly larger fonts and compact spacing */
+}
+
+@media (min-width: 640px) {
+  html {
+    font-size: 14.5px; /* Tablet: enhanced readability */
+  }
+}
+
+@media (min-width: 1024px) {
+  html {
+    font-size: 16px; /* Laptop: standard legible font sizes */
+  }
+}
+
+@media (min-width: 1440px) {
+  html {
+    font-size: 17px; /* Large Screens: slightly larger font sizes and spacing */
+  }
+}
+
+/* Custom premium visual elements */
+.aperture-glow {
+  box-shadow: 0 0 50px -5px rgba(245, 158, 11, 0.15);
+}
+
+.cinematic-input {
+  transition: all 0.2s ease-in-out;
+}
+.cinematic-input:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.15);
+}
+
+/* Luxury Photography Viewfinder Crosshairs */
+.viewfinder-corner-tl {
+  border-top: 2px solid rgba(245, 158, 11, 0.4);
+  border-left: 2px solid rgba(245, 158, 11, 0.4);
+  width: 14px;
+  height: 14px;
+}
+.viewfinder-corner-tr {
+  border-top: 2px solid rgba(245, 158, 11, 0.4);
+  border-right: 2px solid rgba(245, 158, 11, 0.4);
+  width: 14px;
+  height: 14px;
+}
+.viewfinder-corner-bl {
+  border-bottom: 2px solid rgba(245, 158, 11, 0.4);
+  border-left: 2px solid rgba(245, 158, 11, 0.4);
+  width: 14px;
+  height: 14px;
+}
+.viewfinder-corner-br {
+  border-bottom: 2px solid rgba(245, 158, 11, 0.4);
+  border-right: 2px solid rgba(245, 158, 11, 0.4);
+  width: 14px;
+  height: 14px;
+}
+
+/* Glassmorphism elements */
+.glass-panel {
+  background: rgba(8, 8, 10, 0.7);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Color grading indicator bar */
+.color-grade-stripe {
+  background: linear-gradient(90deg, #f43f5e 0%, #ec4899 15%, #a855f7 30%, #6366f1 45%, #3b82f6 60%, #10b981 75%, #f59e0b 90%, #ef4444 100%);
+  height: 3px;
+}
+
+/* === CRM Custom Premium Animations & Styles === */
+
+/* Camera Shutter Breathing Effect */
+@keyframes shutter-breath {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 1;
+    box-shadow: 0 0 25px rgba(245, 158, 11, 0.25);
+  }
+}
+.shutter-glow-active {
+  animation: shutter-breath 4s ease-in-out infinite;
+}
+
+/* Floating particles indicator background */
+@keyframes delicate-float {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-8px) rotate(3deg);
+  }
+}
+.floating-particle-accent {
+  animation: delicate-float 6s ease-in-out infinite;
+}
+
+/* Shimmer styling for loading skeletons */
+@keyframes shimmer-move {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.shimmer-loader {
+  position: relative;
+  overflow: hidden;
+  background-color: #18181b;
+}
+.shimmer-loader::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.04) 20%,
+    rgba(255, 255, 255, 0.08) 60%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: shimmer-move 1.6s infinite;
+  content: '';
+}
+
+/* Lens flare dynamic horizontal highlight lines */
+.lens-flare {
+  position: relative;
+  overflow: hidden;
+}
+.lens-flare::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -150%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(245, 158, 11, 0.08) 45%,
+    rgba(245, 158, 11, 0.18) 50%,
+    rgba(245, 158, 11, 0.08) 55%,
+    transparent 100%
+  );
+  transition: all 0.6s ease-in-out;
+}
+.lens-flare:hover::before {
+  left: 150%;
+}
+
+/* Premium card lifting with border colors */
+.premium-card-lift {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.premium-card-lift:hover {
+  transform: translateY(-4px);
+  box-shadow: 
+    0 12px 24px -10px rgba(0, 0, 0, 0.6),
+    0 0 20px -2px rgba(245, 158, 11, 0.04);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+/* Animated Neon Accent Glow borders */
+.neon-glow-amber:focus-within {
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.5);
+}
+.neon-glow-violet:focus-within {
+  box-shadow: 0 0 15px rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.5);
+}
+
+/* Micro interaction animations for clickable items */
+.click-feedback {
+  transition: transform 0.1s ease;
+}
+.click-feedback:active {
+  transform: scale(0.97);
+}
+
+/* Fade-in views with slide-up */
+@keyframes view-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-view-entry {
+  animation: view-enter 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Input label floating animation classes */
+.floating-lbl-input:placeholder-shown ~ label {
+  transform: translateY(1rem) scale(1);
+  color: #71717a;
+}
+.floating-lbl-input:not(:placeholder-shown) ~ label,
+.floating-lbl-input:focus ~ label {
+  transform: translateY(-0.15rem) scale(0.85);
+  color: #f59e0b;
+}
+
+/* Sidebar glowing dynamic navigation indicators */
+.sidebar-indicator {
+  position: relative;
+}
+.sidebar-indicator::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 15%;
+  height: 70%;
+  width: 3px;
+  background-color: #f59e0b;
+  border-radius: 9999px;
+  box-shadow: 0 0 10px #f59e0b;
+  opacity: 0;
+  transform: scaleY(0.3);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar-indicator-active::after {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+/* === CRM Custom Global Select & Option Dropdown Solid Color Enforcements === */
+select {
+  background-color: #0F172A !important;
+  color: #FFFFFF !important;
+  border-color: #1e293b !important;
+  opacity: 1 !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.2) !important;
+}
+
+option, select option {
+  background-color: #0F172A !important;
+  color: #FFFFFF !important;
+  opacity: 1 !important;
+}
+
+/* Standard multi-select dropdown dynamic panel opened */
+#pkg_multiselect_dropdown, .dropdown-panel, .dropdown-menu {
+  background-color: #0F172A !important;
+  opacity: 1 !important;
+  border-color: #1e293b !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 10px 10px -5px rgba(0, 0, 0, 0.6) !important;
+  z-index: 50 !important;
+}
+
+#pkg_multiselect_dropdown input {
+  background-color: #1e293b !important;
+  color: #FFFFFF !important;
+  opacity: 1 !important;
+}
+
+/* ==========================================
+   GLOBAL SMALL TEXT READABILITY BUMPS
+   Slightly increases small font sizes across the project for better readability
+   ========================================== */
+.text-\[8px\] {
+  font-size: 10px !important;
+}
+.text-\[9px\] {
+  font-size: 10.5px !important;
+}
+.text-\[10px\] {
+  font-size: 11.5px !important;
+}
+.text-\[11px\] {
+  font-size: 12.5px !important;
+}
+.text-xs {
+  font-size: 13.5px !important;
+}
+
+/* ==========================================
+   VISIBILITY AND READABILITY IMPROVEMENTS FOR SMALL SCREENS
+   Surgical overrides matching exact requirements on Mobile & Tablet
+   ========================================== */
+
+/* Mobile Devices (320px - 767px) */
+@media (min-width: 320px) and (max-width: 767px) {
+  /* Menu Text: Change to 14px - 15px */
+  aside nav button,
+  aside button,
+  aside nav a,
+  aside button span,
+  aside select,
+  .sidebar-menu-item,
+  aside h3,
+  aside .text-xs,
+  aside .text-\[10px\],
+  aside .text-\[11px\] {
+    font-size: 14.5px !important;
+  }
+
+  /* Analytics Card Title: Change to 14px - 15px */
+  .group\/card span.uppercase,
+  .group\/card span[class*="text-zinc-500"],
+  .group\/card .text-\[10px\],
+  .group\/card .text-\[11px\],
+  .group\/card span[class*="text-[10px]"],
+  .group\/card span[class*="text-[11px]"],
+  .group\/card label,
+  .group\/card .text-xs,
+  .analytics-card-title,
+  div[class*="StatsCard"] span:first-of-type,
+  .p-4.sm\:p-5 span.text-zinc-500 {
+    font-size: 14px !important;
+    letter-spacing: 0.02em !important;
+  }
+
+  /* Analytics Count: Change to 18px - 22px */
+  .group\/card .font-black.text-white,
+  .group\/card [class*="text-3xl"],
+  .group\/card [class*="text-2xl"],
+  .group\/card [class*="text-xl"],
+  .group\/card span.font-black,
+  .analytics-card-count {
+    font-size: 21px !important;
+  }
+
+  /* Table Content: Change to 13px - 14px */
+  table th,
+  table td,
+  table tr,
+  table span,
+  table div,
+  .table-content,
+  thead th,
+  tbody td {
+    font-size: 13.5px !important;
+  }
+
+  /* Buttons: Change to 14px */
+  button:not(aside button):not(.group\/card button),
+  .btn,
+  input[type="button"],
+  input[type="submit"] {
+    font-size: 14px !important;
+  }
+
+  /* Status Badges: Change to 12px - 13px */
+  table td span[class*="bg-"],
+  table td span[class*="inline-flex"],
+  span[class*="bg-"][class*="text-"],
+  span[class*="/10"][class*="text-"],
+  span[class*="/20"][class*="text-"],
+  span[class*="rounded"][class*="text-[10px]"],
+  span[class*="rounded"][class*="text-[11px]"],
+  span[class*="inline-flex"][class*="items-center"],
+  .status-badge {
+    font-size: 12.5px !important;
+  }
+}
+
+/* Tablet / Small Laptop Devices (768px - 1024px) */
+@media (min-width: 768px) and (max-width: 1024px) {
+  /* Menu Text: Change to 15px - 16px */
+  aside nav button,
+  aside button,
+  aside nav a,
+  aside button span,
+  aside select,
+  .sidebar-menu-item,
+  aside h3,
+  aside .text-xs,
+  aside .text-\[10px\],
+  aside .text-\[11px\] {
+    font-size: 15.5px !important;
+  }
+
+  /* Analytics Titles: Change to 15px - 16px */
+  .group\/card span.uppercase,
+  .group\/card span[class*="text-zinc-500"],
+  .group\/card .text-\[10px\],
+  .group\/card .text-\[11px\],
+  .group\/card span[class*="text-[10px]"],
+  .group\/card span[class*="text-[11px]"],
+  .group\/card label,
+  .group\/card .text-xs,
+  .analytics-card-title,
+  div[class*="StatsCard"] span:first-of-type,
+  .p-4.sm\:p-5 span.text-zinc-500 {
+    font-size: 15.5px !important;
+    letter-spacing: 0.02em !important;
+  }
+
+  /* Analytics Numbers: Change to 20px - 24px */
+  .group\/card .font-black.text-white,
+  .group\/card [class*="text-3xl"],
+  .group\/card [class*="text-2xl"],
+  .group\/card [class*="text-xl"],
+  .group\/card span.font-black,
+  .analytics-card-count {
+    font-size: 22px !important;
+  }
+
+  /* Table Text: Change to 14px - 15px */
+  table th,
+  table td,
+  table tr,
+  table span,
+  table div,
+  .table-content,
+  thead th,
+  tbody td {
+    font-size: 14.5px !important;
+  }
+
+  /* Buttons: Change to 14px - 15px */
+  button:not(aside button):not(.group\/card button),
+  .btn,
+  input[type="button"],
+  input[type="submit"] {
+    font-size: 14.5px !important;
+  }
+
+  /* Status Badges */
+  table td span[class*="bg-"],
+  table td span[class*="inline-flex"],
+  span[class*="bg-"][class*="text-"],
+  span[class*="/10"][class*="text-"],
+  span[class*="/20"][class*="text-"],
+  span[class*="rounded"][class*="text-[10px]"],
+  span[class*="rounded"][class*="text-[11px]"],
+  span[class*="inline-flex"][class*="items-center"],
+  .status-badge {
+    font-size: 13px !important;
+  }
+}
+
+/* Responsive Table Wrapping Rules */
+table {
+  table-layout: auto !important;
+  width: 100% !important;
+}
+
+table th, table td {
+  white-space: normal !important;
+  word-wrap: break-word !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+  vertical-align: top;
+}
+
+table th *, table td * {
+  white-space: normal !important;
+  overflow-wrap: break-word !important;
+  word-wrap: break-word !important;
+}
+
+.overflow-x-auto {
+  max-width: 100%;
+}
+
+
+
+
+/* Custom scrollbar for inner table cells with multiple events */
+.inner-cell-scroll {
+  max-height: 60px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  padding-right: 4px;
+}
+.inner-cell-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.inner-cell-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.inner-cell-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+.inner-cell-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Custom scrollbar for modals with auto-scrolling */
+.modal-scroll-area {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(245, 158, 11, 0.3) rgba(24, 24, 27, 0.4);
+}
+.modal-scroll-area::-webkit-scrollbar {
+  width: 6px;
+}
+.modal-scroll-area::-webkit-scrollbar-track {
+  background: rgba(24, 24, 27, 0.4);
+  border-radius: 6px;
+}
+.modal-scroll-area::-webkit-scrollbar-thumb {
+  background-color: rgba(245, 158, 11, 0.3);
+  border-radius: 6px;
+}
+.modal-scroll-area::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(245, 158, 11, 0.5);
+}
+
+/* Fix for date and time picker icon visibility in dark theme */
+input[type="date"],
+input[type="time"] {
+  color-scheme: dark;
+}
+
+
+input[type="datetime-local"] {
+  color-scheme: dark;
+}
+
+
+/* Sidebar Collapsed State */
+.sidebar-collapsed span {
+  display: none !important;
+}
+.sidebar-collapsed button > div {
+  justify-content: center;
+  width: 100%;
+  padding-left: 0;
+  padding-right: 0;
+}
+.sidebar-collapsed button svg {
+  margin: 0 auto;
+}
+.sidebar-collapsed .p-3 > button {
+  display: none !important;
+}
+
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+/* ==========================================================================
+   PRODUCTION ASSIGNMENT POPUPS FULL-SCREEN RESPONSIVE PAGE-LIKE STYLING
+   Targeting ONLY:
+   1. Production Lead • Assigned Team
+   2. Reassign popup (reassign_staff)
+   3. Assign Editor popup (assign_editor)
+   4. Assign Operations Staff popup
+   ========================================================================== */
+
+#production-action-dropdown {
+  z-index: 999999 !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.7), 0 8px 10px -6px rgba(0, 0, 0, 0.7) !important;
+}
+
+/* Hide Upload Name field in Production Verification / Client Acceptance modal */
+div:has(> input[placeholder*="Client_Consent_Proof"]) {
+  display: none !important;
+}
+
+div.fixed.inset-0:has(#production-action-dropdown) {
+  background-color: transparent !important;
+  background: transparent !important;
+  backdrop-filter: none !important;
+}
+
+:root {
+  --prod-nav-header-height: 64px;
+}
+
+@media (max-width: 639px) {
+  :root {
+    --prod-nav-header-height: 60px;
+  }
+}
+
+.prod-fullscreen-ancestor {
+  transform: none !important;
+  filter: none !important;
+  perspective: none !important;
+  contain: none !important;
+  will-change: auto !important;
+}
+
+/* Base Fullscreen Overlays (Assign Team, Workflow Wizard, Client Acceptance) */
+.prod-fullscreen-overlay,
+.prod-client-acceptance-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100% !important;
+  width: 100vw !important;
+  height: 100% !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  max-height: 100dvh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  z-index: 100000 !important;
+  background-color: #09090b !important; /* deep zinc-950 */
+  backdrop-filter: blur(16px) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+  overscroll-behavior: contain !important;
+  touch-action: auto !important;
+  transform: none !important;
+}
+
+.prod-fullscreen-card,
+.prod-client-acceptance-card {
+  width: 100% !important;
+  width: 100vw !important;
+  height: 100% !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  max-height: 100dvh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  background-color: #09090b !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+  transform: none !important;
+}
+
+.prod-fullscreen-header,
+.prod-client-acceptance-header {
+  flex-shrink: 0 !important;
+  width: 100% !important;
+  max-width: 100vw !important;
+  box-sizing: border-box !important;
+  background-color: #0c0d10 !important;
+  border-bottom: 1px solid #1f1f23 !important;
+  padding: 1rem 1.25rem !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  z-index: 60 !important;
+  position: sticky !important;
+  top: 0 !important;
+}
+
+@media (min-width: 640px) {
+  .prod-fullscreen-header,
+  .prod-client-acceptance-header {
+    padding: 1.25rem 2rem !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  .prod-fullscreen-header,
+  .prod-client-acceptance-header {
+    padding: 1.25rem 3rem !important;
+  }
+}
+
+.prod-fullscreen-header h3,
+.prod-fullscreen-header span,
+.prod-client-acceptance-header h3,
+.prod-client-acceptance-header span {
+  overflow-wrap: break-word !important;
+  word-break: break-word !important;
+  max-width: 100% !important;
+}
+
+.prod-fullscreen-body,
+.prod-client-acceptance-body {
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 auto !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding: 1.25rem 1rem 1.5rem 1rem !important;
+  background-color: #09090b !important;
+  box-sizing: border-box !important;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior: contain !important;
+  touch-action: auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.prod-fullscreen-body > form,
+.prod-fullscreen-body > div.space-y-5,
+.prod-client-acceptance-body > form,
+.prod-client-acceptance-body > div.space-y-5 {
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 0 0 auto !important;
+  width: 100% !important;
+  max-width: 56rem !important; /* Centered 896px content width */
+  margin-left: auto !important;
+  margin-right: auto !important;
+  min-height: auto !important;
+  justify-content: flex-start !important;
+  gap: 1.25rem !important;
+}
+
+@media (min-width: 640px) {
+  .prod-fullscreen-body,
+  .prod-client-acceptance-body {
+    padding: 1.5rem 2rem 1.75rem 2rem !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  .prod-fullscreen-body,
+  .prod-client-acceptance-body {
+    padding: 1.75rem 3rem 2rem 3rem !important;
+  }
+}
+
+.prod-fullscreen-footer,
+.prod-client-acceptance-footer {
+  position: sticky !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  z-index: 50 !important;
+  background-color: #0c0d10 !important;
+  border-top: 1px solid #1f1f23 !important;
+  padding: 1rem 1.25rem !important;
+  margin-top: auto !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  flex-shrink: 0 !important;
+}
+
+.prod-fullscreen-footer > div,
+.prod-client-acceptance-footer > div {
+  width: 100% !important;
+  max-width: 56rem !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+@media (min-width: 640px) {
+  .prod-fullscreen-footer,
+  .prod-client-acceptance-footer {
+    padding: 1rem 2rem !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  .prod-fullscreen-footer,
+  .prod-client-acceptance-footer {
+    padding: 1rem 3rem !important;
+  }
+}
+
+.prod-fullscreen-body table,
+.prod-client-acceptance-body table {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.prod-fullscreen-table-wrapper {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  box-sizing: border-box !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+/* Responsive grid stacking for mobile & tablet */
+@media (max-width: 768px) {
+  .prod-fullscreen-body .grid,
+  .prod-client-acceptance-body .grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* UI Removal helper for Upload Link / Path in Client Acceptance Deck */
+.ca-upload-link-hidden {
+  display: none !important;
+}
+
+.ca-folder-single-col {
+  grid-template-columns: 1fr !important;
+}
+
+/* ==========================================================================
+   Proof & Image Preview Modals (Always render on top of full-screen overlays)
+   ========================================================================== */
+div.fixed.inset-0.z-\[130\],
+div.fixed.inset-0.z-\[140\],
+div.fixed.inset-0.z-\[150\],
+div.fixed.inset-0.z-\[200\],
+div.fixed.inset-0:has(span:is([class*="text-emerald-400"])),
+div.fixed.inset-0:has(h4 span.text-purple-300),
+.proof-preview-modal-layer {
+  z-index: 1000005 !important;
+}
+
+/* ==========================================================================
+   Assign Editor Popup Responsive & Scrolling Fixes
+   ========================================================================== */
+.prod-assign-editor-overlay {
+  z-index: 100000 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-start !important;
+  align-items: stretch !important;
+  overflow: hidden !important;
+}
+
+.prod-assign-editor-body {
+  display: block !important;
+  overflow-y: auto !important;
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  max-height: calc(100vh - var(--prod-nav-header-height, 64px)) !important;
+  max-height: calc(100dvh - var(--prod-nav-header-height, 64px)) !important;
+  flex: 1 1 auto !important;
+  box-sizing: border-box !important;
+  padding: 1.25rem 1rem 1.5rem 1rem !important;
+}
+
+@media (max-width: 640px) {
+  .prod-assign-editor-body {
+    padding: 1rem !important;
+    max-height: calc(100vh - 68px) !important;
+    max-height: calc(100dvh - 68px) !important;
+  }
+}
+
+@keyframes row-blink {
+  0%, 100% { opacity: 1; background-color: rgba(245, 158, 11, 0.18); }
+  50% { opacity: 0.55; background-color: rgba(245, 158, 11, 0.4); }
+}
+.animate-row-blink {
+  animation: row-blink 1.5s ease-in-out infinite;
+}
+
+/* Production Staff Dashboard - Single Global Page Scrollbar */
+.production-staff-order-card,
+.production-staff-order-table-wrapper {
+  overflow: visible !important;
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+  max-height: none !important;
+}
+
+
+
