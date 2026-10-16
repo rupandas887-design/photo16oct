@@ -193,13 +193,26 @@ export const sortEventsByDateAsc = (events: any[]): any[] => {
 export const sortEventsNewestFirst = (events: any[]): any[] => {
   if (!Array.isArray(events)) return [];
   return [...events].sort((a, b) => {
-    const timeA = new Date(a?.created_at || a?.createdAt || 0).getTime();
-    const timeB = new Date(b?.created_at || b?.createdAt || 0).getTime();
-    if (timeA !== timeB) {
-      return timeB - timeA; // newest first
+    const rawDateA = a?.event_date || a?.reporting_date || a?.Reporting_date || a?.Event_Date || a?.event_start_date || a?.date || '';
+    const rawDateB = b?.event_date || b?.reporting_date || b?.Reporting_date || b?.Event_Date || b?.event_start_date || b?.date || '';
+    const keyA = toCalendarDateString(rawDateA);
+    const keyB = toCalendarDateString(rawDateB);
+
+    if (keyA && keyB && keyA !== keyB) {
+      return keyB.localeCompare(keyA); // Most recent / newest date first
     }
-    const idA = String(a?.id || '');
-    const idB = String(b?.id || '');
+    if (keyA && !keyB) return -1;
+    if (!keyA && keyB) return 1;
+
+    // Secondary sort: creation timestamp, newest first
+    const timeA = new Date(a?.created_at || a?.createdAt || a?.created_date || 0).getTime();
+    const timeB = new Date(b?.created_at || b?.createdAt || b?.created_date || 0).getTime();
+    if (timeA && timeB && timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) {
+      return timeB - timeA;
+    }
+
+    const idA = String(a?.id || a?.event_id || '');
+    const idB = String(b?.id || b?.event_id || '');
     return idB.localeCompare(idA);
   });
 };
@@ -7095,7 +7108,7 @@ export const OperationsLeads: React.FC = () => {
             </div>
 
             <div className="p-4 sm:p-5 overflow-y-auto space-y-2.5 max-h-[60vh]">
-              {sortEventsByDateAsc(viewingEventCategoriesModal.events).map((ev: any, idx: number) => {
+              {sortEventsNewestFirst(viewingEventCategoriesModal.events).map((ev: any, idx: number) => {
                 const typeName = (ev.event_type || ev.event_name || `Event ${idx + 1}`).trim();
                 return (
                   <div 
@@ -7162,7 +7175,7 @@ export const OperationsLeads: React.FC = () => {
             </div>
 
             <div className="p-4 sm:p-5 overflow-y-auto space-y-3 max-h-[60vh]">
-              {viewingLocationsModal.events.map((ev: any, idx: number) => {
+              {sortEventsNewestFirst(viewingLocationsModal.events).map((ev: any, idx: number) => {
                 const rawName = (ev.event_name || '').trim();
                 let eventLabel = `Event ${idx + 1}`;
                 if (rawName) {
@@ -7262,7 +7275,7 @@ export const OperationsLeads: React.FC = () => {
             </div>
 
             <div className="p-4 sm:p-5 overflow-y-auto space-y-3 max-h-[60vh]">
-              {sortEventsByDateAsc(viewingDatesModal.events).map((ev: any, idx: number) => {
+              {sortEventsNewestFirst(viewingDatesModal.events).map((ev: any, idx: number) => {
                 const rawName = (ev.event_name || '').trim();
                 let eventLabel = `Event ${idx + 1}`;
                 if (rawName) {

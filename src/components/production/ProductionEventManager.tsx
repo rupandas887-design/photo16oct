@@ -226,7 +226,13 @@ export const ProductionEventManager: React.FC = () => {
         eventsList.sort((a, b) => {
           const tA = parseEventDateTimeToTimestamp(a.event_date, a.event_start_time);
           const tB = parseEventDateTimeToTimestamp(b.event_date, b.event_start_time);
-          return tA - tB;
+          if (tA && tB && tA !== tB) return tB - tA;
+          if (tA && !tB) return -1;
+          if (!tA && tB) return 1;
+          const timeA = new Date((a as any)?.created_at || (a as any)?.createdAt || 0).getTime();
+          const timeB = new Date((b as any)?.created_at || (b as any)?.createdAt || 0).getTime();
+          if (timeA && timeB && timeA !== timeB) return timeB - timeA;
+          return String(b.id || '').localeCompare(String(a.id || ''));
         });
       } else {
         const singleName =

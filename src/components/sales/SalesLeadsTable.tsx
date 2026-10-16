@@ -886,17 +886,22 @@ export const SalesLeadsTable: React.FC<SalesLeadsTableProps> = (props) => {
                     <th className="p-3.5">Customer Name</th>
                     <th className="p-3.5">Mobile Number</th>
                     <th className="p-3.5">
+                      <span className="uppercase font-mono tracking-wider text-[10px] font-bold text-zinc-405 select-none">
+                        Event Category
+                      </span>
+                    </th>
+                    <th className="p-3.5">Event Location</th>
+                    <th className="p-3.5">
                       <button
                         type="button"
                         onClick={() => handleColumnSort('event_date')}
                         className="inline-flex items-center gap-1.5 uppercase font-mono tracking-wider text-[10px] font-bold text-zinc-405 hover:text-white transition-colors cursor-pointer select-none group"
                         title="Sort by Event Date (Earliest / Latest)"
                       >
-                        <span>Event Category</span>
+                        <span>Event Date</span>
                         <ArrowUpDown className={`w-3 h-3 transition-colors ${sortColumn === 'event_date' ? 'text-sky-400' : 'text-zinc-500 group-hover:text-zinc-300'}`} />
                       </button>
                     </th>
-                    <th className="p-3.5">Event Location</th>
                     <th className="p-3.5">Current Status</th>
                     <th className="p-3.5">
                       <button
@@ -959,6 +964,9 @@ export const SalesLeadsTable: React.FC<SalesLeadsTableProps> = (props) => {
                           </td>
                           <td className="p-3.5 text-zinc-300">
                             <EventLocationCell lead={lead} orders={safeOrders} filterEventDateOption={filterEventDateOption} />
+                          </td>
+                          <td className="p-3.5 text-zinc-300">
+                            <EventDateCell lead={lead} orders={safeOrders} filterEventDateOption={filterEventDateOption} />
                           </td>
 
                           <td className="p-3.5">

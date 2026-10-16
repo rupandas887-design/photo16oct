@@ -2,14 +2,23 @@ import React, { useState, useRef, useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { Calendar, Clock, X } from 'lucide-react';
 import { Lead } from '../types';
-import { getEventCategoryDateTimeTimestamp, formatCategoryDisplayDate, cleanText } from './EventCategoryCell';
-import { deserializeLeadEvents } from '../utils';
+import { getEventCategoryDateTimeTimestamp, cleanText } from './EventCategoryCell';
+import { deserializeLeadEvents, formatDateDDMMYY } from '../utils';
 
 export interface EventDateCellProps {
   lead?: Lead | any;
   orders?: any[];
   filterEventDateOption?: string;
 }
+
+export const formatDisplayDateStrict = (dateStr?: any): string => {
+  if (!dateStr) return '';
+  const clean = cleanText(dateStr);
+  if (!clean) return '';
+  const formatted = formatDateDDMMYY(clean);
+  if (formatted) return formatted;
+  return cleanText(clean);
+};
 
 export interface DateEventItem {
   id: string;
@@ -18,6 +27,7 @@ export interface DateEventItem {
   eventDate: string;
   eventTime: string;
   timestamp: number;
+  createdAt: number;
 }
 
 export const getSortedEventsForDate = (lead?: Lead | any, orders?: any[]): DateEventItem[] => {
@@ -99,6 +109,7 @@ export const getSortedEventsForDate = (lead?: Lead | any, orders?: any[]): DateE
         (rawEventsList.length === 1 ? fallbackTime : '')
       );
       const timestamp = getEventCategoryDateTimeTimestamp(evDate, evTime);
+      const createdAt = new Date(ev?.created_at || ev?.createdAt || ev?.created_date || lead?.created_date || 0).getTime() || 0;
 
       return {
         id: ev?.id || ev?.event_id || `evt-${idx}`,
@@ -106,27 +117,35 @@ export const getSortedEventsForDate = (lead?: Lead | any, orders?: any[]): DateE
         eventName: evName,
         eventDate: evDate,
         eventTime: evTime,
-        timestamp
+        timestamp,
+        createdAt
       };
     });
 
-    // Sort descending by most recent date + time (timestamp)
+    // Sort descending by most recent date + time (timestamp), secondary creation time
     list.sort((a, b) => {
-      if (a.timestamp && b.timestamp) return b.timestamp - a.timestamp;
-      if (a.timestamp) return -1;
-      if (b.timestamp) return 1;
-      return 0;
+      if (a.timestamp && b.timestamp && a.timestamp !== b.timestamp) {
+        return b.timestamp - a.timestamp;
+      }
+      if (a.timestamp && !b.timestamp) return -1;
+      if (!a.timestamp && b.timestamp) return 1;
+      if (a.createdAt && b.createdAt && a.createdAt !== b.createdAt) {
+        return b.createdAt - a.createdAt;
+      }
+      return String(b.id || '').localeCompare(String(a.id || ''));
     });
     return list;
   }
 
+  const fallbackCreated = new Date(lead?.created_at || lead?.created_date || 0).getTime() || 0;
   return [{
     id: 'evt-0',
     eventType: cleanText(lead.event_type || linkedOrder?.event_type || 'Event') || 'Event',
     eventName: cleanText(lead.event_name || lead.custom_event_name || lead.event_type || linkedOrder?.event_type || 'Event') || 'Event',
     eventDate: fallbackDate,
     eventTime: fallbackTime,
-    timestamp: getEventCategoryDateTimeTimestamp(fallbackDate, fallbackTime)
+    timestamp: getEventCategoryDateTimeTimestamp(fallbackDate, fallbackTime),
+    createdAt: fallbackCreated
   }];
 };
 
@@ -146,7 +165,7 @@ export const EventDateCell: React.FC<EventDateCellProps> = ({ lead, orders, filt
   const events = getSortedEventsForDate(lead, orders);
   const targetIndex = (filterEventDateOption === 'last_event' && events.length >= 2) ? 1 : 0;
   const targetEvent = events[targetIndex] || events[0];
-  const primaryDate = formatCategoryDisplayDate(targetEvent?.eventDate) || cleanText(targetEvent?.eventDate) || '—';
+  const primaryDate = formatDisplayDateStrict(targetEvent?.eventDate) || '—';
   const additionalCount = events.length > 1 ? events.length - 1 : 0;
 
   const linkedOrder = orders?.find((o: any) => 
@@ -242,24 +261,27 @@ export const EventDateCell: React.FC<EventDateCellProps> = ({ lead, orders, filt
 
   return (
     <div className="flex items-center gap-1.5 select-text min-w-0">
-      <span
-        className="text-zinc-200 font-mono text-xs leading-snug truncate max-w-[95px]"
-        title={primaryDate || '—'}
-      >
-        {primaryDate || '—'}
-      </span>
       <button
         ref={buttonRef}
         type="button"
         onClick={handleToggle}
-        className={`inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] font-mono font-bold border rounded-md transition-all shrink-0 cursor-pointer shadow-sm ${
-          isOpen
-            ? 'bg-amber-500 text-zinc-950 border-amber-400 ring-1 ring-amber-400/50'
-            : 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500 hover:text-zinc-950 hover:border-amber-400'
-        }`}
-        title={`Click +${additionalCount} to view all ${events.length} event dates for Order ${displayOrderId}`}
+        className="inline-flex items-center gap-1.5 text-left group cursor-pointer focus:outline-none"
+        title={`Click to view all ${events.length} event dates for Order ${displayOrderId}`}
       >
-        +{additionalCount}
+        <span
+          className="text-zinc-200 group-hover:text-amber-300 font-mono text-xs leading-snug truncate max-w-[95px] transition-colors"
+        >
+          {primaryDate || '—'}
+        </span>
+        <span
+          className={`inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] font-mono font-bold border rounded-md transition-all shrink-0 shadow-sm ${
+            isOpen
+              ? 'bg-amber-500 text-zinc-950 border-amber-400 ring-1 ring-amber-400/50'
+              : 'bg-amber-500/20 text-amber-300 border-amber-500/40 group-hover:bg-amber-500 group-hover:text-zinc-950 group-hover:border-amber-400'
+          }`}
+        >
+          +{additionalCount}
+        </span>
       </button>
 
       {isOpen && coords && createPortal(
@@ -294,17 +316,25 @@ export const EventDateCell: React.FC<EventDateCellProps> = ({ lead, orders, filt
             </button>
           </div>
 
-          {/* List of all event dates belonging to this order */}
+          {/* List of all event dates belonging to this order in descending chronological order */}
           <div className="p-2 space-y-2 overflow-y-auto max-h-[260px]">
             {events.map((ev, idx) => {
-              const evDateFormatted = formatCategoryDisplayDate(ev.eventDate) || cleanText(ev.eventDate) || 'Date not specified';
+              const evDateFormatted = formatDisplayDateStrict(ev.eventDate) || 'Date not specified';
               return (
                 <div
                   key={ev.id || idx}
-                  className="p-2.5 rounded-lg bg-zinc-950/60 border border-zinc-850 hover:border-zinc-750 transition-colors space-y-1"
+                  className="p-2.5 rounded-lg bg-zinc-950/60 border border-zinc-850 hover:border-zinc-750 transition-colors space-y-1.5"
                 >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="w-4 h-4 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[9px] font-mono font-bold flex items-center justify-center shrink-0">
+                      {idx + 1}
+                    </span>
+                    <span className="text-xs font-bold text-white leading-snug truncate">
+                      {ev.eventName || ev.eventType || `Event ${idx + 1}`}
+                    </span>
+                  </div>
 
-                  <div className="pl-5.5 flex items-center gap-1.5 text-xs text-amber-300 font-mono">
+                  <div className="pl-5.5 flex items-center gap-1.5 text-xs text-amber-300 font-mono font-semibold">
                     <Calendar className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                     <span>{evDateFormatted}</span>
                   </div>
@@ -321,7 +351,7 @@ export const EventDateCell: React.FC<EventDateCellProps> = ({ lead, orders, filt
 
           {/* Footer */}
           <div className="px-3 py-1.5 bg-zinc-950/40 border-t border-zinc-850/60 text-[10px] text-zinc-500 font-mono text-center">
-            {events.length} Event Date{events.length > 1 ? 's' : ''} (Latest First)
+            {events.length} Event Date{events.length > 1 ? 's' : ''} (Newest First)
           </div>
         </div>,
         document.body

@@ -175,7 +175,17 @@ export const EventDropdownCell: React.FC<EventDropdownCellProps> = ({ type, item
           onClick={(e) => e.stopPropagation()}
         >
           {type === 'name' && events && events.length > 0 ? (
-            events.map((ev, idx) => {
+            [...events].sort((a, b) => {
+              const tA = a.event_date ? new Date(a.event_date).getTime() : 0;
+              const tB = b.event_date ? new Date(b.event_date).getTime() : 0;
+              if (tA && tB && tA !== tB) return tB - tA;
+              if (tA && !tB) return -1;
+              if (!tA && tB) return 1;
+              const ca = new Date(a?.created_at || a?.createdAt || 0).getTime();
+              const cb = new Date(b?.created_at || b?.createdAt || 0).getTime();
+              if (ca && cb && ca !== cb) return cb - ca;
+              return String(b.id || '').localeCompare(String(a.id || ''));
+            }).map((ev, idx) => {
               const name = ev.event_name || '';
               const date = ev.event_date ? formatDateDDMMYY(ev.event_date) : '—';
               const time = ev.event_start_time ? formatTime12Hour(ev.event_start_time) : '—';

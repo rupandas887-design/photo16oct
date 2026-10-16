@@ -12587,6 +12587,7 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
                       </div>
                     </th>
                     <th className="p-3.5">Event Location</th>
+                    <th className="p-3.5">Event Date</th>
 
                     <th className="p-3.5">Current Status</th>
                     <th className="p-3.5">Created Date</th>

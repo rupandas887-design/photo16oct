@@ -168,7 +168,12 @@ export const UnifiedEventDropdownCell: React.FC<UnifiedEventDropdownCellProps> =
   const sortedEventsList = [...eventsList].sort((a, b) => {
     const timeA = a.event_date && a.event_date !== '—' ? new Date(a.event_date).getTime() : 0;
     const timeB = b.event_date && b.event_date !== '—' ? new Date(b.event_date).getTime() : 0;
-    return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+    const diff = (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+    if (diff !== 0) return diff;
+    const ca = new Date(a?.created_at || a?.createdAt || 0).getTime();
+    const cb = new Date(b?.created_at || b?.createdAt || 0).getTime();
+    if (ca && cb && ca !== cb) return cb - ca;
+    return String(b.id || '').localeCompare(String(a.id || ''));
   });
 
   const primaryEventName = sortedEventsList[0]?.event_name || 'Event';

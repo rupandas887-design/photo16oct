@@ -147,6 +147,7 @@ export const getSortedEventsForLocation = (lead?: Lead | any, orders?: any[]): L
       );
 
       const timestamp = getEventCategoryDateTimeTimestamp(evDate, evTime);
+      const createdAt = new Date(ev?.created_at || ev?.createdAt || ev?.created_date || lead?.created_date || 0).getTime() || 0;
 
       return {
         id: ev?.id || ev?.event_id || `evt-${idx}`,
@@ -155,16 +156,20 @@ export const getSortedEventsForLocation = (lead?: Lead | any, orders?: any[]): L
         eventDate: evDate,
         eventTime: evTime,
         location: evLoc || (fallbackLocation && rawEventsList.length === 1 ? fallbackLocation : (evLoc || fallbackLocation)),
-        timestamp
+        timestamp,
+        createdAt
       };
     });
 
-    // Sort descending by most recent event date + time (timestamp)
+    // Sort descending by most recent event date + time (timestamp), secondary creation time
     list.sort((a, b) => {
-      if (a.timestamp && b.timestamp) return b.timestamp - a.timestamp;
-      if (a.timestamp) return -1;
-      if (b.timestamp) return 1;
-      return 0;
+      if (a.timestamp && b.timestamp && a.timestamp !== b.timestamp) return b.timestamp - a.timestamp;
+      if (a.timestamp && !b.timestamp) return -1;
+      if (!a.timestamp && b.timestamp) return 1;
+      if (a.createdAt && b.createdAt && a.createdAt !== b.createdAt) {
+        return b.createdAt - a.createdAt;
+      }
+      return String(b.id || '').localeCompare(String(a.id || ''));
     });
 
     return list;

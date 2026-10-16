@@ -18,7 +18,18 @@ export interface CategoryEventItem {
   eventDate: string;
   eventTime: string;
   timestamp: number;
+  createdAt: number;
 }
+
+export const isDateString = (val?: any): boolean => {
+  if (!val) return false;
+  const s = String(val).trim();
+  if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(s)) return true;
+  if (/^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}/.test(s)) return true;
+  if (/^\d{1,2}\s+[a-zA-Z]{3,9}\s+\d{2,4}/.test(s)) return true;
+  if (/^[a-zA-Z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{2,4})?$/i.test(s)) return true;
+  return false;
+};
 
 /**
  * Strips null, undefined, "undefined", "null", "N/A", "—" and cleans string.
@@ -119,11 +130,20 @@ export const formatCategoryDisplayDate = (dateStr?: any): string => {
 };
 
 const extractEventInfo = (ev: any, lead: Lead, idx: number, linkedOrder?: any): CategoryEventItem => {
-  // 1. Resolve Category / Event Type only (never use Event Name for category)
-  const rawType = ev?.event_type || ev?.event_category || ev?.eventType || ev?.custom_event_type || lead?.event_type || lead?.custom_event_type || linkedOrder?.event_type || 'Event';
+  // 1. Resolve Category / Event Type only (strictly discard any dates)
+  let rawType = ev?.event_type || ev?.event_category || ev?.eventType || ev?.custom_event_type || '';
+  if (!rawType || isDateString(rawType)) {
+    rawType = ev?.event_name || ev?.custom_event_name || ev?.eventName || '';
+  }
+  if (!rawType || isDateString(rawType)) {
+    rawType = lead?.event_type || lead?.custom_event_type || linkedOrder?.event_type || '';
+  }
+  if (!rawType || isDateString(rawType)) {
+    rawType = lead?.event_name || lead?.custom_event_name || linkedOrder?.custom_event_name || 'Event';
+  }
   const cleanType = cleanText(rawType) || 'Event';
 
-  // 2. Resolve Date & Time
+  // 2. Resolve Date & Time for sorting purposes only
   const rawDate = ev?.event_date || ev?.Event_Date || ev?.date || lead?.event_date || linkedOrder?.event_date || '';
   const cleanDate = cleanText(rawDate);
 
@@ -131,6 +151,7 @@ const extractEventInfo = (ev: any, lead: Lead, idx: number, linkedOrder?: any): 
   const cleanTime = cleanText(rawTime);
 
   const timestamp = getEventCategoryDateTimeTimestamp(cleanDate, cleanTime);
+  const createdAt = new Date(ev?.created_at || ev?.createdAt || ev?.created_date || lead?.created_date || 0).getTime() || 0;
 
   return {
     id: ev?.id || ev?.event_id || `evt-${idx}`,
@@ -139,7 +160,8 @@ const extractEventInfo = (ev: any, lead: Lead, idx: number, linkedOrder?: any): 
     eventName: cleanType,
     eventDate: cleanDate,
     eventTime: cleanTime,
-    timestamp
+    timestamp,
+    createdAt
   };
 };
 
@@ -177,12 +199,15 @@ export const getSortedEventsForCategory = (lead: Lead, orders?: any[]): Category
 
     // Sort by MOST RECENT event date + time FIRST (descending timestamp: latest/furthest first)
     list.sort((a, b) => {
-      if (a.timestamp && b.timestamp) {
+      if (a.timestamp && b.timestamp && a.timestamp !== b.timestamp) {
         return b.timestamp - a.timestamp;
       }
-      if (a.timestamp) return -1;
-      if (b.timestamp) return 1;
-      return 0;
+      if (a.timestamp && !b.timestamp) return -1;
+      if (!a.timestamp && b.timestamp) return 1;
+      if (a.createdAt && b.createdAt && a.createdAt !== b.createdAt) {
+        return b.createdAt - a.createdAt;
+      }
+      return String(b.id || '').localeCompare(String(a.id || ''));
     });
 
     return list;
@@ -215,7 +240,6 @@ export const EventCategoryCell: React.FC<EventCategoryCellProps> = ({ lead, orde
   const targetEvent = events[targetIndex] || events[0];
 
   const displayedType = cleanText(targetEvent?.eventType) || 'Event';
-  const formattedDate = formatCategoryDisplayDate(targetEvent?.eventDate);
 
   const additionalCount = events.length > 1 ? events.length - 1 : 0;
 
@@ -395,7 +419,6 @@ export const EventCategoryCell: React.FC<EventCategoryCellProps> = ({ lead, orde
           <div className="p-2 space-y-2 overflow-y-auto max-h-[260px]">
             {events.map((ev, idx) => {
               const evType = cleanText(ev.eventType) || 'Event';
-              const evDate = formatCategoryDisplayDate(ev.eventDate);
 
               return (
                 <div
@@ -410,8 +433,6 @@ export const EventCategoryCell: React.FC<EventCategoryCellProps> = ({ lead, orde
                       {evType}
                     </p>
                   </div>
-
-
                 </div>
               );
             })}
@@ -419,7 +440,7 @@ export const EventCategoryCell: React.FC<EventCategoryCellProps> = ({ lead, orde
 
           {/* Footer note */}
           <div className="px-3 py-1.5 bg-zinc-950/40 border-t border-zinc-850/60 text-[10px] text-zinc-500 font-mono text-center">
-            {events.length} Event{events.length > 1 ? 's' : ''} (Latest First)
+            {events.length} Event Categor{events.length > 1 ? 'ies' : 'y'} (Newest First)
           </div>
         </div>,
         document.body

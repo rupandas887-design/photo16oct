@@ -3205,7 +3205,7 @@ export function getEventTeamMemberStaffMapping(params: {
   const teamConfigs = extractTeamMembersConfig(lead, leadPkgs);
 
   const resolvedEvents = rawEvents.length > 0
-    ? rawEvents
+    ? sortMultiEventsNewestFirst(rawEvents)
     : [{
         id: 'default_event',
         event_name: order?.event_name || lead?.event_name || order?.event_type || lead?.event_type || 'Main Event',
@@ -3609,7 +3609,7 @@ export function formatDateRange(startDate?: string | null | Date, endDate?: stri
   return '';
 }
 
-const toCalendarDateString = (dateVal?: string | null | Date): string | null => {
+export const toCalendarDateString = (dateVal?: string | null | Date): string | null => {
   if (!dateVal && (dateVal as any) !== 0) return null;
   if (dateVal instanceof Date) {
     if (isNaN(dateVal.getTime())) return null;
@@ -3688,6 +3688,78 @@ const toCalendarDateString = (dateVal?: string | null | Date): string | null => 
 
   return null;
 };
+
+/**
+ * Safely parse date and time components of an event into a timezone-agnostic millisecond timestamp.
+ * Strictly supports: YYYY-MM-DD, DD MMM YYYY, DD/MM/YYYY, DD-MM-YYYY, DD/MM/YY, etc.
+ */
+export function getUniversalEventTimestamp(eventOrDate: any, timeVal?: any): number {
+  if (!eventOrDate) return 0;
+  let dateVal: any = eventOrDate;
+  let timeStr: any = timeVal;
+  if (typeof eventOrDate === 'object') {
+    dateVal = eventOrDate.event_date || eventOrDate.reporting_date || eventOrDate.Reporting_date || eventOrDate.Event_Date || eventOrDate.event_start_date || eventOrDate.date || '';
+    timeStr = timeVal || eventOrDate.event_start_time || eventOrDate.event_time || eventOrDate.reporting_time || eventOrDate.Reporting_time || eventOrDate.time || '';
+  }
+  const cal = toCalendarDateString(dateVal);
+  if (!cal) return 0;
+  const parts = cal.split('-');
+  const y = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10) - 1;
+  const d = parseInt(parts[2], 10);
+
+  let hours = 0;
+  let minutes = 0;
+  if (timeStr && typeof timeStr === 'string') {
+    const t = timeStr.trim().toUpperCase();
+    const isPM = t.includes('PM');
+    const isAM = t.includes('AM');
+    const cleanTime = t.replace(/(AM|PM)/g, '').trim();
+    const timeParts = cleanTime.split(':');
+    if (timeParts.length >= 1) {
+      let h = parseInt(timeParts[0], 10) || 0;
+      const min = parseInt(timeParts[1] || '0', 10) || 0;
+      if (isPM && h < 12) h += 12;
+      if (isAM && h === 12) h = 0;
+      hours = h;
+      minutes = min;
+    }
+  }
+  return Date.UTC(y, m, d, hours, minutes);
+}
+
+/**
+ * Standard Multi-Event Sorter: Always display most recent event date first (descending).
+ * Secondary criterion: creation timestamp (newest first).
+ * Tertiary criterion: unique event ID.
+ */
+export function sortMultiEventsNewestFirst<T = any>(events: T[]): T[] {
+  if (!events || !Array.isArray(events)) return [];
+  return [...events].sort((a: any, b: any) => {
+    const tsA = getUniversalEventTimestamp(a);
+    const tsB = getUniversalEventTimestamp(b);
+    if (tsA > 0 && tsB > 0 && tsA !== tsB) {
+      return tsB - tsA; // Most recent first
+    }
+    if (tsA > 0 && !tsB) return -1;
+    if (!tsA && tsB > 0) return 1;
+
+    // Secondary sort: creation timestamp, newest first
+    const timeA = new Date(a?.created_at || a?.createdAt || a?.created_date || 0).getTime();
+    const timeB = new Date(b?.created_at || b?.createdAt || b?.created_date || 0).getTime();
+    if (timeA && timeB && timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) {
+      return timeB - timeA;
+    }
+
+    // Tie-breaker: unique event id
+    const idA = String(a?.id || a?.event_id || '');
+    const idB = String(b?.id || b?.event_id || '');
+    if (idA && idB) {
+      return idB.localeCompare(idA);
+    }
+    return 0;
+  });
+}
 
 export function formatOperationWhatsAppDate(dateVal?: string | null | Date): string {
   if (!dateVal && (dateVal as any) !== 0) return '';

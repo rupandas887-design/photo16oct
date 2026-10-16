@@ -4629,7 +4629,7 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
       const combined = rawLeadEvents.length > 0 ? rawLeadEvents : (deserialized.length > 0 ? deserialized : []);
 
       if (combined && combined.length > 0) {
-        return combined.map((ev: any, idx: number) => {
+        const eventsList = combined.map((ev: any, idx: number) => {
           if (!ev) return {
             id: `ev_${idx + 1}`,
             eventName: `Event ${idx + 1}`,
@@ -4690,9 +4690,22 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
             eventLocation: eLocation,
             googleMapsLink: eMapsLink,
             deliverables: deliverablesList,
-            assignments: matchedAssignments
+            assignments: matchedAssignments,
+            createdAt: new Date(ev?.created_at || ev?.createdAt || 0).getTime() || 0
           };
         });
+
+        eventsList.sort((a, b) => {
+          const tA = a.eventDate && a.eventDate !== 'N/A' ? new Date(a.eventDate).getTime() : 0;
+          const tB = b.eventDate && b.eventDate !== 'N/A' ? new Date(b.eventDate).getTime() : 0;
+          if (tA && tB && tA !== tB) return tB - tA;
+          if (tA && !tB) return -1;
+          if (!tA && tB) return 1;
+          if (a.createdAt && b.createdAt && a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
+          return String(b.id || '').localeCompare(String(a.id || ''));
+        });
+
+        return eventsList;
       }
 
       // Fallback single event if no event array exists

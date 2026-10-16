@@ -146,24 +146,30 @@ export const getSortedEventsForOrder = (lead: Lead, orders?: any[]): DetailedEve
       const timeStr = (ev.event_start_time || ev.event_time || ev.Event_Start_Time || ev.time || lead.event_time || '').trim();
       const timestamp = getEventDateTimeTimestamp(dateStr, timeStr);
 
+      const createdAt = new Date(ev?.created_at || ev?.createdAt || 0).getTime() || 0;
+
       return {
         id: ev.id || ev.event_id || `evt-${idx}`,
         eventName: name || 'Event',
         eventType: type || 'Event',
         eventDate: dateStr,
         eventTime: timeStr,
-        timestamp
+        timestamp,
+        createdAt
       };
     });
 
     // Sort by MOST RECENT event date + time FIRST (descending timestamp: latest/furthest first)
     list.sort((a, b) => {
-      if (a.timestamp && b.timestamp) {
+      if (a.timestamp && b.timestamp && a.timestamp !== b.timestamp) {
         return b.timestamp - a.timestamp;
       }
-      if (a.timestamp) return -1;
-      if (b.timestamp) return 1;
-      return 0;
+      if (a.timestamp && !b.timestamp) return -1;
+      if (!a.timestamp && b.timestamp) return 1;
+      if ((a as any).createdAt && (b as any).createdAt && (a as any).createdAt !== (b as any).createdAt) {
+        return (b as any).createdAt - (a as any).createdAt;
+      }
+      return String(b.id || '').localeCompare(String(a.id || ''));
     });
 
     return list;

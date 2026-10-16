@@ -508,11 +508,19 @@ export const PendingPaymentsReport: React.FC = () => {
         }];
       }
 
-      // Sort events chronologically by exact event_date
+      // Sort events: newest event date first
       const sortedEvents = [...orderEvents].sort((a: any, b: any) => {
         const da = a.event_date || '';
         const db = b.event_date || '';
-        return da.localeCompare(db);
+        if (da && db && da !== db) {
+          return db.localeCompare(da);
+        }
+        if (da && !db) return -1;
+        if (!da && db) return 1;
+        const timeA = new Date(a?.created_at || a?.createdAt || 0).getTime();
+        const timeB = new Date(b?.created_at || b?.createdAt || 0).getTime();
+        if (timeA && timeB && timeA !== timeB) return timeB - timeA;
+        return String(b.id || '').localeCompare(String(a.id || ''));
       });
 
       const primaryEvent = sortedEvents[0] || null;
