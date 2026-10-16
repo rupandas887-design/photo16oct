@@ -216,11 +216,13 @@ export const DashboardGreetingHeader: React.FC<DashboardGreetingHeaderProps> = (
           <Minus className="w-3.5 h-3.5 text-zinc-400 hover:text-amber-400" />
         </button>
 
+        {/* Publish to GitHub button hidden as requested */}
         <button
           type="button"
           onClick={() => setIsGitHubModalOpen(true)}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all cursor-pointer ml-auto"
+          className="hidden items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all cursor-pointer ml-auto"
           title="Publish code to GitHub"
+          aria-hidden="true"
         >
           <Github className="w-3.5 h-3.5" />
           <span>Publish to GitHub</span>
