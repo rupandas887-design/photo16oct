@@ -1720,9 +1720,9 @@ export function getCustomers(leads: Lead[], orders: Order[], payments: Payment[]
   });
 }
 
-export * from './src/utils/modalViewportHandler';
-export * from './src/utils/errorViewportHandler';
-import { ensureModalScrolledToTop } from './src/utils/modalViewportHandler';
+export * from './utils/modalViewportHandler';
+export * from './utils/errorViewportHandler';
+import { ensureModalScrolledToTop } from './utils/modalViewportHandler';
 
 /**
  * Automatically scrolls to a popup or container, resets its internal scroll position to top, and focuses the first input/interactive field inside it.
@@ -1731,22 +1731,26 @@ export function triggerAutoScrollAndFocus(selector: string, delayMs: number = 10
   setTimeout(() => {
     const container = document.querySelector(selector) as HTMLElement;
     if (container) {
-      // Ensure all internal scroll containers are reset to top
+      // Ensure popup is properly positioned in viewport and internal scroll containers reset to top
       ensureModalScrolledToTop(container);
 
-      // Bring popup into view if needed (skip if already inside a fixed overlay to avoid background page jumps)
-      const isFixed = Boolean(container.closest('.fixed, [class*="fixed"]'));
-      if (!isFixed) {
+      const fixedOverlay = (
+        container.classList.contains('fixed') && container.classList.contains('inset-0')
+          ? container
+          : container.closest('.fixed.inset-0, [class*="fixed"][class*="inset-0"]')
+      ) as HTMLElement | null;
+
+      if (!fixedOverlay) {
         try {
-          container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          container.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
         } catch {
           // Ignore scroll errors
         }
       }
       
-      // Focus first field
+      // Focus first field safely without scrolling the outer window
       const firstInput = container.querySelector(
-        'input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button[type="submit"]'
+        'input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button[type="submit"], button[aria-label="Close modal"]'
       ) as HTMLElement;
       if (firstInput) {
         firstInput.focus({ preventScroll: true });

@@ -898,5 +898,48 @@ div.fixed.inset-0:has(h4 span.text-purple-300),
   max-height: none !important;
 }
 
+/* ==========================================================================
+   UNIVERSAL POPUP & MODAL VIEWPORT POSITIONING & AUTO-SCROLL RULES
+   ========================================================================== */
+
+/* Neutralize transform containing blocks on ancestors of open popups */
+.modal-viewport-ancestor {
+  transform: none !important;
+  filter: none !important;
+  perspective: none !important;
+  contain: none !important;
+  will-change: auto !important;
+}
+
+/* Ensure fixed modal overlays always cover the visible viewport and allow smooth vertical scrolling */
+.fixed.inset-0:has([class*="bg-zinc-9"], [class*="bg-slate-9"], [class*="bg-zinc-8"], [class*="shadow-2xl"], form, [role="dialog"], [role="alertdialog"]) {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain !important;
+  -webkit-overflow-scrolling: touch !important;
+  box-sizing: border-box !important;
+}
+
+/* Modal cards: maintain safe viewport bounds, avoid clipping, and center gracefully */
+.fixed.inset-0 > div:not(.w-screen):not(.h-screen):not(.fixed):not(.absolute) {
+  max-height: min(94vh, 94dvh, calc(100vh - 24px));
+  box-sizing: border-box;
+}
+
+@media (max-height: 850px) {
+  .fixed.inset-0.flex > div:not(.w-screen):not(.h-screen) {
+    margin-top: auto !important;
+    margin-bottom: auto !important;
+  }
+}
+
+
 
 

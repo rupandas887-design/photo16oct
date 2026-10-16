@@ -20,6 +20,7 @@ import {
   convertTimeToDbFormat, 
   checkTimeOverlap, 
   triggerAutoScrollAndFocus, 
+  ensureModalScrolledToTop,
   convertTo12Hour, 
   formatDateDDMMYY,
   formatTime12Hour,
@@ -1439,15 +1440,15 @@ export const OperationsLeads: React.FC = () => {
       setEditedMessages(initialMsgs);
       setSelectedStaffForShare(initialSelected);
 
-      // Automatically scroll to the Personalized WhatsApp Share modal and reset inner scroll container
+      // Automatically ensure Personalized WhatsApp Share modal is centered and internal scroll reset to top
       setTimeout(() => {
         if (whatsappModalRef.current) {
-          whatsappModalRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          ensureModalScrolledToTop(whatsappModalRef.current);
         }
         if (whatsappScrollRef.current) {
-          whatsappScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+          whatsappScrollRef.current.scrollTop = 0;
         }
-      }, 50);
+      }, 30);
     } else {
       setEditedMessages({});
       setSelectedStaffForShare({});
@@ -5787,9 +5788,9 @@ export const OperationsLeads: React.FC = () => {
           ? assignedCrewList.every(c => !!(c.raw_footage_link && c.raw_footage_link.trim())) 
           : true;
 
-        return (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div id="raw_footage_modal" className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full w-full max-w-2xl shadow-2xl relative p-6 max-h-[90vh] overflow-y-auto space-y-5 scrollbar-thin">
+        return createPortal(
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 overflow-y-auto">
+            <div id="raw_footage_modal" className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-2xl shadow-2xl relative p-6 max-h-[92vh] overflow-y-auto space-y-5 scrollbar-thin my-auto">
               
               {/* Header */}
               <div className="border-b border-zinc-800 pb-3 flex justify-between items-start">
@@ -6062,7 +6063,7 @@ export const OperationsLeads: React.FC = () => {
 
             </div>
           </div>
-        );
+        , document.body);
       })()}
 
       {/* Staff Assignment Success Modal */}
@@ -6147,9 +6148,9 @@ export const OperationsLeads: React.FC = () => {
       )}
 
       {/* Multi-Staff WhatsApp Share picker */}
-      {whatsappShareModalData && (
-        <div id="personalized-whatsapp-share-modal-overlay" className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[9999] flex items-center justify-center p-3 sm:p-4">
-          <div ref={whatsappModalRef} id="personalized-whatsapp-share-modal-card" className="bg-zinc-900 border border-zinc-800 rounded-2xl sm:rounded-3xl w-full max-w-2xl shadow-2xl p-4 sm:p-6 relative animate-in zoom-in duration-200 flex flex-col max-h-[92dvh] sm:max-h-[90vh]">
+      {whatsappShareModalData && createPortal(
+        <div id="personalized-whatsapp-share-modal-overlay" className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div ref={whatsappModalRef} id="personalized-whatsapp-share-modal-card" className="bg-zinc-900 border border-zinc-800 rounded-2xl sm:rounded-3xl w-full max-w-2xl shadow-2xl p-4 sm:p-6 relative animate-in zoom-in duration-200 flex flex-col max-h-[92dvh] sm:max-h-[90vh] my-auto">
             <button 
               onClick={() => setWhatsappShareModalData(null)}
               className="absolute top-3.5 right-3.5 sm:top-4 sm:right-4 w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white font-bold cursor-pointer transition-colors rounded-lg hover:bg-zinc-800"
@@ -6281,7 +6282,7 @@ export const OperationsLeads: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* Assigned Staff Popup (Triggered by Team Count click) */}
       {viewingStaffOrderId && (() => {

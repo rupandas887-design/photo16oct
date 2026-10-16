@@ -11317,9 +11317,9 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
       })()}
 
       {/* ASSIGNED EDITORS / TEAM POPUP */}
-      {assignedEditorsModalProd && (
-        <div id="production_assigned_team_modal" className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-zinc-950/90 backdrop-blur-sm animate-fade-in">
-          <div className="bg-zinc-950 border border-zinc-800 w-full max-w-5xl rounded-2xl flex flex-col max-h-[90vh] shadow-2xl overflow-hidden">
+      {assignedEditorsModalProd && createPortal(
+        <div id="production_assigned_team_modal" className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-zinc-950/90 backdrop-blur-sm animate-fade-in overflow-y-auto">
+          <div className="bg-zinc-950 border border-zinc-800 w-full max-w-5xl rounded-2xl flex flex-col max-h-[92vh] shadow-2xl overflow-hidden my-auto">
               {/* Header */}
               <div className="px-5 py-4 sm:px-6 lg:px-8 border-b border-zinc-900 bg-[#0c0d10] flex items-center justify-between shrink-0">
                 <div>
@@ -11682,7 +11682,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
             </div>
           </div>
         </div>
-        )}
+      , document.body)}
 
       {/* UPLOADED PROOF / IMAGE PREVIEW POPUP */}
       {previewProofModal && (
