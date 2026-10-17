@@ -6252,11 +6252,6 @@ export const OperationsLeads: React.FC = () => {
                           <div className="min-w-0">
                             <div className="flex items-center flex-wrap gap-1.5">
                               <span className="text-xs font-black text-white">{name}</span>
-                              {stObj?.role && (
-                                <span className="text-[9.5px] font-mono text-zinc-400 bg-zinc-850 px-1.5 py-0.5 rounded border border-zinc-800">
-                                  {stObj.role}
-                                </span>
-                              )}
                             </div>
                             {stObj?.mobile && (
                               <div className="text-[10px] text-zinc-400 font-mono flex items-center gap-1 mt-0.5">
