@@ -5,7 +5,7 @@ import { INITIAL_PACKAGES } from '../data/initialPackages';
 export { INITIAL_PACKAGES };
 
 import { supabaseClient, updateDiagnosticMetric } from '../supabaseClient';
-import { serializeLeadEvents, deserializeLeadEvents, extractEventsList, cleanPhone, cleanEmail, parseDeliverablesWithQty, parseTeamMembers, checkGlobalMobileUnique, checkGlobalStaffUniqueness, normalizeMobileNumber, saveCustomCategoryToStorage, getStoredCustomCategories, getAllMatchingOrderIds, isPasswordHashOrToken, isValidPlaintextPassword } from '../utils';
+import { serializeLeadEvents, deserializeLeadEvents, cleanPhone, cleanEmail, parseDeliverablesWithQty, parseTeamMembers, checkGlobalMobileUnique, checkGlobalStaffUniqueness, normalizeMobileNumber, saveCustomCategoryToStorage, getStoredCustomCategories, getAllMatchingOrderIds, isPasswordHashOrToken, isValidPlaintextPassword } from '../utils';
 import { performBusinessOwnerReview } from '../utils/businessOwnerReview';
 import { executeSaveStaffAssignments } from '../services/operationsAssignmentService';
 
@@ -109,7 +109,9 @@ interface RoleContextType {
   logout: () => void;
   users: User[];
   leads: Lead[];
+  allLeads?: Lead[];
   orders: Order[];
+  allOrders?: Order[];
   operations: Operation[];
   rawFootage: RawFootage[];
   production: Production[];
@@ -1951,10 +1953,6 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (table === 'raw_footage') {
       delete cloned.storage_type;
       delete cloned.upload_notes;
-    }
-    if (table === 'production') {
-      delete cloned.custom_event_name;
-      delete cloned.events;
     }
 
     if (table === 'payment_history') {
@@ -6760,8 +6758,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     uploadNotes?: string,
     paymentCollectionStatus?: string,
     additionalReceived?: number,
-    transactionId?: string,
-    eventId?: string
+    transactionId?: string
   ) => {
     // 1. Identify target order and corresponding lead with complete precision
     const targetOrder = augmentedOrders.find((o) => o.order_id === orderId || o.lead_id === orderId) || orders.find((o) => o.order_id === orderId || o.lead_id === orderId);
@@ -6891,11 +6888,6 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         ...opUpdates
       }).catch(e => console.warn("Failed to upsert operations record:", e));
     }
-    setOperations(prev => {
-      const updated = prev.map(o => o.order_id === effOrderId ? { ...o, ...opUpdates } : o);
-      try { localStorage.setItem('erp_operations', JSON.stringify(updated)); } catch (_) {}
-      return updated;
-    });
 
     // 6. Update staff assignments in DB to Completed & Verified Footage
     await pushUpdate('staff_assignments', 'order_id', effOrderId, {
@@ -7010,54 +7002,40 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     try { await pushInsert('lead_equipment_history', newEquipmentHist); } catch (_) {}
     setLeadEquipmentHistory(prev => [newEquipmentHist, ...prev]);
 
-    // 10. Ensure production entry exists or update it for each event independently
-    const eventsList = extractEventsList(targetOrder, matchedLead);
-    const targetEvents = eventId 
-      ? eventsList.filter((e: any) => String(e.id || e.event_id || '') === String(eventId))
-      : (eventsList.length > 0 ? eventsList : [{ id: targetOrder?.event_type || 'Main Event', event_name: targetOrder?.event_type || 'Main Event' }]);
+    // 10. Ensure production entry exists or update it
+    let existingProd = augmentedProduction.find(p => p.tracking_id === actualTrackingId || p.tracking_id === effOrderId || p.order_id === effOrderId);
+    let pId = existingProd?.production_id || `PRD-${Math.floor(4012 + Math.random() * 850)}`;
 
-    for (const ev of targetEvents) {
-      const currentEventId = ev.id || ev.event_id || ev.event_type || 'Main Event';
-      const currentEventName = ev.event_name || ev.event_type || targetOrder?.event_type || 'Event';
+    const prodEditingStatus = (existingProd?.editing_status && !['Footage Handover', 'Raw Footage Received', 'Pending'].includes(existingProd.editing_status))
+      ? existingProd.editing_status
+      : 'Verified Footage';
 
-      let existingProd = augmentedProduction.find(p => 
-        (p.order_id === effOrderId || p.tracking_id === effOrderId || p.lead_id === effLeadId) &&
-        (String(p.event_id || '').trim() === String(currentEventId).trim() || !p.event_id)
-      ) || augmentedProduction.find(p => p.order_id === effOrderId || p.tracking_id === effOrderId);
+    const newProd: any = {
+      production_id: pId,
+      tracking_id: actualTrackingId,
+      editor_assigned: existingProd?.editor_assigned || 'Unassigned',
+      raw_footage_location: resolvedLink,
+      editing_status: prodEditingStatus,
+      production_status: prodEditingStatus,
+      remarks: `Raw footage received via ${storageType || 'Google Drive'}. ${uploadNotes || ''}`,
+      order_id: effOrderId,
+      lead_id: effLeadId || targetOrder?.lead_id || '',
+      customer_name: targetOrder?.customer_name || matchedLead?.customer_name || 'Client',
+      event_id: targetOrder?.event_type || 'Main Event',
+      assigned_team: targetOrder?.assigned_team || 'Unassigned',
+      final_consolidated_drive_link: resolvedLink,
+      proof_url: resolvedLink,
+      current_status: prodEditingStatus,
+      created_at: timestamp
+    };
 
-      let pId = existingProd?.production_id || `PRD-${effOrderId}-${String(currentEventId).replace(/[^a-zA-Z0-9]/g, '')}`;
-
-      const prodEditingStatus = (existingProd?.editing_status && !['Footage Handover', 'Raw Footage Received', 'Pending'].includes(existingProd.editing_status))
-        ? existingProd.editing_status
-        : 'Verified Footage';
-
-      const newProd: any = {
-        production_id: pId,
-        tracking_id: actualTrackingId,
-        editor_assigned: existingProd?.editor_assigned || 'Unassigned',
-        raw_footage_location: resolvedLink,
-        editing_status: prodEditingStatus,
-        production_status: prodEditingStatus,
-        remarks: `Raw footage received via ${storageType || 'Google Drive'}. ${uploadNotes || ''}`,
-        order_id: effOrderId,
-        lead_id: effLeadId || targetOrder?.lead_id || '',
-        customer_name: targetOrder?.customer_name || matchedLead?.customer_name || 'Client',
-        event_id: currentEventId,
-        custom_event_name: currentEventName,
-        assigned_team: targetOrder?.assigned_team || 'Unassigned',
-        final_consolidated_drive_link: resolvedLink,
-        proof_url: resolvedLink,
-        current_status: prodEditingStatus,
-        created_at: timestamp
-      };
-
+    try {
       const rProd = await pushUpsert('production', newProd);
       if (!rProd?.success) {
-        console.error("[confirmRawFootageReceived] Production upsert failed:", rProd?.error);
-        throw new Error(`Failed to save production entry for event ${currentEventName}: ${rProd?.error || 'Database save failed'}`);
+        console.warn("[confirmRawFootageReceived] Production upsert warning:", rProd?.error);
       } else {
         setProduction(prev => {
-          const idx = prev.findIndex(p => p.production_id === newProd.production_id || (p.order_id === effOrderId && p.event_id === currentEventId));
+          const idx = prev.findIndex(p => p.production_id === newProd.production_id || p.tracking_id === actualTrackingId);
           if (idx >= 0) {
             const copy = [...prev];
             copy[idx] = { ...copy[idx], ...newProd };
@@ -7066,6 +7044,8 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           return [newProd, ...prev];
         });
       }
+    } catch (prodErr) {
+      console.warn("[confirmRawFootageReceived] Production upsert error:", prodErr);
     }
 
     // 11. Directly update local state for immediate reactivity (no page refresh required)
@@ -10961,7 +10941,9 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         logout,
         users,
         leads: visibleLeads,
+        allLeads: leads,
         orders: visibleOrders,
+        allOrders: augmentedOrders,
         operations: augmentedOperations,
         rawFootage,
         production: augmentedProduction,

@@ -1,9 +1,9 @@
 import React from 'react';
 import { Lead } from '../types';
-import { deserializeLeadEvents } from '../utils';
+import { deserializeLeadEvents, formatDateDDMMYY } from '../utils';
 
 export interface EventCategoryCellProps {
-  lead: Lead;
+  lead?: Lead | any;
   orders?: any[];
   filterEventDateOption?: string;
 }
@@ -19,6 +19,8 @@ export interface CategoryEventItem {
   createdAt: number;
 }
 
+export type UnifiedLeadEventItem = CategoryEventItem;
+
 export const isDateString = (val?: any): boolean => {
   if (!val) return false;
   const s = String(val).trim();
@@ -29,6 +31,10 @@ export const isDateString = (val?: any): boolean => {
   return false;
 };
 
+/**
+ * Strips null, undefined, "undefined", "null", "N/A", "—" and cleans string.
+ * Guarantees that the literal text "undefined" is NEVER returned.
+ */
 export const cleanText = (str?: any): string => {
   if (str === null || str === undefined) return '';
   const s = String(str).trim();
@@ -65,13 +71,15 @@ export const getEventCategoryDateTimeTimestamp = (dateStr: string, timeStr?: str
   let year = 1970;
   let month = 0;
   let day = 1;
-  if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}$/.test(s)) {
-    const parts = s.split(/[-/]/);
+
+  if (/^\d{1,2}[-/.]\d{1,2}[-/.](\d{2}|\d{4})$/.test(s)) {
+    const parts = s.split(/[-/.]/);
     day = parseInt(parts[0], 10);
     month = parseInt(parts[1], 10) - 1;
     year = parseInt(parts[2], 10);
-  } else if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(s)) {
-    const parts = s.split(/[-/]/);
+    if (year < 100) year += 2000;
+  } else if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(s)) {
+    const parts = s.split(/[-/.]/);
     year = parseInt(parts[0], 10);
     month = parseInt(parts[1], 10) - 1;
     day = parseInt(parts[2], 10);
@@ -83,6 +91,7 @@ export const getEventCategoryDateTimeTimestamp = (dateStr: string, timeStr?: str
       day = d.getDate();
     }
   }
+
   let hours = 0;
   let minutes = 0;
   const cleanTimeStr = cleanText(timeStr);
@@ -101,52 +110,23 @@ export const getEventCategoryDateTimeTimestamp = (dateStr: string, timeStr?: str
       minutes = m;
     }
   }
-  const combined = new Date(year, month, day, hours, minutes);
-  return isNaN(combined.getTime()) ? 0 : combined.getTime();
+
+  const combinedDate = new Date(year, month, day, hours, minutes);
+  return isNaN(combinedDate.getTime()) ? 0 : combinedDate.getTime();
 };
 
 export const formatCategoryDisplayDate = (dateStr?: any): string => {
-  if (!dateStr) return '';
+  if (dateStr === null || dateStr === undefined) return '';
   const clean = cleanText(dateStr);
   if (!clean) return '';
+  const formatted = formatDateDDMMYY(clean);
+  if (formatted) return formatted;
   return cleanText(clean);
 };
 
-export const extractEventInfo = (ev: any, lead: Lead, idx: number, linkedOrder?: any): CategoryEventItem => {
-  let rawType = ev?.event_type || ev?.event_category || ev?.eventType || ev?.custom_event_type;
-  if (!rawType || isDateString(rawType)) {
-    rawType = ev?.event_name || ev?.custom_event_name || ev?.eventName || ev?.Event_Name;
-  }
-  if (!rawType || isDateString(rawType)) {
-    rawType = lead?.event_type || linkedOrder?.event_type || 'Event';
-  }
-  if (!rawType || isDateString(rawType)) {
-    rawType = lead?.event_name || lead?.custom_event_name || linkedOrder?.custom_event_name || 'Event';
-  }
-  const cleanType = cleanText(rawType) || 'Event';
+export const getSortedLeadEvents = (lead?: Lead | any, orders?: any[]): UnifiedLeadEventItem[] => {
+  if (!lead) return [];
 
-  const rawDate = ev?.event_date || ev?.Event_Date || ev?.date || lead?.event_date || linkedOrder?.event_date || '';
-  const cleanDate = cleanText(rawDate);
-
-  const rawTime = ev?.event_start_time || ev?.event_time || ev?.Event_Start_Time || ev?.time || lead?.event_time || linkedOrder?.event_time || '';
-  const cleanTime = cleanText(rawTime);
-
-  const timestamp = getEventCategoryDateTimeTimestamp(cleanDate, cleanTime);
-  const createdAt = new Date(ev?.created_at || ev?.createdAt || ev?.created_date || lead?.created_date || 0).getTime() || 0;
-
-  return {
-    id: ev?.id || ev?.event_id || `evt-${idx}`,
-    eventType: cleanType,
-    secondaryValue: '',
-    eventName: cleanType,
-    eventDate: cleanDate,
-    eventTime: cleanTime,
-    timestamp,
-    createdAt
-  };
-};
-
-export const getSortedEventsForCategory = (lead: Lead, orders?: any[]): CategoryEventItem[] => {
   const linkedOrder = orders?.find((o: any) => 
     o.lead_id === lead.lead_id || 
     o.order_id === lead.lead_id || 
@@ -164,21 +144,80 @@ export const getSortedEventsForCategory = (lead: Lead, orders?: any[]): Category
       const parsed = JSON.parse(lead.events);
       if (Array.isArray(parsed)) rawEventsList = parsed;
     } catch (e) {}
+  } else if (typeof linkedOrder?.events === 'string') {
+    try {
+      const parsed = JSON.parse(linkedOrder.events);
+      if (Array.isArray(parsed)) rawEventsList = parsed;
+    } catch (e) {}
   }
 
   if (rawEventsList.length === 0 && lead?.notes_special_customizations) {
-    rawEventsList = deserializeLeadEvents(lead.notes_special_customizations).events;
+    rawEventsList = deserializeLeadEvents(lead.notes_special_customizations).events || [];
   }
   if (rawEventsList.length === 0 && (linkedOrder as any)?.notes_special_customizations) {
-    rawEventsList = deserializeLeadEvents((linkedOrder as any).notes_special_customizations).events;
+    rawEventsList = deserializeLeadEvents((linkedOrder as any).notes_special_customizations).events || [];
   }
 
-  if (rawEventsList.length > 0) {
-    const list: CategoryEventItem[] = rawEventsList.map((ev: any, idx: number) => 
-      extractEventInfo(ev, lead, idx, linkedOrder)
-    );
+  const fallbackDate = cleanText(
+    lead.event_date ||
+    (lead as any).Event_Date ||
+    lead.date ||
+    linkedOrder?.event_date ||
+    ''
+  );
+  const fallbackTime = cleanText(
+    lead.event_time ||
+    (lead as any).event_start_time ||
+    linkedOrder?.event_time ||
+    ''
+  );
+  const fallbackType = cleanText(
+    lead.event_type ||
+    lead.custom_event_type ||
+    lead.event_name ||
+    linkedOrder?.event_type ||
+    ''
+  );
 
-    // Sort by MOST RECENT event date + time FIRST (descending timestamp: latest/newest first)
+  if (rawEventsList.length > 0) {
+    const list: UnifiedLeadEventItem[] = rawEventsList.map((ev: any, idx: number) => {
+      let rawType = ev?.event_type || ev?.event_category || ev?.eventType || ev?.custom_event_type || '';
+      if (!rawType || isDateString(rawType)) {
+        rawType = ev?.event_name || ev?.custom_event_name || ev?.eventName || ev?.Event_Name || '';
+      }
+      if ((!rawType || isDateString(rawType)) && rawEventsList.length === 1) {
+        rawType = fallbackType || 'Event';
+      }
+      const cleanType = cleanText(rawType) || cleanText(ev?.event_name) || 'Event';
+
+      const rawDate = ev?.event_date || ev?.Event_Date || ev?.event_start_date || ev?.date || '';
+      let cleanDate = cleanText(rawDate);
+      if (!cleanDate && rawEventsList.length === 1) {
+        cleanDate = fallbackDate;
+      }
+
+      const rawTime = ev?.event_start_time || ev?.event_time || ev?.Event_Start_Time || ev?.time || '';
+      let cleanTime = cleanText(rawTime);
+      if (!cleanTime && rawEventsList.length === 1) {
+        cleanTime = fallbackTime;
+      }
+
+      const timestamp = getEventCategoryDateTimeTimestamp(cleanDate, cleanTime);
+      const createdAt = new Date(ev?.created_at || ev?.createdAt || ev?.created_date || lead?.created_date || 0).getTime() || 0;
+      const evName = cleanText(ev?.event_name || ev?.custom_event_name || ev?.eventName || ev?.Event_Name || cleanType) || cleanType;
+
+      return {
+        id: String(ev?.id || ev?.event_id || `evt-${idx}`),
+        eventType: cleanType,
+        secondaryValue: '',
+        eventName: evName,
+        eventDate: cleanDate,
+        eventTime: cleanTime,
+        timestamp,
+        createdAt
+      };
+    });
+
     list.sort((a, b) => {
       if (a.timestamp && b.timestamp && a.timestamp !== b.timestamp) {
         return b.timestamp - a.timestamp;
@@ -194,11 +233,31 @@ export const getSortedEventsForCategory = (lead: Lead, orders?: any[]): Category
     return list;
   }
 
-  return [extractEventInfo(null, lead, 0, linkedOrder)];
+  if (fallbackDate || fallbackTime || fallbackType) {
+    const timestamp = getEventCategoryDateTimeTimestamp(fallbackDate, fallbackTime);
+    const createdAt = new Date(lead?.created_at || lead?.created_date || 0).getTime() || 0;
+    const resolvedType = fallbackType || 'Event';
+    return [{
+      id: String(lead?.event_id || linkedOrder?.event_id || 'evt-0'),
+      eventType: resolvedType,
+      secondaryValue: '',
+      eventName: cleanText(lead?.event_name || resolvedType) || resolvedType,
+      eventDate: fallbackDate,
+      eventTime: fallbackTime,
+      timestamp,
+      createdAt
+    }];
+  }
+
+  return [];
+};
+
+export const getSortedEventsForCategory = (lead: Lead, orders?: any[]): CategoryEventItem[] => {
+  return getSortedLeadEvents(lead, orders);
 };
 
 export const EventCategoryCell: React.FC<EventCategoryCellProps> = ({ lead, orders }) => {
-  const events = getSortedEventsForCategory(lead, orders);
+  const events = getSortedLeadEvents(lead, orders);
 
   if (!events || events.length === 0) {
     return <span className="text-zinc-600 italic font-mono text-xs">—</span>;
@@ -207,14 +266,14 @@ export const EventCategoryCell: React.FC<EventCategoryCellProps> = ({ lead, orde
   return (
     <div className="flex flex-col items-start gap-1.5 text-left select-text py-0.5 min-w-0">
       {events.map((ev, idx) => {
-        const type = cleanText(ev.eventType) || cleanText(ev.eventName) || 'Event';
+        const cat = cleanText(ev.eventType) || cleanText(ev.eventName) || 'Event';
         return (
           <div
             key={ev.id || idx}
-            className="text-zinc-100 font-semibold text-xs leading-snug whitespace-nowrap min-h-[22px] flex items-center"
-            title={type}
+            className="font-semibold text-zinc-100 text-xs leading-snug whitespace-nowrap min-h-[22px] flex items-center"
+            title={cat}
           >
-            {type}
+            {cat}
           </div>
         );
       })}

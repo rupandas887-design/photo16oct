@@ -21,7 +21,7 @@ import {
   Layers,
   UserPlus
 } from 'lucide-react';
-import { formatINR, formatTime12Hour, formatDateDDMMYY, deserializeLeadEvents, parseDeliverablesWithQty, formatQtyItem, formatIndianPhoneNumber } from '../utils';
+import { formatINR, formatTime12Hour, formatDateDDMMYY, deserializeLeadEvents, parseDeliverablesWithQty, formatQtyItem, formatIndianPhoneNumber } from './utils';
 import { EventLocationCell, cleanLocationString } from './EventLocationCell';
 
 interface UnifiedCalendarProps {
@@ -71,7 +71,7 @@ interface CalendarEventItem {
   sourceRecord?: any;
 }
 
-const resolveSalesCrewName = (ord?: any, lead?: any, ev?: any, quotationsList: any[] = []): string => {
+const resolveSalesCrewName = (ord?: any, lead?: any, ev?: any, quotationsList: any[] = [], usersList: any[] = []): string => {
   // 1. Check event-specific sales staff if present on event object
   if (ev) {
     const evSales = ev.sales_staff_name || ev.sales_person || ev.salesPerson || (ev as any).Sales_Staff_Name;
@@ -92,6 +92,15 @@ const resolveSalesCrewName = (ord?: any, lead?: any, ev?: any, quotationsList: a
 
   if (directName && typeof directName === 'string' && directName.trim() && !['unassigned', 'none', 'n/a', 'null', 'undefined', '—', '-'].includes(directName.trim().toLowerCase())) {
     return directName.trim();
+  }
+
+  // 2b. Check sales_staff_id against usersList
+  const staffId = lead?.sales_staff_id || ord?.sales_staff_id || (lead as any)?.sales_user_id || (ord as any)?.sales_user_id;
+  if (staffId && usersList && usersList.length > 0) {
+    const matchedUser = usersList.find((u: any) => u.id === staffId || u.user_id === staffId);
+    if (matchedUser?.name && typeof matchedUser.name === 'string' && matchedUser.name.trim()) {
+      return matchedUser.name.trim();
+    }
   }
 
   // 3. Match from quotations
@@ -568,8 +577,11 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
   const { 
     currentUser, 
     currentUserName,
-    leads = [], 
-    orders = [], 
+    leads: roleLeads = [], 
+    orders: roleOrders = [],
+    allLeads = [],
+    allOrders = [], 
+    users = [],
     operations = [], 
     production = [], 
     staffAssignments = [], 
@@ -579,9 +591,25 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
     leadPackages = []
   } = useRole();
 
+  // For the Sales Calendar, provide a unified shared schedule across ALL sales staff members
+  const leads = useMemo(() => {
+    if (role === 'sales') {
+      return (allLeads && allLeads.length > 0) ? allLeads : roleLeads;
+    }
+    return roleLeads;
+  }, [role, allLeads, roleLeads]);
+
+  const orders = useMemo(() => {
+    if (role === 'sales') {
+      return (allOrders && allOrders.length > 0) ? allOrders : roleOrders;
+    }
+    return roleOrders;
+  }, [role, allOrders, roleOrders]);
+
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('All');
+  const [selectedSalesPersonFilter, setSelectedSalesPersonFilter] = useState('All');
   const [calendarModalDate, setCalendarModalDate] = useState<string | null>(null);
   const [calendarModalEvents, setCalendarModalEvents] = useState<CalendarEventItem[]>([]);
 
@@ -990,7 +1018,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
           if (parsed.events && parsed.events.length > 0) rawEvents = parsed.events;
         }
 
-        const salesStaffName = resolveSalesCrewName(ord, matchedLead, undefined, quotations);
+        const salesStaffName = resolveSalesCrewName(ord, matchedLead, undefined, quotations, users);
 
         if (rawEvents.length > 0) {
           rawEvents.forEach((ev: any, evIdx: number) => {
@@ -1005,7 +1033,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
             const evName = (ev.event_name || ev.custom_event_name || ev.eventName || ev.Event_Name || ev.event_type || ord.custom_event_name || ord.event_name || ord.event_type || matchedLead?.custom_event_name || matchedLead?.event_name || matchedLead?.event_type || `Event ${evIdx + 1}`).trim();
             const evType = (ev.event_type || ev.event_category || ev.eventType || ord.event_type || matchedLead?.event_type || 'Event').trim();
 
-            const evSalesStaffName = resolveSalesCrewName(ord, matchedLead, ev, quotations);
+            const evSalesStaffName = resolveSalesCrewName(ord, matchedLead, ev, quotations, users);
 
             items.push({
               id: `ORD-${ordId}-${evId}`,
@@ -1062,12 +1090,15 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
         }
       });
 
-      // B. Process any confirmed leads not yet processed through orders array
+      // B. Process leads with scheduled events not yet processed through orders array
       (leads || []).forEach(lead => {
+        if (!lead || !lead.lead_id) return;
         if (processedLeadIds.has(lead.lead_id)) return;
         if (lead.order_id && processedOrderIds.has(lead.order_id)) return;
 
-        // Check existing Order Confirmation status/data: lead must be confirmed!
+        const isCancelled = lead.status === 'Cancelled' || lead.current_status === 'Cancelled' || (lead as any).order_status === 'Cancelled' || lead.current_stage === 'Event Cancelled';
+        if (isCancelled) return;
+
         const isLeadConfirmed = Boolean(
           lead.is_order_confirmed === true ||
           lead.isOrderConfirmed === true ||
@@ -1080,9 +1111,6 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
           (lead.order_id && typeof lead.order_id === 'string' && lead.order_id.trim() !== '' && lead.order_id !== lead.lead_id && !lead.order_id.startsWith('LD-') && !lead.order_id.startsWith('DRAFT'))
         );
 
-        // Pre-confirmation leads must NOT appear in the Sales Calendar
-        if (!isLeadConfirmed) return;
-
         // Match linked order if exists
         const matchedOrder: any = (orders || []).find(o => 
           (o.lead_id && o.lead_id === lead.lead_id) || 
@@ -1090,15 +1118,14 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
           ((lead as any).orders && (o.order_id === (lead as any).orders || o.lead_id === (lead as any).orders))
         );
 
-        // Resolve valid Order ID - NEVER use Lead ID!
+        // Resolve valid Order ID where applicable - NEVER use Lead ID as Order ID
         const resolvedOrderId = matchedOrder?.order_id || 
-          (lead.order_id && typeof lead.order_id === 'string' && lead.order_id.trim() !== '' && lead.order_id !== lead.lead_id && !lead.order_id.startsWith('LD-') && !lead.order_id.startsWith('DRAFT') ? lead.order_id.trim() : null) ||
-          ((lead as any).orders && typeof (lead as any).orders === 'string' && (lead as any).orders.trim() !== '' && (lead as any).orders !== lead.lead_id && !(lead as any).orders.startsWith('LD-') ? (lead as any).orders.trim() : null);
+          (lead.order_id && typeof lead.order_id === 'string' && lead.order_id.trim() !== '' && lead.order_id !== lead.lead_id && !lead.order_id.startsWith('LD-') && !lead.order_id.startsWith('DRAFT') ? lead.order_id.trim() : '') ||
+          ((lead as any).orders && typeof (lead as any).orders === 'string' && (lead as any).orders.trim() !== '' && (lead as any).orders !== lead.lead_id && !(lead as any).orders.startsWith('LD-') ? (lead as any).orders.trim() : '');
 
-        // An event only appears after order confirmation with a valid Order ID
-        if (!resolvedOrderId) return;
-
-        processedOrderIds.add(resolvedOrderId);
+        if (resolvedOrderId) {
+          processedOrderIds.add(resolvedOrderId);
+        }
         processedLeadIds.add(lead.lead_id);
 
         const matchedOp = matchedOrder
@@ -1123,7 +1150,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
           if (parsed.events && parsed.events.length > 0) rawEvents = parsed.events;
         }
 
-        const salesStaffName = resolveSalesCrewName(matchedOrder, lead, undefined, quotations);
+        const salesStaffName = resolveSalesCrewName(matchedOrder, lead, undefined, quotations, users);
 
         if (rawEvents.length > 0) {
           rawEvents.forEach((ev: any, evIdx: number) => {
@@ -1138,11 +1165,11 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
             const evName = (ev.event_name || ev.custom_event_name || ev.eventName || ev.Event_Name || ev.event_type || lead.custom_event_name || lead.event_name || lead.event_type || `Event ${evIdx + 1}`).trim();
             const evType = (ev.event_type || ev.event_category || ev.eventType || lead.event_type || matchedOrder?.event_type || 'Event').trim();
 
-            const evSalesStaffName = resolveSalesCrewName(matchedOrder, lead, ev, quotations);
+            const evSalesStaffName = resolveSalesCrewName(matchedOrder, lead, ev, quotations, users);
 
             items.push({
-              id: `CONF-LEAD-${lead.lead_id}-${evId}`,
-              orderId: resolvedOrderId, // Strictly Order ID only, never Lead ID
+              id: resolvedOrderId ? `CONF-LEAD-${lead.lead_id}-${evId}` : `LEAD-${lead.lead_id}-${evId}`,
+              orderId: resolvedOrderId || '',
               leadId: lead.lead_id,
               eventId: evId,
               customerName: lead.customer_name || matchedOrder?.customer_name || 'Client',
@@ -1157,7 +1184,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
               budget: lead.budget || matchedOrder?.quotation_amount || 0,
               salesCrew: evSalesStaffName,
               salesPerson: evSalesStaffName,
-              status: lead.status || lead.current_status || matchedOrder?.current_stage || 'Confirmed Order',
+              status: lead.status || lead.current_status || matchedOrder?.current_stage || (isLeadConfirmed ? 'Confirmed Order' : 'Lead Scheduled'),
               desk: 'Sales',
               sourceRecord: { lead, order: matchedOrder, op: matchedOp, staffAssignments: matchedSa, event: ev }
             });
@@ -1170,8 +1197,8 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
           const evTimeStr = lead.event_time || matchedOrder?.event_time || '';
 
           items.push({
-            id: `CONF-LEAD-${lead.lead_id}`,
-            orderId: resolvedOrderId, // Strictly Order ID only, never Lead ID
+            id: resolvedOrderId ? `CONF-LEAD-${lead.lead_id}` : `LEAD-${lead.lead_id}`,
+            orderId: resolvedOrderId || '',
             leadId: lead.lead_id,
             customerName: lead.customer_name || matchedOrder?.customer_name || 'Client',
             customerMobile: lead.mobile || lead.whatsapp_number || matchedOrder?.customer_phone || matchedOrder?.mobile || '',
@@ -1185,7 +1212,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
             budget: lead.budget || matchedOrder?.quotation_amount || 0,
             salesCrew: salesStaffName,
             salesPerson: salesStaffName,
-            status: lead.status || lead.current_status || matchedOrder?.current_stage || 'Confirmed Order',
+            status: lead.status || lead.current_status || matchedOrder?.current_stage || (isLeadConfirmed ? 'Confirmed Order' : 'Lead Scheduled'),
             desk: 'Sales',
             sourceRecord: { lead, order: matchedOrder, op: matchedOp, staffAssignments: matchedSa }
           });
@@ -1224,9 +1251,27 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
     }
 
     return items;
-  }, [role, staffMemberId, staffMemberName, currentUserName, currentUser, orders, leads, operations, production, editorAssignments, staffAssignments, rawFootage, quotations]);
+  }, [role, staffMemberId, staffMemberName, currentUserName, currentUser, orders, leads, operations, production, editorAssignments, staffAssignments, rawFootage, quotations, users]);
 
-  // Filter items by search term and status
+  // Distinct sales staff for filtering
+  const salesStaffList = useMemo(() => {
+    const set = new Set<string>();
+    allEvents.forEach(e => {
+      const sp = (e.salesPerson || e.salesCrew || '').trim();
+      if (sp && !['—', '-', 'none', 'unassigned', 'null', 'undefined'].includes(sp.toLowerCase())) {
+        set.add(sp);
+      }
+    });
+    // Also include sales staff from users list
+    (users || []).forEach((u: any) => {
+      if ((u.role === 'Sales Team' || u.role === 'Sales' || (u.roles && u.roles.includes('Sales Team'))) && u.name) {
+        set.add(u.name.trim());
+      }
+    });
+    return Array.from(set).sort();
+  }, [allEvents, users]);
+
+  // Filter items by search term, status, and salesperson
   const filteredEvents = useMemo(() => {
     const list = allEvents.filter(ev => {
       if (searchTerm) {
@@ -1234,13 +1279,22 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
         const matchId = ev.orderId.toLowerCase().includes(q) || (ev.leadId && ev.leadId.toLowerCase().includes(q));
         const matchName = ev.customerName.toLowerCase().includes(q);
         const matchEvent = ev.eventName.toLowerCase().includes(q) || ev.eventType.toLowerCase().includes(q);
+        const matchLoc = ev.location && ev.location.toLowerCase().includes(q);
         const matchStaff = (ev.editorAssigned && ev.editorAssigned.toLowerCase().includes(q)) ||
-                           (ev.assignedStaff && ev.assignedStaff.toLowerCase().includes(q));
-        if (!matchId && !matchName && !matchEvent && !matchStaff) return false;
+                           (ev.assignedStaff && ev.assignedStaff.toLowerCase().includes(q)) ||
+                           (ev.salesCrew && ev.salesCrew.toLowerCase().includes(q)) ||
+                           (ev.salesPerson && ev.salesPerson.toLowerCase().includes(q));
+        if (!matchId && !matchName && !matchEvent && !matchStaff && !matchLoc) return false;
       }
 
       if (selectedStatusFilter !== 'All') {
         if (ev.status.toLowerCase() !== selectedStatusFilter.toLowerCase()) return false;
+      }
+
+      if (role === 'sales' && selectedSalesPersonFilter !== 'All') {
+        const evSp = (ev.salesPerson || ev.salesCrew || '').trim().toLowerCase();
+        const filterSp = selectedSalesPersonFilter.trim().toLowerCase();
+        if (evSp !== filterSp) return false;
       }
 
       return true;
@@ -1259,7 +1313,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
     }
 
     return list;
-  }, [allEvents, searchTerm, selectedStatusFilter, role]);
+  }, [allEvents, searchTerm, selectedStatusFilter, selectedSalesPersonFilter, role]);
 
   // Calendar Grid Calculation
   const year = currentMonth.getFullYear();
@@ -1413,18 +1467,38 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
             </button>
           </div>
 
-          {/* Search & Status Filter */}
+          {/* Search & Status/Salesperson Filters */}
           <div className="flex flex-wrap items-center gap-2.5">
-            <div className="relative flex-1 sm:w-64">
+            <div className="relative flex-1 sm:w-64 min-w-[180px]">
               <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
-                placeholder="Search orders, clients, events..."
+                placeholder="Search orders, clients, events, staff..."
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-9 pr-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-600 transition"
               />
             </div>
+
+            {/* Sales Staff Filter (for role === 'sales') */}
+            {role === 'sales' && (
+              <select
+                value={selectedSalesPersonFilter}
+                onChange={e => setSelectedSalesPersonFilter(e.target.value)}
+                className="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-mono text-blue-300 focus:outline-none focus:border-blue-500 transition cursor-pointer"
+                title="Filter by Salesperson"
+              >
+                <option value="All">All Sales Staff ({allEvents.length})</option>
+                {salesStaffList.map(name => {
+                  const count = allEvents.filter(e => (e.salesPerson || e.salesCrew || '').trim().toLowerCase() === name.toLowerCase()).length;
+                  return (
+                    <option key={name} value={name}>
+                      {name} ({count})
+                    </option>
+                  );
+                })}
+              </select>
+            )}
 
             {distinctStatuses.length > 0 && (
               <select
@@ -1508,14 +1582,22 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
                   <div className="w-full flex-1 flex flex-col justify-start gap-0.5 overflow-hidden mt-0.5 min-h-0">
                     {cell.events.slice(0, 2).map((ev, eIdx) => {
                       const displayName = ev.customerName || ev.orderId;
+                      const staffLabel = ev.salesPerson || ev.salesCrew;
                       return (
                         <div
                           key={`${ev.id}_${eIdx}`}
                           className="w-full truncate text-[9px] sm:text-[10px] leading-tight px-1 py-0.5 rounded bg-zinc-900/90 text-zinc-300 border border-zinc-800 font-medium text-left hover:text-white"
-                          title={`${ev.orderId}: ${ev.customerName} (${ev.status})`}
+                          title={`${ev.orderId ? `${ev.orderId}: ` : ''}${ev.customerName}${staffLabel ? ` • Sales: ${staffLabel}` : ''} (${ev.status})`}
                         >
-                          <span className={`${theme.textHighlight} font-bold mr-0.5`}>•</span>
-                          {displayName}
+                          <div className="flex items-center gap-1 truncate">
+                            <span className={`${theme.textHighlight} font-bold mr-0.5 shrink-0`}>•</span>
+                            <span className="truncate">{displayName}</span>
+                          </div>
+                          {role === 'sales' && staffLabel && (
+                            <div className="text-[8px] text-blue-400 font-mono truncate pl-2">
+                              👤 {staffLabel}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -1644,9 +1726,13 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
                           <tr key={`${ev.id}_${idx}`} className="hover:bg-zinc-900/50 transition font-mono">
                             {role === 'sales' ? (
                               <>
-                                {/* 1. Order ID */}
+                                {/* 1. Order ID (where applicable) */}
                                 <td className="p-3 pl-4 text-zinc-200 font-bold whitespace-nowrap min-w-[120px]">
-                                  <span className={`${theme.textHighlight}`}>{ev.orderId}</span>
+                                  {ev.orderId ? (
+                                    <span className={`${theme.textHighlight}`}>{ev.orderId}</span>
+                                  ) : (
+                                    <span className="text-zinc-500 font-mono text-xs">—</span>
+                                  )}
                                 </td>
 
                                 {/* 2. Customer Name & Number */}
@@ -1666,28 +1752,16 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
 
                                 {/* 4. Event Location */}
                                 <td className="p-3 whitespace-nowrap text-zinc-300 min-w-[150px]">
-                                  <EventLocationCell
-                                    lead={ev.sourceRecord?.lead ? {
-                                      ...ev.sourceRecord.lead,
-                                      order_id: ev.orderId,
-                                      events: ev.sourceRecord.lead.events || ev.sourceRecord?.order?.events || (ev.sourceRecord?.event ? [ev.sourceRecord.event] : [])
-                                    } : {
-                                      lead_id: ev.leadId || ev.orderId,
-                                      order_id: ev.orderId,
-                                      events: ev.sourceRecord?.order?.events || (ev.sourceRecord?.event ? [ev.sourceRecord.event] : []),
-                                      notes_special_customizations: ev.sourceRecord?.order?.notes_special_customizations,
-                                      event_location: ev.location,
-                                      address: ev.location
-                                    }}
-                                    orders={orders}
-                                    currentLocation={ev.location}
-                                  />
+                                  <div className="font-mono text-xs text-zinc-200 max-w-[200px] truncate" title={ev.location || '—'}>
+                                    {ev.location || <span className="text-zinc-600 italic font-mono text-xs">—</span>}
+                                  </div>
                                 </td>
 
-                                {/* 5. Sales Crew */}
+                                {/* 5. Sales Crew / Sales Staff Name */}
                                 <td className="p-3 whitespace-nowrap text-zinc-300 min-w-[130px]">
-                                  <div className="text-zinc-200 font-medium font-mono text-xs">
-                                    {ev.salesCrew || ev.salesPerson || 'Sales Team'}
+                                  <div className="text-zinc-200 font-medium font-mono text-xs flex items-center gap-1.5">
+                                    <span className="text-blue-400 text-[10px]">👤</span>
+                                    <span>{ev.salesCrew || ev.salesPerson || 'Sales Team'}</span>
                                   </div>
                                 </td>
 
