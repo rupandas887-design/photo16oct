@@ -16,7 +16,7 @@ import { Production, EditingStatus, Staff } from '../types';
 import { performBusinessOwnerReview } from '../utils/businessOwnerReview';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { ProjectDetailModal } from './ProjectDetailModal';
-import { formatINR, triggerAutoScrollAndFocus, convertTo12Hour, formatQtyItem, parseQtyAndText, parseDeliverablesWithQty, uploadProofToStorage, resolveStorageUrl, parseCustomerProof, ParsedCustomerProof, formatDateDDMMYY, checkGlobalStaffUniqueness, formatStaffErrorMessage, verifyStaffDatabaseUniqueness, scrollToFirstError, isPasswordHashOrToken, isValidPlaintextPassword } from '../utils';
+import { formatINR, extractEventsList, triggerAutoScrollAndFocus, convertTo12Hour, formatQtyItem, parseQtyAndText, parseDeliverablesWithQty, uploadProofToStorage, resolveStorageUrl, parseCustomerProof, ParsedCustomerProof, formatDateDDMMYY, checkGlobalStaffUniqueness, formatStaffErrorMessage, verifyStaffDatabaseUniqueness, scrollToFirstError, isPasswordHashOrToken, isValidPlaintextPassword } from '../utils';
 import { AppLogo } from './AppLogo';
 import { AddNoteModal } from './AddNoteModal';
 import { StatusText } from './ui/StatusText';
@@ -1102,12 +1102,22 @@ ${coordinatorName}`;
         (p.tracking_id && (o.order_id === p.tracking_id || o.lead_id === p.tracking_id)) ||
         (matchingRf && (o.order_id === matchingRf.order_id || o.lead_id === matchingRf.lead_id))
       );
-
       const key = matchingOrder?.order_id || matchingRf?.order_id || p.order_id || p.tracking_id || p.production_id || p.lead_id;
       if (!key) return;
       const cand = getOrCreateCandidate(key);
       if (cand) {
-        cand.prod = p;
+        if (!cand.prod) {
+          cand.prod = p;
+        } else if (cand.prod.production_id !== p.production_id) {
+          const pKey = p.production_id || `${key}_${p.event_id || Math.random()}`;
+          const pCand = {
+            key: pKey,
+            order: matchingOrder || cand.order,
+            rawFootage: matchingRf || cand.rawFootage,
+            prod: p
+          };
+          candidatesMap.set(pKey, pCand);
+        }
         if (matchingOrder && !cand.order) cand.order = matchingOrder;
         if (matchingRf && !cand.rawFootage) cand.rawFootage = matchingRf;
       }
@@ -1248,19 +1258,22 @@ ${coordinatorName}`;
 
       const computedStatus = prod?.editing_status || prod?.production_status || order?.current_stage || (l as any)?.current_status || l?.status || 'Pending';
 
-      const eventsList = (l?.events && Array.isArray(l.events) && l.events.length > 0)
-        ? l.events
-        : (order?.events && Array.isArray(order.events) && order.events.length > 0)
-          ? order.events
-          : [];
-
-      const hasMultipleEvents = eventsList.length > 1;
-
-      const primaryEvent = eventsList[0] || null;
+      const eventsList = extractEventsList(l, order);
+      const matchedEvt = prod?.event_id 
+        ? eventsList.find((e: any) => String(e.id || e.event_id || '').trim() === String(prod.event_id).trim()) 
+        : null;
+      const hasMultipleEvents = !matchedEvt && eventsList.length > 1;
+      const primaryEvent = matchedEvt || eventsList[0] || null;
       const evtId = primaryEvent ? (primaryEvent.id || primaryEvent.event_id || 'EVT-01') : (prod?.event_id || order?.event_type || l?.event_type || 'EVT-01');
-      const evtName = hasMultipleEvents ? 'Multiple Events' : (primaryEvent ? (primaryEvent.event_name || primaryEvent.event_type || '') : (prod?.custom_event_name || order?.custom_event_name || l?.custom_event_name || order?.event_type || l?.event_type || 'Event'));
-      const evtDate = hasMultipleEvents ? (eventsList.map((e: any) => e.event_date).filter(Boolean).join(', ') || 'Multiple Dates') : (primaryEvent ? primaryEvent.event_date : (order?.event_date || l?.event_date || ''));
-      const evtTime = hasMultipleEvents ? 'Multiple Times' : (primaryEvent ? (primaryEvent.event_time || primaryEvent.event_start_time || '') : (order?.event_time || l?.event_time || ''));
+      const evtName = matchedEvt 
+        ? (matchedEvt.event_name || matchedEvt.event_type || '') 
+        : (hasMultipleEvents ? 'Multiple Events' : (primaryEvent ? (primaryEvent.event_name || primaryEvent.event_type || '') : (prod?.custom_event_name || order?.custom_event_name || l?.custom_event_name || order?.event_type || l?.event_type || 'Event')));
+      const evtDate = matchedEvt 
+        ? (matchedEvt.event_date || '') 
+        : (hasMultipleEvents ? (eventsList.map((e: any) => e.event_date).filter(Boolean).join(', ') || 'Multiple Dates') : (primaryEvent ? primaryEvent.event_date : (order?.event_date || l?.event_date || '')));
+      const evtTime = matchedEvt 
+        ? (matchedEvt.event_time || matchedEvt.event_start_time || '') 
+        : (hasMultipleEvents ? 'Multiple Times' : (primaryEvent ? (primaryEvent.event_time || primaryEvent.event_start_time || '') : (order?.event_time || l?.event_time || '')));
 
       const defaultTargetDate = '';
 
@@ -1306,6 +1319,8 @@ ${coordinatorName}`;
       const targetOrdId = realOrderId || order?.order_id || l?.order_id || prod?.order_id || rf?.order_id || trackingId;
       const targetLdId = l?.lead_id || order?.lead_id || prod?.lead_id || rf?.lead_id;
 
+      const candidateTimestamps: number[] = [];
+
       // 1. Status transition history to Verified Footage / Production stages
       if (statusHistory && Array.isArray(statusHistory) && statusHistory.length > 0) {
         const prodStages = [
@@ -1319,51 +1334,72 @@ ${coordinatorName}`;
           const mKey = (targetOrdId && (h.order_id === targetOrdId || h.lead_id === targetOrdId)) ||
                        (targetLdId && (h.lead_id === targetLdId || h.order_id === targetLdId));
           if (!mKey) return false;
+          if (evtId && evtId !== 'MULTIPLE' && h.event_id && String(h.event_id) !== String(evtId)) return false;
           const st = String(h.new_status || '').trim().toLowerCase();
           return prodStages.includes(st);
         });
-        if (matchingHistory.length > 0) {
-          const tList = matchingHistory.map((h: any) => h.created_at ? new Date(h.created_at).getTime() : 0).filter(t => t > 0);
-          if (tList.length > 0) transferTimestamp = Math.max(...tList);
+        matchingHistory.forEach((h: any) => {
+          if (h.created_at) {
+            const t = new Date(h.created_at).getTime();
+            if (!isNaN(t) && t > 0) candidateTimestamps.push(t);
+          }
+        });
+      }
+
+      // 2. Production record created_at / updated_at
+      if (prod) {
+        if (prod.created_at) {
+          const t = new Date(prod.created_at).getTime();
+          if (!isNaN(t) && t > 0) candidateTimestamps.push(t);
+        }
+        if (prod.updated_at) {
+          const t = new Date(prod.updated_at).getTime();
+          if (!isNaN(t) && t > 0) candidateTimestamps.push(t);
         }
       }
 
-      // 2. Raw footage timestamp (recorded at footage handover / upload)
-      if (!transferTimestamp && rf) {
-        const rfTime = (rf.uploaded_date ? new Date(rf.uploaded_date).getTime() : 0) || (rf.created_at ? new Date(rf.created_at).getTime() : 0);
-        if (rfTime > 0) transferTimestamp = rfTime;
-      }
-
-      // 3. Production record timestamp
-      if (!transferTimestamp && prod) {
-        const prdTime = (prod.created_at ? new Date(prod.created_at).getTime() : 0) || (prod.updated_at ? new Date(prod.updated_at).getTime() : 0);
-        if (prdTime > 0) transferTimestamp = prdTime;
+      // 3. Raw footage timestamp (recorded at footage handover / upload)
+      if (rf) {
+        if (rf.uploaded_date) {
+          const t = new Date(rf.uploaded_date).getTime();
+          if (!isNaN(t) && t > 0) candidateTimestamps.push(t);
+        }
+        if (rf.created_at) {
+          const t = new Date(rf.created_at).getTime();
+          if (!isNaN(t) && t > 0) candidateTimestamps.push(t);
+        }
       }
 
       // 4. Order updated_at if order is in a production stage
-      if (!transferTimestamp && order?.updated_at) {
-        const ordTime = new Date(order.updated_at).getTime();
-        if (ordTime > 0) transferTimestamp = ordTime;
+      if (order?.updated_at) {
+        const t = new Date(order.updated_at).getTime();
+        if (!isNaN(t) && t > 0) candidateTimestamps.push(t);
       }
 
       // 5. Lead updated_at
-      if (!transferTimestamp && l?.updated_at) {
-        const ldTime = new Date(l.updated_at).getTime();
-        if (ldTime > 0) transferTimestamp = ldTime;
+      if (l?.updated_at) {
+        const t = new Date(l.updated_at).getTime();
+        if (!isNaN(t) && t > 0) candidateTimestamps.push(t);
       }
 
       // 6. Operations updated_at
       const op = (operations || []).find((o: any) => (targetOrdId && o.order_id === targetOrdId));
-      if (!transferTimestamp && op?.updated_at) {
-        const opTime = new Date(op.updated_at).getTime();
-        if (opTime > 0) transferTimestamp = opTime;
+      if (op?.updated_at) {
+        const t = new Date(op.updated_at).getTime();
+        if (!isNaN(t) && t > 0) candidateTimestamps.push(t);
       }
 
       // 7. Fallback to created_at of order or lead
-      if (!transferTimestamp) {
-        transferTimestamp = (order?.created_at ? new Date(order.created_at).getTime() : 0) || 
-                            (l?.created_at ? new Date(l.created_at).getTime() : 0);
+      if (order?.created_at) {
+        const t = new Date(order.created_at).getTime();
+        if (!isNaN(t) && t > 0) candidateTimestamps.push(t);
       }
+      if (l?.created_at) {
+        const t = new Date(l.created_at).getTime();
+        if (!isNaN(t) && t > 0) candidateTimestamps.push(t);
+      }
+
+      transferTimestamp = candidateTimestamps.length > 0 ? Math.max(...candidateTimestamps) : 0;
 
       const candidateObj = {
         ...(prod || {}),

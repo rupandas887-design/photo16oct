@@ -5126,8 +5126,6 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
       const phoneStr = typeof rawPhone === 'string' ? rawPhone : String(rawPhone);
       
       const safeCustomerName = String(leadObj.customer_name || '');
-      const safeEventLocation = String(leadObj.event_location || leadObj.location || 'N/A');
-
       let eventDetailsStr = '';
       if (leadObj.events && leadObj.events.length > 0) {
         eventDetailsStr = leadObj.events.map((ev) => {
@@ -5146,7 +5144,6 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
         `Thank you for choosing *PhotoCrew Pictures*.\n\n` +
         `Please find your quotation details below:\n\n` +
         eventDetailsStr +
-        `📍 Event Address: ${safeEventLocation}\n` +
         `💰 Final Amount: ₹${finalAmt.toLocaleString('en-IN')}\n\n` +
         `Thank you.\nPhotoCrew Pictures`;
 

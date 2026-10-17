@@ -79,8 +79,23 @@ export function getRecordDateTimestamp(item: any): number {
   if (!item) return 0;
 
   // 0. Explicit production entry / transfer timestamp (most recent transfer into Production)
-  if (item.production_entry_timestamp && typeof item.production_entry_timestamp === 'number' && item.production_entry_timestamp > 0) {
-    return item.production_entry_timestamp;
+  if (item.production_entry_timestamp !== undefined && item.production_entry_timestamp !== null) {
+    const ts = typeof item.production_entry_timestamp === 'number'
+      ? item.production_entry_timestamp
+      : new Date(item.production_entry_timestamp).getTime();
+    if (!isNaN(ts) && ts > 0) return ts;
+  }
+
+  // 0b. For production workflow objects, prioritize production creation/update database timestamps over event dates
+  if (item.production_id || item.editing_status || item.editor_assigned) {
+    if (item.created_at) {
+      const t = new Date(item.created_at).getTime();
+      if (!isNaN(t) && t > 0) return t;
+    }
+    if (item.updated_at) {
+      const t = new Date(item.updated_at).getTime();
+      if (!isNaN(t) && t > 0) return t;
+    }
   }
 
   // 1. Direct or nested event_date + event_time

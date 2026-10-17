@@ -715,7 +715,8 @@ export const OperationsLeads: React.FC = () => {
     packages,
     quotations,
     pushUpdate,
-    users
+    users,
+    production
   } = useRole();
 
   useEffect(() => {
@@ -2495,21 +2496,41 @@ export const OperationsLeads: React.FC = () => {
       'Revision Required', 'Revision In Progress', 'Revision', 'Final Approval',
       'Ready for Delivery', 'Project Delivered', 'Delivered', 'Project Completed', 'Completed', 'Order Closed'
     ];
-    
+        
     const stage = (o.current_stage || o.order_status || '').trim();
     if (postOpStages.includes(stage)) return true;
-
     const lead = leads?.find(l => l.lead_id === o.lead_id || l.lead_id === o.order_id);
     if (lead) {
       const leadStatus = (lead.current_status || lead.status || '').trim();
       if (postOpStages.includes(leadStatus)) return true;
     }
-
     const op = operations?.find(op => op.order_id === o.order_id);
     if (op) {
       const opStatus = (op.event_status || '').trim();
       if (postOpStages.includes(opStatus)) return true;
     }
+
+    // Check leadEquipmentHistory for Raw Footage Verification
+    const hasEqVerification = leadEquipmentHistory?.some(h => 
+      (h.order_id === o.order_id || (o.lead_id && h.lead_id === o.lead_id)) &&
+      (h.equipment_name === 'Raw Footage Verification' || h.equipment_status === 'Verified Footage' || h.equipment_status === 'Verified')
+    );
+    if (hasEqVerification) return true;
+
+    // Check production table
+    const hasProdRecord = production?.some(p =>
+      (p.order_id === o.order_id || (o.lead_id && p.lead_id === o.lead_id) || p.tracking_id === o.order_id) &&
+      postOpStages.includes((p.editing_status || p.production_status || p.current_status || '').trim())
+    );
+    if (hasProdRecord) return true;
+
+    // Check rawFootage
+    const hasRawFootage = rawFootage?.some(rf =>
+      (rf.order_id === o.order_id || (o.lead_id && rf.lead_id === o.lead_id)) &&
+      (rf.raw_received === true || rf.status === 'Received')
+    );
+    if (hasRawFootage) return true;
+
     return false;
   };
 
@@ -2561,11 +2582,13 @@ export const OperationsLeads: React.FC = () => {
   };
 
   const filteredOrders = useMemo(() => {
-    const baseSource = operationsOrders;
+    const baseSource = statusFilter === 'Verified Footage'
+      ? orders.filter(o => isVerifiedFootageOrder(o))
+      : operationsOrders;
 
     return baseSource.filter(o => {
-      // Automatically remove orders that reached Verified Footage or moved to Production
-      if (isVerifiedFootageOrder(o)) return false;
+      // Automatically remove orders that reached Verified Footage or moved to Production unless viewing Verified Footage filter
+      if (statusFilter !== 'Verified Footage' && isVerifiedFootageOrder(o)) return false;
 
       // Search term validation (Search by Customer Name, Order ID, Mobile Number)
       if (searchTerm) {

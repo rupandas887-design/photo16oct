@@ -1834,6 +1834,28 @@ export function deserializeLeadEvents(textNotes: string | undefined): { events: 
   return { events: [], notes: textNotes };
 }
 
+export function extractEventsList(orderOrLead: any, fallbackLeadOrOrder?: any): any[] {
+  const sources = [orderOrLead, fallbackLeadOrOrder].filter(Boolean);
+  for (const src of sources) {
+    if (src.events) {
+      if (Array.isArray(src.events) && src.events.length > 0) return src.events;
+      if (typeof src.events === 'string' && src.events.trim()) {
+        try {
+          const parsed = JSON.parse(src.events);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        } catch (_) {}
+      }
+    }
+    if (src.notes_special_customizations) {
+      const deserialized = deserializeLeadEvents(src.notes_special_customizations);
+      if (deserialized.events && deserialized.events.length > 0) {
+        return deserialized.events;
+      }
+    }
+  }
+  return [];
+}
+
 /**
  * Parses team members field from JSON string array or falls back to older text formats
  */
