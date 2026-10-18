@@ -4004,51 +4004,47 @@ export function generateWhatsAppAssignmentMessage(params: {
     filteredGroups = groups;
   }
 
-  const customerName = order?.customer_name || lead?.customer_name || 'Valued Customer';
+  const customerName = order?.customer_name || lead?.customer_name || '';
   const phone = order?.mobile || lead?.mobile || order?.customer_mobile || lead?.customer_mobile || '';
-  const staffDisplayName = targetStaffName && targetStaffName.trim() ? targetStaffName.trim() : 'Staff Member';
 
   let msg = `*PHOTOCREW — EVENT ASSIGNMENT*\n\n`;
-  msg += `Hello *${staffDisplayName}*,\n\n`;
-  msg += `You have been assigned to the following event.\n\n`;
 
   const totalGroups = filteredGroups.length;
 
   filteredGroups.forEach((group, idx) => {
-    msg += `*EVENT DETAILS*\n`;
-    const orderIdVal = order?.order_id || lead?.lead_id || '—';
-    msg += `• Order ID: ${orderIdVal}\n`;
-    msg += `• Customer: ${customerName}\n`;
-    
-    const eventNameVal = group.eventName || 'Event';
-    if (totalGroups > 1) {
-      msg += `• Event (${idx + 1}): ${eventNameVal}\n`;
-    } else {
-      msg += `• Event: ${eventNameVal}\n`;
+    // 1. Customer Details
+    msg += `*Customer Details*\n`;
+    if (customerName) {
+      msg += `• Customer Name: ${customerName}\n`;
     }
+    if (phone) {
+      msg += `• Customer Mobile: ${phone}\n`;
+    }
+    msg += `\n`;
+
+    // 2. Event Details
+    msg += `*Event Details*\n`;
+    const eventNameVal = group.eventName || 'Event';
+    const displayEventName = totalGroups > 1 ? `${eventNameVal} (${idx + 1})` : eventNameVal;
+    msg += `• Event Name: ${displayEventName}\n`;
 
     const repDate = (group.reportingDate && group.reportingDate !== 'N/A') ? group.reportingDate : (group.eventDate && group.eventDate !== 'N/A' ? group.eventDate : '');
     const formattedDate = formatOperationWhatsAppDate(repDate);
     if (formattedDate) {
-      msg += `• Event Date: ${formattedDate}\n`;
+      msg += `• Reporting Date: ${formattedDate}\n`;
     }
-    if (group.reportingTime && group.reportingTime !== 'N/A') {
-      msg += `• Reporting Time: ${group.reportingTime}\n`;
+    if (group.reportingTime && group.reportingTime !== 'N/A' && group.reportingTime.trim() !== '') {
+      msg += `• Reporting Time: ${group.reportingTime.trim()}\n`;
     }
-
     if (group.location && group.location !== 'N/A' && group.location.trim() !== '') {
       msg += `• Event Location: ${group.location.trim()}\n`;
     }
     if (group.googleMapsLink && group.googleMapsLink !== 'N/A' && group.googleMapsLink.trim() !== '') {
       msg += `• Google Maps: ${group.googleMapsLink.trim()}\n`;
     }
+    msg += `\n`;
 
-    msg += `\n*TEAM INFORMATION*\n`;
-    const otherStaffNames = getOtherAssignedStaffForEvent(group, params, groups);
-    const otherStaffStr = otherStaffNames.length > 0 ? otherStaffNames.join(', ') : 'None';
-    msg += `• Assigned Staff: ${otherStaffStr}\n`;
-
-    // Assigned Role / Team Members included
+    // 3. Assignment Details (Assigned Role, Equipment Assigned)
     const rolesSet = new Set<string>();
     if (targetStaffName && targetStaffName.trim()) {
       const targetLower = targetStaffName.trim().toLowerCase();
@@ -4078,9 +4074,8 @@ export function generateWhatsAppAssignmentMessage(params: {
         if (m.teamMemberRole) rolesSet.add(m.teamMemberRole);
       });
     }
-    const assignedRoleStr = rolesSet.size > 0 ? Array.from(rolesSet).join(', ') : 'Operations Staff';
+    const assignedRoleStr = rolesSet.size > 0 ? Array.from(rolesSet).join(', ') : '';
 
-    // Assigned Equipment specific to this staff member for this event
     const eqSet = new Set<string>();
     const addEq = (eqVal: any) => {
       if (!eqVal) return;
@@ -4121,9 +4116,29 @@ export function generateWhatsAppAssignmentMessage(params: {
       });
     }
 
-    const assignedEquipmentStr = eqSet.size > 0 ? `, Equipment: ${Array.from(eqSet).join(', ')}` : '';
-    const yourAssignmentStr = `${assignedRoleStr}${assignedEquipmentStr}`;
-    msg += `• Your Assignment: ${yourAssignmentStr}\n`;
+    const assignedEquipmentStr = eqSet.size > 0 ? Array.from(eqSet).join(', ') : '';
+
+    if (assignedRoleStr || assignedEquipmentStr) {
+      msg += `*Assignment Details*\n`;
+      if (assignedRoleStr) {
+        msg += `• Assigned Role: ${assignedRoleStr}\n`;
+      }
+      if (assignedEquipmentStr) {
+        msg += `• Equipment Assigned: ${assignedEquipmentStr}\n`;
+      }
+      msg += `\n`;
+    }
+
+    // 4. Assigned Staff Members
+    const otherStaffNames = getOtherAssignedStaffForEvent(group, params, groups);
+    msg += `*Assigned Staff Members*\n`;
+    if (otherStaffNames.length > 0) {
+      otherStaffNames.forEach(staffName => {
+        msg += `• ${staffName}\n`;
+      });
+    } else {
+      msg += `• None\n`;
+    }
 
     if (idx < totalGroups - 1) {
       msg += `\n---\n\n`;
