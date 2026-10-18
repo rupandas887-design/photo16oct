@@ -11775,9 +11775,8 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
         </div>
       , document.body)}
 
-      {/* UPLOADED PROOF / IMAGE PREVIEW POPUP */}
-      {previewProofModal && (
-        <div id="production_proof_preview_modal" className="fixed inset-0 z-[250] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fade-in">
+      {previewProofModal && createPortal(
+        <div id="production_proof_preview_modal" className="fixed inset-0 z-[9999999] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fade-in">
           <div id="production_proof_preview_card" className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh] transition-all">
             {/* Header */}
             <div className="p-4 border-b border-zinc-900 bg-[#0c0d10] flex items-center justify-between">
@@ -11856,7 +11855,8 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* EDITOR WHATSAPP SHARING POPUP */}

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useRole } from './RoleContext';
 import { 
   FileText, 
@@ -1937,9 +1938,9 @@ export const OperationsStaffReport: React.FC<OperationsStaffReportProps> = ({ on
       )}
 
       {/* FULL IMAGE ZOOM PREVIEW MODAL */}
-      {previewImage && (
+      {previewImage && createPortal(
         <div 
-          className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4 animate-in fade-in duration-200"
+          className="fixed inset-0 bg-black/90 backdrop-blur-md z-[9999999] flex items-center justify-center p-4 animate-in fade-in duration-200"
           onClick={() => setPreviewImage(null)}
         >
           <div 
@@ -1998,7 +1999,8 @@ export const OperationsStaffReport: React.FC<OperationsStaffReportProps> = ({ on
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

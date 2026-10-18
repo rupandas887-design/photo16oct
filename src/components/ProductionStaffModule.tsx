@@ -3386,8 +3386,8 @@ Thank you.`;
       {/* ========================================================= */}
       {/* 4. CUSTOMER PROOF IMAGE ZOOM MODAL */}
       {/* ========================================================= */}
-      {previewProofModal && (
-        <div id="staff_proof_preview_modal" className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+      {previewProofModal && createPortal(
+        <div id="staff_proof_preview_modal" className="fixed inset-0 bg-black/90 backdrop-blur-md z-[9999999] flex items-center justify-center p-4">
           <div id="staff_proof_preview_card" className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between p-4 border-b border-zinc-800 bg-zinc-950/80">
               <div>
@@ -3443,7 +3443,8 @@ Thank you.`;
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* PROJECT DETAIL MODAL */}
