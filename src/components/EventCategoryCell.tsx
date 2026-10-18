@@ -239,14 +239,14 @@ export const getSortedLeadEvents = (lead?: Lead | any, orders?: any[]): UnifiedL
 
     list.sort((a, b) => {
       if (a.timestamp && b.timestamp && a.timestamp !== b.timestamp) {
-        return b.timestamp - a.timestamp;
+        return a.timestamp - b.timestamp;
       }
       if (a.timestamp && !b.timestamp) return -1;
       if (!a.timestamp && b.timestamp) return 1;
       if (a.createdAt && b.createdAt && a.createdAt !== b.createdAt) {
-        return b.createdAt - a.createdAt;
+        return a.createdAt - b.createdAt;
       }
-      return String(b.id || '').localeCompare(String(a.id || ''));
+      return String(a.id || '').localeCompare(String(b.id || ''));
     });
 
     return list;

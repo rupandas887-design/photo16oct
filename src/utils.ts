@@ -1822,9 +1822,9 @@ export function deserializeLeadEvents(textNotes: string | undefined): { events: 
     try {
       const parsed = JSON.parse(jsonString);
       if (Array.isArray(parsed)) {
-        return { events: parsed, notes };
+        return { events: sortMultiEventsNewestFirst(parsed), notes };
       } else if (parsed && typeof parsed === 'object') {
-        return { events: [parsed], notes };
+        return { events: sortMultiEventsNewestFirst([parsed]), notes };
       }
     } catch (e) {
       console.warn("Failed to parse serialized lead events:", e);
@@ -1838,18 +1838,18 @@ export function extractEventsList(orderOrLead: any, fallbackLeadOrOrder?: any): 
   const sources = [orderOrLead, fallbackLeadOrOrder].filter(Boolean);
   for (const src of sources) {
     if (src.events) {
-      if (Array.isArray(src.events) && src.events.length > 0) return src.events;
+      if (Array.isArray(src.events) && src.events.length > 0) return sortMultiEventsNewestFirst(src.events);
       if (typeof src.events === 'string' && src.events.trim()) {
         try {
           const parsed = JSON.parse(src.events);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          if (Array.isArray(parsed) && parsed.length > 0) return sortMultiEventsNewestFirst(parsed);
         } catch (_) {}
       }
     }
     if (src.notes_special_customizations) {
       const deserialized = deserializeLeadEvents(src.notes_special_customizations);
       if (deserialized.events && deserialized.events.length > 0) {
-        return deserialized.events;
+        return sortMultiEventsNewestFirst(deserialized.events);
       }
     }
   }
@@ -3761,23 +3761,23 @@ export function sortMultiEventsNewestFirst<T = any>(events: T[]): T[] {
     const tsA = getUniversalEventTimestamp(a);
     const tsB = getUniversalEventTimestamp(b);
     if (tsA > 0 && tsB > 0 && tsA !== tsB) {
-      return tsB - tsA; // Most recent first
+      return tsA - tsB; // Earliest first (ascending chronological order)
     }
     if (tsA > 0 && !tsB) return -1;
     if (!tsA && tsB > 0) return 1;
 
-    // Secondary sort: creation timestamp, newest first
+    // Secondary sort: creation timestamp, oldest first
     const timeA = new Date(a?.created_at || a?.createdAt || a?.created_date || 0).getTime();
     const timeB = new Date(b?.created_at || b?.createdAt || b?.created_date || 0).getTime();
     if (timeA && timeB && timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) {
-      return timeB - timeA;
+      return timeA - timeB;
     }
 
     // Tie-breaker: unique event id
     const idA = String(a?.id || a?.event_id || '');
     const idB = String(b?.id || b?.event_id || '');
     if (idA && idB) {
-      return idB.localeCompare(idA);
+      return idA.localeCompare(idB);
     }
     return 0;
   });

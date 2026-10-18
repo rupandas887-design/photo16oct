@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { Calendar } from 'lucide-react';
-import { formatDateDDMMYY, formatTime12Hour } from '../utils';
+import { formatDateDDMMYY, formatTime12Hour, extractEventsList } from '../utils';
 
 interface UnifiedEventDropdownCellProps {
   lead: any;
@@ -32,8 +32,9 @@ export const UnifiedEventDropdownCell: React.FC<UnifiedEventDropdownCellProps> =
     shoot_type?: string;
   }> = [];
 
-  if (lead?.events && Array.isArray(lead.events) && lead.events.length > 0) {
-    eventsList = lead.events.map((ev: any, idx: number) => ({
+  const rawEvents = extractEventsList(lead);
+  if (rawEvents.length > 0) {
+    eventsList = rawEvents.map((ev: any, idx: number) => ({
       event_name: ev.event_name || ev.event_type || ev.Event_Name || `Event ${idx + 1}`,
       event_date: ev.event_date || ev.Event_Date || '—',
       event_start_time: ev.event_start_time || ev.event_time || ev.Event_Start_Time || '',
@@ -164,17 +165,7 @@ export const UnifiedEventDropdownCell: React.FC<UnifiedEventDropdownCellProps> =
     }
   };
 
-  // Sort events by date descending (most recent first)
-  const sortedEventsList = [...eventsList].sort((a, b) => {
-    const timeA = a.event_date && a.event_date !== '—' ? new Date(a.event_date).getTime() : 0;
-    const timeB = b.event_date && b.event_date !== '—' ? new Date(b.event_date).getTime() : 0;
-    const diff = (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
-    if (diff !== 0) return diff;
-    const ca = new Date(a?.created_at || a?.createdAt || 0).getTime();
-    const cb = new Date(b?.created_at || b?.createdAt || 0).getTime();
-    if (ca && cb && ca !== cb) return cb - ca;
-    return String(b.id || '').localeCompare(String(a.id || ''));
-  });
+  const sortedEventsList = eventsList;
 
   const primaryEventName = sortedEventsList[0]?.event_name || 'Event';
   const displayLabel = sortedEventsList.length > 1 ? `${primaryEventName} +${sortedEventsList.length - 1}` : primaryEventName;

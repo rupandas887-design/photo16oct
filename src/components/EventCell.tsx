@@ -159,17 +159,17 @@ export const getSortedEventsForOrder = (lead: Lead, orders?: any[]): DetailedEve
       };
     });
 
-    // Sort by MOST RECENT event date + time FIRST (descending timestamp: latest/furthest first)
+    // Sort by EARLIEST event date + time FIRST (ascending timestamp: earliest first)
     list.sort((a, b) => {
       if (a.timestamp && b.timestamp && a.timestamp !== b.timestamp) {
-        return b.timestamp - a.timestamp;
+        return a.timestamp - b.timestamp;
       }
       if (a.timestamp && !b.timestamp) return -1;
       if (!a.timestamp && b.timestamp) return 1;
       if ((a as any).createdAt && (b as any).createdAt && (a as any).createdAt !== (b as any).createdAt) {
-        return (b as any).createdAt - (a as any).createdAt;
+        return (a as any).createdAt - (b as any).createdAt;
       }
-      return String(b.id || '').localeCompare(String(a.id || ''));
+      return String(a.id || '').localeCompare(String(b.id || ''));
     });
 
     return list;
