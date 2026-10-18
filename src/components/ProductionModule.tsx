@@ -1100,26 +1100,62 @@ ${coordinatorName}`;
       const matchingOrder = (orders || []).find(o => 
         (p.order_id && o.order_id === p.order_id) ||
         (p.tracking_id && (o.order_id === p.tracking_id || o.lead_id === p.tracking_id)) ||
-        (matchingRf && (o.order_id === matchingRf.order_id || o.lead_id === matchingRf.lead_id))
+        (matchingRf && (o.order_id === matchingRf.order_id || o.lead_id === matchingRf.lead_id)) ||
+        (p.production_id && (o.order_id === p.production_id || o.lead_id === p.production_id || `PRD-${o.lead_id}` === p.production_id || `PRD-${o.order_id}` === p.production_id))
       );
-      const key = matchingOrder?.order_id || matchingRf?.order_id || p.order_id || p.tracking_id || p.production_id || p.lead_id;
+      const matchingLead = (leadsData || []).find(l => 
+        (matchingOrder && (l.lead_id === matchingOrder.lead_id || l.order_id === matchingOrder.order_id)) ||
+        (p.lead_id && (l.lead_id === p.lead_id || l.order_id === p.lead_id)) ||
+        (p.tracking_id && (l.lead_id === p.tracking_id || l.order_id === p.tracking_id))
+      );
+
+      const key = matchingOrder?.order_id || matchingLead?.lead_id || p.order_id || matchingRf?.order_id || p.tracking_id || p.production_id;
       if (!key) return;
       const cand = getOrCreateCandidate(key);
       if (cand) {
         if (!cand.prod) {
           cand.prod = p;
-        } else if (cand.prod.production_id !== p.production_id) {
-          const pKey = p.production_id || `${key}_${p.event_id || Math.random()}`;
-          const pCand = {
-            key: pKey,
-            order: matchingOrder || cand.order,
-            rawFootage: matchingRf || cand.rawFootage,
-            prod: p
+        } else {
+          // Merge multiple production records for the same order into cand.prod authoritative state
+          const stageRank = (status?: string) => {
+            const s = (status || '').toLowerCase().trim();
+            if (['order closed', 'closed', 'completed', 'project closed'].includes(s)) return 10;
+            if (['client acceptance', 'client accepted', 'approved', 'final approval'].includes(s)) return 9;
+            if (['editing completed', 'editing complete'].includes(s)) return 8;
+            if (['customer review', 'client review sent', 'revision in progress', 'revision required'].includes(s)) return 7;
+            if (['internal qc review'].includes(s)) return 6;
+            if (['editing in progress', 'editing started', 'editing'].includes(s)) return 5;
+            if (['assigned editor', 'editor assigned', 'assigned'].includes(s)) return 4;
+            if (['verified footage', 'footage handover verified', 'raw footage received'].includes(s)) return 3;
+            return 1;
           };
-          candidatesMap.set(pKey, pCand);
+
+          const rankExisting = stageRank(cand.prod.editing_status || cand.prod.production_status);
+          const rankNew = stageRank(p.editing_status || p.production_status);
+
+          if (rankNew > rankExisting) {
+            cand.prod = {
+              ...p,
+              ...cand.prod,
+              editing_status: p.editing_status,
+              production_status: p.production_status,
+              current_status: p.current_status,
+              editor_assigned: (p.editor_assigned && p.editor_assigned !== 'Unassigned') ? p.editor_assigned : cand.prod.editor_assigned,
+              assigned_staff: p.assigned_staff || cand.prod.assigned_staff
+            };
+          } else {
+            cand.prod = {
+              ...cand.prod,
+              editor_assigned: (cand.prod.editor_assigned && cand.prod.editor_assigned !== 'Unassigned') ? cand.prod.editor_assigned : (p.editor_assigned || 'Unassigned'),
+              assigned_staff: cand.prod.assigned_staff || p.assigned_staff,
+              raw_footage_location: cand.prod.raw_footage_location || p.raw_footage_location,
+              final_consolidated_drive_link: cand.prod.final_consolidated_drive_link || p.final_consolidated_drive_link
+            };
+          }
         }
         if (matchingOrder && !cand.order) cand.order = matchingOrder;
         if (matchingRf && !cand.rawFootage) cand.rawFootage = matchingRf;
+        if (matchingLead && !cand.lead) cand.lead = matchingLead;
       }
     });
 
@@ -1427,7 +1463,26 @@ ${coordinatorName}`;
         updated_at: prod?.updated_at || (transferTimestamp > 0 ? new Date(transferTimestamp).toISOString() : order?.updated_at || l?.updated_at || new Date().toISOString())
       };
 
-      candidatesList.push(candidateObj);
+      const existingOrderIdx = candidatesList.findIndex(c => 
+        (candidateObj.order_id && c.order_id === candidateObj.order_id) ||
+        (candidateObj.tracking_id && c.tracking_id === candidateObj.tracking_id)
+      );
+
+      if (existingOrderIdx >= 0) {
+        // Merge attributes into existing canonical order entry to eliminate duplicate order rows
+        const existing = candidatesList[existingOrderIdx];
+        if (candidateObj.events && candidateObj.events.length > (existing.events?.length || 0)) {
+          existing.events = candidateObj.events;
+        }
+        if (candidateObj.editor_assigned && candidateObj.editor_assigned !== 'Unassigned' && existing.editor_assigned === 'Unassigned') {
+          existing.editor_assigned = candidateObj.editor_assigned;
+        }
+        if (candidateObj.raw_footage_location && !existing.raw_footage_location) {
+          existing.raw_footage_location = candidateObj.raw_footage_location;
+        }
+      } else {
+        candidatesList.push(candidateObj);
+      }
     }
 
     // Sort newest transferred to Production at the top

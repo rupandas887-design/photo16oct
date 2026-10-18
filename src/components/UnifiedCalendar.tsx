@@ -28,6 +28,7 @@ interface UnifiedCalendarProps {
   role: 'sales' | 'operations' | 'production' | 'production_staff' | 'owner' | 'worker';
   staffMemberId?: string;
   staffMemberName?: string;
+  selectedSalesperson?: string;
   onSelectLead?: (lead: any) => void;
   onOpenAssignEditor?: (targetOrderId: string, targetLeadId?: string) => void;
   onOpenAssignStaff?: (targetOrderId: string, targetLeadId?: string, targetEventId?: string) => void;
@@ -561,6 +562,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
   role, 
   staffMemberId, 
   staffMemberName, 
+  selectedSalesperson,
   onSelectLead, 
   onOpenAssignEditor,
   onOpenAssignStaff
@@ -569,7 +571,9 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
     currentUser, 
     currentUserName,
     leads = [], 
+    allLeads,
     orders = [], 
+    allOrders,
     operations = [], 
     production = [], 
     staffAssignments = [], 
@@ -578,6 +582,10 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
     quotations = [],
     leadPackages = []
   } = useRole();
+
+  // For shared calendars (sales and owner), retrieve events across all staff using allOrders / allLeads
+  const effectiveOrders = (role === 'sales' || role === 'owner') && allOrders && allOrders.length > 0 ? allOrders : orders;
+  const effectiveLeads = (role === 'sales' || role === 'owner') && allLeads && allLeads.length > 0 ? allLeads : leads;
 
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
   const [searchTerm, setSearchTerm] = useState('');
@@ -949,14 +957,14 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
       const processedOrderIds = new Set<string>();
 
       // A. Process all confirmed orders from orders array
-      (orders || []).forEach(ord => {
+      (effectiveOrders || []).forEach(ord => {
         const isOrderCancelled = ord.order_status === 'Cancelled' || ord.current_stage === 'Event Cancelled' || (ord as any).status === 'Cancelled';
         if (isOrderCancelled) return;
 
         const ordId = ord.order_id && typeof ord.order_id === 'string' ? ord.order_id.trim() : '';
         if (!ordId || ordId.startsWith('DRAFT')) return;
 
-        const matchedLead = (leads || []).find(l => 
+        const matchedLead = (effectiveLeads || []).find(l => 
           (ord.lead_id && l.lead_id === ord.lead_id) || 
           (l.order_id && l.order_id === ordId) ||
           ((l as any).orders && (l as any).orders === ordId)
@@ -1000,7 +1008,9 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
             if (!normDate) return;
 
             const evTimeStr = ev.event_start_time || ev.event_time || ev.Event_Start_Time || ev.time || ord.event_time || matchedLead?.event_time || '';
-            const evLoc = cleanLocationString(ev.event_location || ev.venue_address || ev.venue || ev.location || ev.address || ord.event_location || ord.address || matchedLead?.event_location || matchedLead?.city || matchedLead?.address || '');
+            const evSpecificLoc = ev.event_location ?? ev.venue_address ?? ev.venue ?? ev.location ?? ev.address ?? ev.eventLocation ?? ev.event_venue ?? ev.venue_name ?? ev.places ?? ev.locations;
+            const fallbackLoc = rawEvents.length === 1 ? (ord.event_location || ord.address || matchedLead?.event_location || matchedLead?.city || matchedLead?.address || '') : '';
+            const evLoc = cleanLocationString(evSpecificLoc || fallbackLoc || '');
 
             const evName = (ev.event_name || ev.custom_event_name || ev.eventName || ev.Event_Name || ev.event_type || ord.custom_event_name || ord.event_name || ord.event_type || matchedLead?.custom_event_name || matchedLead?.event_name || matchedLead?.event_type || `Event ${evIdx + 1}`).trim();
             const evType = (ev.event_type || ev.event_category || ev.eventType || ord.event_type || matchedLead?.event_type || 'Event').trim();
@@ -1043,6 +1053,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
             id: `ORD-${ordId}`,
             orderId: ordId, // Strictly Order ID only, never Lead ID
             leadId: ord.lead_id || matchedLead?.lead_id,
+            eventId: ord.event_id || matchedLead?.event_id || `ord-${ordId}-event`,
             customerName: ord.customer_name || matchedLead?.customer_name || 'Client',
             customerMobile: ord.customer_phone || ord.mobile || matchedLead?.mobile || matchedLead?.whatsapp_number || '',
             eventName: evName,
@@ -1063,7 +1074,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
       });
 
       // B. Process any confirmed leads not yet processed through orders array
-      (leads || []).forEach(lead => {
+      (effectiveLeads || []).forEach(lead => {
         if (processedLeadIds.has(lead.lead_id)) return;
         if (lead.order_id && processedOrderIds.has(lead.order_id)) return;
 
@@ -1084,7 +1095,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
         if (!isLeadConfirmed) return;
 
         // Match linked order if exists
-        const matchedOrder: any = (orders || []).find(o => 
+        const matchedOrder: any = (effectiveOrders || []).find(o => 
           (o.lead_id && o.lead_id === lead.lead_id) || 
           (lead.order_id && o.order_id === lead.order_id) ||
           ((lead as any).orders && (o.order_id === (lead as any).orders || o.lead_id === (lead as any).orders))
@@ -1133,7 +1144,9 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
             if (!normDate) return;
 
             const evTimeStr = ev.event_start_time || ev.event_time || ev.Event_Start_Time || ev.time || lead.event_time || matchedOrder?.event_time || '';
-            const evLoc = cleanLocationString(ev.event_location || ev.venue_address || ev.venue || ev.location || ev.address || lead.event_location || lead.city || lead.address || matchedOrder?.event_location || matchedOrder?.address || '');
+            const evSpecificLoc = ev.event_location ?? ev.venue_address ?? ev.venue ?? ev.location ?? ev.address ?? ev.eventLocation ?? ev.event_venue ?? ev.venue_name ?? ev.places ?? ev.locations;
+            const fallbackLoc = rawEvents.length === 1 ? (lead.event_location || lead.city || lead.address || matchedOrder?.event_location || matchedOrder?.address || '') : '';
+            const evLoc = cleanLocationString(evSpecificLoc || fallbackLoc || '');
 
             const evName = (ev.event_name || ev.custom_event_name || ev.eventName || ev.Event_Name || ev.event_type || lead.custom_event_name || lead.event_name || lead.event_type || `Event ${evIdx + 1}`).trim();
             const evType = (ev.event_type || ev.event_category || ev.eventType || lead.event_type || matchedOrder?.event_type || 'Event').trim();
@@ -1173,6 +1186,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
             id: `CONF-LEAD-${lead.lead_id}`,
             orderId: resolvedOrderId, // Strictly Order ID only, never Lead ID
             leadId: lead.lead_id,
+            eventId: lead.event_id || matchedOrder?.event_id || `lead-${lead.lead_id}-event`,
             customerName: lead.customer_name || matchedOrder?.customer_name || 'Client',
             customerMobile: lead.mobile || lead.whatsapp_number || matchedOrder?.customer_phone || matchedOrder?.mobile || '',
             eventName: (lead.custom_event_name || lead.event_name || lead.event_type || 'Shoot').trim(),
@@ -1196,12 +1210,12 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
     // 4. BUSINESS OWNER CALENDAR (Consolidated Studio Milestones)
     else if (role === 'owner') {
       // Collect across sales, operations, and production
-      (orders || []).forEach(ord => {
+      (effectiveOrders || []).forEach(ord => {
         const normDate = normalizeDateStr(ord.event_date);
         if (!normDate) return;
         const matchedOp = (operations || []).find(op => op.order_id === ord.order_id);
         const matchedProd = (production || []).find(p => p.order_id === ord.order_id);
-        const matchedLead = (leads || []).find(l => l.lead_id === ord.lead_id);
+        const matchedLead = (effectiveLeads || []).find(l => l.lead_id === ord.lead_id);
 
         items.push({
           id: `OWNER-${ord.order_id}`,
@@ -1224,18 +1238,25 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
     }
 
     return items;
-  }, [role, staffMemberId, staffMemberName, currentUserName, currentUser, orders, leads, operations, production, editorAssignments, staffAssignments, rawFootage, quotations]);
+  }, [role, staffMemberId, staffMemberName, currentUserName, currentUser, effectiveOrders, effectiveLeads, orders, leads, allOrders, allLeads, operations, production, editorAssignments, staffAssignments, rawFootage, quotations]);
 
-  // Filter items by search term and status
+  // Filter items by search term, status, and salesperson
   const filteredEvents = useMemo(() => {
     const list = allEvents.filter(ev => {
+      if (role === 'sales' && selectedSalesperson && selectedSalesperson !== 'All Sales Staff' && selectedSalesperson !== 'All') {
+        const evSales = (ev.salesCrew || ev.salesPerson || '').trim().toLowerCase();
+        const targetSales = selectedSalesperson.trim().toLowerCase();
+        if (evSales !== targetSales) return false;
+      }
+
       if (searchTerm) {
         const q = searchTerm.toLowerCase();
         const matchId = ev.orderId.toLowerCase().includes(q) || (ev.leadId && ev.leadId.toLowerCase().includes(q));
         const matchName = ev.customerName.toLowerCase().includes(q);
         const matchEvent = ev.eventName.toLowerCase().includes(q) || ev.eventType.toLowerCase().includes(q);
         const matchStaff = (ev.editorAssigned && ev.editorAssigned.toLowerCase().includes(q)) ||
-                           (ev.assignedStaff && ev.assignedStaff.toLowerCase().includes(q));
+                           (ev.assignedStaff && ev.assignedStaff.toLowerCase().includes(q)) ||
+                           (ev.salesCrew && ev.salesCrew.toLowerCase().includes(q));
         if (!matchId && !matchName && !matchEvent && !matchStaff) return false;
       }
 
@@ -1259,7 +1280,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
     }
 
     return list;
-  }, [allEvents, searchTerm, selectedStatusFilter, role]);
+  }, [allEvents, searchTerm, selectedStatusFilter, role, selectedSalesperson]);
 
   // Calendar Grid Calculation
   const year = currentMonth.getFullYear();
@@ -1667,18 +1688,10 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
                                 {/* 4. Event Location */}
                                 <td className="p-3 whitespace-nowrap text-zinc-300 min-w-[150px]">
                                   <EventLocationCell
-                                    lead={ev.sourceRecord?.lead ? {
-                                      ...ev.sourceRecord.lead,
-                                      order_id: ev.orderId,
-                                      events: ev.sourceRecord.lead.events || ev.sourceRecord?.order?.events || (ev.sourceRecord?.event ? [ev.sourceRecord.event] : [])
-                                    } : {
-                                      lead_id: ev.leadId || ev.orderId,
-                                      order_id: ev.orderId,
-                                      events: ev.sourceRecord?.order?.events || (ev.sourceRecord?.event ? [ev.sourceRecord.event] : []),
-                                      notes_special_customizations: ev.sourceRecord?.order?.notes_special_customizations,
-                                      event_location: ev.location,
-                                      address: ev.location
-                                    }}
+                                    eventId={ev.eventId}
+                                    event={ev.sourceRecord?.event}
+                                    lead={ev.sourceRecord?.lead}
+                                    order={ev.sourceRecord?.order}
                                     orders={orders}
                                     currentLocation={ev.location}
                                   />

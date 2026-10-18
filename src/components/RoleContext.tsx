@@ -1651,7 +1651,10 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
         p.tracking_id === o.order_id || 
         p.tracking_id === o.lead_id ||
         (p as any).order_id === o.order_id ||
-        (p as any).lead_id === o.lead_id
+        (p as any).lead_id === o.lead_id ||
+        p.production_id === `PRD-${o.lead_id}` ||
+        p.production_id === `PRD-${o.order_id}` ||
+        (p.production_id && (p.production_id.includes(o.order_id) || (o.lead_id && p.production_id.includes(o.lead_id))))
       );
       if (!prodExists) {
         const parentLeadForO = leads.find(l => l.lead_id === o.lead_id);
@@ -1800,7 +1803,43 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (p.production_id) projectStatusMap.set(p.production_id, bestNorm);
     });
 
-    return rawList.map(p => {
+    // Consolidate duplicate records in rawList for the same project/order
+    const deduplicatedRawList: Production[] = [];
+    const seenOrderRecords = new Map<string, Production>();
+
+    for (const p of rawList) {
+      const orderId = (p as any).order_id || (p.tracking_id?.startsWith('OR') ? p.tracking_id : undefined);
+      const leadId = (p as any).lead_id || (p.tracking_id?.startsWith('LD') ? p.tracking_id : undefined);
+      const key = orderId || leadId || p.tracking_id || p.production_id;
+
+      const existing = seenOrderRecords.get(key);
+      if (!existing) {
+        seenOrderRecords.set(key, p);
+        deduplicatedRawList.push(p);
+      } else {
+        // Merge attributes into existing canonical production record
+        if (p.editor_assigned && p.editor_assigned !== 'Unassigned' && (!existing.editor_assigned || existing.editor_assigned === 'Unassigned')) {
+          existing.editor_assigned = p.editor_assigned;
+        }
+        if (p.assigned_staff) {
+          const staffA = (existing.assigned_staff || '').split(', ').map(s => s.trim()).filter(Boolean);
+          const staffB = (p.assigned_staff || '').split(', ').map(s => s.trim()).filter(Boolean);
+          existing.assigned_staff = Array.from(new Set([...staffA, ...staffB])).join(', ');
+        }
+        if (p.raw_footage_location && !existing.raw_footage_location) existing.raw_footage_location = p.raw_footage_location;
+        if ((p as any).final_consolidated_drive_link && !(existing as any).final_consolidated_drive_link) {
+          (existing as any).final_consolidated_drive_link = (p as any).final_consolidated_drive_link;
+        }
+        if ((p as any).delivery_method && !(existing as any).delivery_method) (existing as any).delivery_method = (p as any).delivery_method;
+        if ((p as any).server_link && !(existing as any).server_link) (existing as any).server_link = (p as any).server_link;
+        if ((p as any).physical_drive_details && !(existing as any).physical_drive_details) (existing as any).physical_drive_details = (p as any).physical_drive_details;
+        if (existing.event_id && p.event_id && existing.event_id !== p.event_id) {
+          existing.event_id = 'MULTIPLE';
+        }
+      }
+    }
+
+    return deduplicatedRawList.map(p => {
       const orderId = (p as any).order_id || (p.tracking_id?.startsWith('OR') ? p.tracking_id : undefined);
       const leadId = (p as any).lead_id || (p.tracking_id?.startsWith('LD') ? p.tracking_id : undefined);
       const trackingId = p.tracking_id;
@@ -3440,7 +3479,43 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
               physical_drive_details: item.physical_drive_details || valUploads.physical_drive_details || undefined
             };
           });
-          setProduction(enrichedProduction);
+          // Deduplicate and consolidate multiple production items for the same order/lead
+          const cleanProdList: any[] = [];
+          for (const item of enrichedProduction) {
+            const orderId = item.order_id || (item.tracking_id?.startsWith('OR') ? item.tracking_id : undefined);
+            const leadId = item.lead_id || (item.tracking_id?.startsWith('LD') ? item.tracking_id : undefined);
+            const primaryKey = orderId || leadId || item.tracking_id || item.production_id;
+            if (!primaryKey) {
+              cleanProdList.push(item);
+              continue;
+            }
+            const existingIdx = cleanProdList.findIndex(p => {
+              const pOrd = p.order_id || (p.tracking_id?.startsWith('OR') ? p.tracking_id : undefined);
+              const pLd = p.lead_id || (p.tracking_id?.startsWith('LD') ? p.tracking_id : undefined);
+              const pKey = pOrd || pLd || p.tracking_id || p.production_id;
+              return (orderId && (pOrd === orderId || p.tracking_id === orderId)) ||
+                     (leadId && (pLd === leadId || p.tracking_id === leadId)) ||
+                     (pKey === primaryKey);
+            });
+            if (existingIdx === -1) {
+              cleanProdList.push(item);
+            } else {
+              // Merge attributes into existing canonical production record
+              const existing = cleanProdList[existingIdx];
+              if (item.editor_assigned && item.editor_assigned !== 'Unassigned' && (!existing.editor_assigned || existing.editor_assigned === 'Unassigned')) {
+                existing.editor_assigned = item.editor_assigned;
+              }
+              if (item.assigned_staff && !existing.assigned_staff) existing.assigned_staff = item.assigned_staff;
+              if (item.raw_footage_location && !existing.raw_footage_location) existing.raw_footage_location = item.raw_footage_location;
+              if (item.delivery_method && !existing.delivery_method) existing.delivery_method = item.delivery_method;
+              if (item.server_link && !existing.server_link) existing.server_link = item.server_link;
+              if (item.physical_drive_details && !existing.physical_drive_details) existing.physical_drive_details = item.physical_drive_details;
+              if (existing.event_id && item.event_id && existing.event_id !== item.event_id) {
+                existing.event_id = 'MULTIPLE';
+              }
+            }
+          }
+          setProduction(cleanProdList);
         }
         if (dbPayments) setPayments(dbPayments);
         if (dbPaymentHistory) {
@@ -6200,8 +6275,9 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
 
   // 5. Mark Event Completed (Action button in Operations)
   const markEventCompleted = async (orderId: string, serverPath: string) => {
-    const trackingId = `TRK-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 10000)}`;
-    const pId = `PRD-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 10000)}`;
+    const targetOrder = augmentedOrders.find((o) => o.order_id === orderId || o.lead_id === orderId);
+    const existingRf = (rawFootage || []).find(f => f.order_id === orderId || (targetOrder?.lead_id && f.lead_id === targetOrder.lead_id));
+    const trackingId = existingRf?.tracking_id || `TRK-${orderId}`;
 
     const newRawFootage: RawFootage = {
       tracking_id: trackingId,
@@ -6214,23 +6290,31 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       status: 'Pending',
     };
 
-    const targetOrder = augmentedOrders.find((o) => o.order_id === orderId);
+    const existingProd = (augmentedProduction || []).find(p => 
+      p.order_id === orderId || 
+      p.tracking_id === orderId || 
+      p.tracking_id === trackingId ||
+      (targetOrder?.lead_id && (p.lead_id === targetOrder.lead_id || p.tracking_id === targetOrder.lead_id || p.production_id === `PRD-${targetOrder.lead_id}`)) ||
+      p.production_id === `PRD-${orderId}`
+    );
+    const pId = existingProd?.production_id || `PRD-${targetOrder?.lead_id || orderId}`;
 
     const newProd: any = {
+      ...(existingProd || {}),
       production_id: pId,
       tracking_id: trackingId,
-      editor_assigned: 'Unassigned',
+      editor_assigned: existingProd?.editor_assigned || 'Unassigned',
       raw_footage_location: newRawFootage.server_path,
-      editing_status: 'Raw Footage Received',
-      remarks: 'Raw footage uploaded. Awaiting editor assignment.',
+      editing_status: existingProd?.editing_status || 'Raw Footage Received',
+      remarks: existingProd?.remarks || 'Raw footage uploaded. Awaiting editor assignment.',
       order_id: orderId,
       lead_id: targetOrder?.lead_id || '',
-      customer_name: targetOrder?.customer_name || '',
-      event_id: targetOrder?.event_type || '',
-      assigned_team: targetOrder?.assigned_team || 'Unassigned',
+      customer_name: targetOrder?.customer_name || existingProd?.customer_name || '',
+      event_id: existingProd?.event_id || targetOrder?.event_type || '',
+      assigned_team: targetOrder?.assigned_team || existingProd?.assigned_team || 'Unassigned',
       final_consolidated_drive_link: newRawFootage.server_path,
-      current_status: 'Raw Footage Received',
-      created_at: new Date().toISOString()
+      current_status: existingProd?.current_status || 'Raw Footage Received',
+      created_at: existingProd?.created_at || new Date().toISOString()
     };
 
     const previousStage = targetOrder ? targetOrder.current_stage : 'Event Scheduled';
@@ -6258,10 +6342,30 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       if (!r3?.success) throw new Error("Failed to update lead status");
     }
 
-    const rRf = await pushInsert('raw_footage', newRawFootage);
-    if (!rRf?.success) throw new Error("Failed to insert raw footage: " + rRf?.error);
-    const rProd = await pushInsert('production', newProd);
-    if (!rProd?.success) throw new Error("Failed to insert production data: " + rProd?.error);
+    const rRf = await pushUpsert('raw_footage', newRawFootage);
+    if (!rRf?.success) throw new Error("Failed to insert/update raw footage: " + rRf?.error);
+    const rProd = await pushUpsert('production', newProd);
+    if (!rProd?.success) throw new Error("Failed to insert/update production data: " + rProd?.error);
+
+    setRawFootage(prev => {
+      const idx = prev.findIndex(f => f.order_id === orderId || f.tracking_id === trackingId);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], ...newRawFootage };
+        return copy;
+      }
+      return [newRawFootage, ...prev];
+    });
+
+    setProduction(prev => {
+      const filtered = prev.filter(p => 
+        p.production_id !== pId && 
+        p.order_id !== orderId && 
+        p.tracking_id !== trackingId &&
+        !(targetOrder?.lead_id && (p.lead_id === targetOrder.lead_id || p.tracking_id === targetOrder.lead_id))
+      );
+      return [newProd, ...filtered];
+    });
 
     //  // Disabled to prevent full reload
 
@@ -6487,25 +6591,40 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           setProduction(prev => prev.map(p => p.production_id === sp.production_id ? { ...p, ...updates } : p));
         }
       } else {
-        const newPId = productionId.startsWith('PRD-') ? `PRD-${Math.floor(100000 + Math.random() * 899999)}` : productionId;
+        const targetOrder = augmentedOrders.find(o => o.order_id === inferredTrackingId || o.lead_id === inferredTrackingId);
+        const existingByOrder = augmentedProduction.find(p => 
+          p.order_id === inferredTrackingId || 
+          p.tracking_id === inferredTrackingId ||
+          (targetOrder && (p.lead_id === targetOrder.lead_id || p.order_id === targetOrder.order_id))
+        );
+        const resolvedPId = existingByOrder?.production_id || (productionId.startsWith('PRD-') ? productionId : `PRD-${productionId}`);
         const newProd: Production = {
-          production_id: newPId,
+          ...(existingByOrder || {}),
+          production_id: resolvedPId,
           tracking_id: inferredTrackingId,
-          editor_assigned: updates.editor_assigned || 'Unassigned',
-          editing_status: (updates.editing_status || previousStage || 'Raw Footage Received') as any,
-          remarks: updates.remarks || '',
-          project_priority: updates.project_priority || 'Medium',
-          raw_footage_location: updates.raw_footage_location || '',
-          target_delivery_date: updates.target_delivery_date || '',
-          expected_delivery_date: updates.expected_delivery_date || '',
+          editor_assigned: updates.editor_assigned || existingByOrder?.editor_assigned || 'Unassigned',
+          editing_status: (updates.editing_status || existingByOrder?.editing_status || previousStage || 'Raw Footage Received') as any,
+          remarks: updates.remarks || existingByOrder?.remarks || '',
+          project_priority: updates.project_priority || existingByOrder?.project_priority || 'Medium',
+          raw_footage_location: updates.raw_footage_location || existingByOrder?.raw_footage_location || '',
+          target_delivery_date: updates.target_delivery_date || existingByOrder?.target_delivery_date || '',
+          expected_delivery_date: updates.expected_delivery_date || existingByOrder?.expected_delivery_date || '',
           ...updates
         };
-        const rProd = await pushInsert('production', newProd);
+        const rProd = await pushUpsert('production', newProd);
         if (!rProd?.success) {
-          console.warn("[updateProduction] DB operation failed for production table insert:", rProd?.error);
-          throw new Error(rProd?.error || "DB operation failed for production table insert");
+          console.warn("[updateProduction] DB operation failed for production table upsert:", rProd?.error);
+          throw new Error(rProd?.error || "DB operation failed for production table upsert");
         } else {
-          setProduction(prev => [newProd, ...prev]);
+          setProduction(prev => {
+            const filtered = prev.filter(p => 
+              p.production_id !== resolvedPId && 
+              p.tracking_id !== inferredTrackingId && 
+              !(p.order_id && p.order_id === inferredTrackingId) &&
+              !(targetOrder?.order_id && p.order_id === targetOrder.order_id)
+            );
+            return [newProd, ...filtered];
+          });
         }
       }
 
@@ -7003,8 +7122,14 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     setLeadEquipmentHistory(prev => [newEquipmentHist, ...prev]);
 
     // 10. Ensure production entry exists or update it
-    let existingProd = augmentedProduction.find(p => p.tracking_id === actualTrackingId || p.tracking_id === effOrderId || p.order_id === effOrderId);
-    let pId = existingProd?.production_id || `PRD-${Math.floor(4012 + Math.random() * 850)}`;
+    let existingProd = augmentedProduction.find(p => 
+      p.tracking_id === actualTrackingId || 
+      p.tracking_id === effOrderId || 
+      p.order_id === effOrderId ||
+      (effLeadId && (p.lead_id === effLeadId || p.tracking_id === effLeadId || p.production_id === `PRD-${effLeadId}`)) ||
+      p.production_id === `PRD-${effOrderId}`
+    );
+    let pId = existingProd?.production_id || `PRD-${effLeadId || effOrderId}`;
 
     const prodEditingStatus = (existingProd?.editing_status && !['Footage Handover', 'Raw Footage Received', 'Pending'].includes(existingProd.editing_status))
       ? existingProd.editing_status
@@ -7021,12 +7146,12 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       order_id: effOrderId,
       lead_id: effLeadId || targetOrder?.lead_id || '',
       customer_name: targetOrder?.customer_name || matchedLead?.customer_name || 'Client',
-      event_id: targetOrder?.event_type || 'Main Event',
+      event_id: existingProd?.event_id || targetOrder?.event_type || 'Main Event',
       assigned_team: targetOrder?.assigned_team || 'Unassigned',
       final_consolidated_drive_link: resolvedLink,
       proof_url: resolvedLink,
       current_status: prodEditingStatus,
-      created_at: timestamp
+      created_at: existingProd?.created_at || timestamp
     };
 
     try {
@@ -7035,13 +7160,15 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         console.warn("[confirmRawFootageReceived] Production upsert warning:", rProd?.error);
       } else {
         setProduction(prev => {
-          const idx = prev.findIndex(p => p.production_id === newProd.production_id || p.tracking_id === actualTrackingId);
-          if (idx >= 0) {
-            const copy = [...prev];
-            copy[idx] = { ...copy[idx], ...newProd };
-            return copy;
-          }
-          return [newProd, ...prev];
+          const filtered = prev.filter(p => 
+            p.production_id !== newProd.production_id && 
+            p.production_id !== pId &&
+            p.tracking_id !== actualTrackingId &&
+            p.order_id !== effOrderId &&
+            p.tracking_id !== effOrderId &&
+            !(effLeadId && (p.lead_id === effLeadId || p.tracking_id === effLeadId))
+          );
+          return [newProd, ...filtered];
         });
       }
     } catch (prodErr) {
@@ -7116,16 +7243,6 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         return copy;
       }
       return [{ ...finalRf, tracking_id: actualTrackingId }, ...prev];
-    });
-
-    setProduction(prev => {
-      const idx = prev.findIndex(p => p.tracking_id === actualTrackingId || p.production_id === pId);
-      if (idx >= 0) {
-        const copy = [...prev];
-        copy[idx] = { ...copy[idx], ...newProd };
-        return copy;
-      }
-      return [newProd, ...prev];
     });
 
     addNotification({

@@ -109,7 +109,9 @@ interface RoleContextType {
   logout: () => void;
   users: User[];
   leads: Lead[];
+  allLeads?: Lead[];
   orders: Order[];
+  allOrders?: Order[];
   operations: Operation[];
   rawFootage: RawFootage[];
   production: Production[];
@@ -10939,7 +10941,9 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         logout,
         users,
         leads: visibleLeads,
+        allLeads: leads,
         orders: visibleOrders,
+        allOrders: augmentedOrders,
         operations: augmentedOperations,
         rawFootage,
         production: augmentedProduction,
