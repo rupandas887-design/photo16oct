@@ -4048,32 +4048,85 @@ export function generateWhatsAppAssignmentMessage(params: {
     const rolesSet = new Set<string>();
     if (targetStaffName && targetStaffName.trim()) {
       const targetLower = targetStaffName.trim().toLowerCase();
-      group.mappings.forEach(m => {
-        if (m.assignedStaffName && m.assignedStaffName.trim().toLowerCase() === targetLower) {
-          if (m.assignedStaffRole) rolesSet.add(m.assignedStaffRole);
-          else if (m.teamMemberRole) rolesSet.add(m.teamMemberRole);
-        }
-      });
-      if (rolesSet.size === 0 && params.staffAssignments) {
+      const currentEventId = String(group.eventId || '').trim();
+      const rawEvId = (group.rawEvent?.id ? String(group.rawEvent.id) : (group.rawEvent?.event_id ? String(group.rawEvent.event_id) : '')).trim();
+
+      // 1. Check database staffAssignments for exact event match
+      if (params.staffAssignments) {
         params.staffAssignments.forEach((sa: any) => {
           if (sa.staff_name && sa.staff_name.trim().toLowerCase() === targetLower) {
-            const isEvMatch = sa.event_id 
-              ? (sa.event_id === group.eventId || sa.event_id.includes(group.eventId) || (group.rawEvent?.id && sa.event_id === String(group.rawEvent.id))) 
-              : true;
-            if (isEvMatch && sa.staff_role) rolesSet.add(sa.staff_role);
+            if (sa.assignment_status === 'Cancelled') return;
+            const saEvId = sa.event_id ? String(sa.event_id).trim() : '';
+            const isEvMatch = saEvId 
+              ? (saEvId === currentEventId || saEvId.includes(currentEventId) || (rawEvId && saEvId === rawEvId)) 
+              : (filteredGroups.length === 1);
+            if (isEvMatch) {
+              const r = sa.staff_role || sa.role;
+              if (r && typeof r === 'string' && r.trim() && !['unassigned', 'none', 'n/a', 'null', 'undefined'].includes(r.trim().toLowerCase())) {
+                rolesSet.add(r.trim());
+              }
+            }
           }
         });
       }
-      if (rolesSet.size === 0 && params.staffList) {
-        const stObj = params.staffList.find(s => s.name?.toLowerCase() === targetLower);
-        if (stObj?.role) rolesSet.add(stObj.role);
+
+      // 2. Check modalEventAllocations for this event
+      if (rolesSet.size === 0 && params.modalEventAllocations) {
+        const alloc = params.modalEventAllocations[currentEventId] || 
+          (rawEvId && params.modalEventAllocations[rawEvId]) ||
+          Object.entries(params.modalEventAllocations).find(([k]) => String(k).trim() === currentEventId || (rawEvId && String(k).trim() === rawEvId))?.[1];
+        if (alloc && Array.isArray((alloc as any).staff)) {
+          (alloc as any).staff.forEach((s: any) => {
+            if ((s.staff_name || s.name || '').trim().toLowerCase() === targetLower) {
+              const r = s.staff_role || s.role;
+              if (r && typeof r === 'string' && r.trim() && !['unassigned', 'none', 'n/a', 'null', 'undefined'].includes(r.trim().toLowerCase())) {
+                rolesSet.add(r.trim());
+              }
+            }
+          });
+        }
+      }
+
+      // 3. Check finalAssignments for this event
+      if (rolesSet.size === 0 && params.finalAssignments) {
+        params.finalAssignments.forEach((a: any) => {
+          if ((a.staff_name || a.name || '').trim().toLowerCase() === targetLower) {
+            const aEvId = a.event_id ? String(a.event_id).trim() : '';
+            const isEvMatch = aEvId 
+              ? (aEvId === currentEventId || aEvId.includes(currentEventId) || (rawEvId && aEvId === rawEvId)) 
+              : (filteredGroups.length === 1);
+            if (isEvMatch) {
+              const r = a.staff_role || a.role;
+              if (r && typeof r === 'string' && r.trim() && !['unassigned', 'none', 'n/a', 'null', 'undefined'].includes(r.trim().toLowerCase())) {
+                rolesSet.add(r.trim());
+              }
+            }
+          }
+        });
+      }
+
+      // 4. Check group.mappings
+      if (rolesSet.size === 0) {
+        group.mappings.forEach(m => {
+          if (m.assignedStaffName && m.assignedStaffName.trim().toLowerCase() === targetLower) {
+            if (m.assignedStaffRole && !['unassigned', 'none', 'n/a', 'null', 'undefined'].includes(m.assignedStaffRole.trim().toLowerCase())) {
+              rolesSet.add(m.assignedStaffRole.trim());
+            } else if (m.teamMemberRole && !['unassigned', 'none', 'n/a', 'null', 'undefined'].includes(m.teamMemberRole.trim().toLowerCase())) {
+              rolesSet.add(m.teamMemberRole.trim());
+            }
+          }
+        });
       }
     }
+
     if (rolesSet.size === 0) {
       group.mappings.forEach(m => {
-        if (m.teamMemberRole) rolesSet.add(m.teamMemberRole);
+        if (m.teamMemberRole && !['unassigned', 'none', 'n/a', 'null', 'undefined'].includes(m.teamMemberRole.trim().toLowerCase())) {
+          rolesSet.add(m.teamMemberRole.trim());
+        }
       });
     }
+
     const assignedRoleStr = rolesSet.size > 0 ? Array.from(rolesSet).join(', ') : '';
 
     const eqSet = new Set<string>();
