@@ -8,17 +8,20 @@ interface SalesCalendarProps {
 }
 
 export const SalesCalendar: React.FC<SalesCalendarProps> = ({ onSelectLead }) => {
-  const { currentUser, currentUserName, leads = [], orders = [], quotations = [] } = useRole();
+  const { currentUser, currentUserName, leads = [], allLeads = [], orders = [], allOrders = [], quotations = [] } = useRole();
   const [selectedSalesperson, setSelectedSalesperson] = useState<string>('All Sales Staff');
+
+  const effectiveOrders = (allOrders && allOrders.length > 0) ? allOrders : orders;
+  const effectiveLeads = (allLeads && allLeads.length > 0) ? allLeads : leads;
 
   // Extract all distinct salesperson names across leads, orders, and quotations
   const salesStaffList = useMemo(() => {
     const names = new Set<string>();
-    (leads || []).forEach(l => {
+    (effectiveLeads || []).forEach(l => {
       if (l.sales_staff_name && String(l.sales_staff_name).trim()) names.add(String(l.sales_staff_name).trim());
       if (l.sales_person && String(l.sales_person).trim()) names.add(String(l.sales_person).trim());
     });
-    (orders || []).forEach(o => {
+    (effectiveOrders || []).forEach(o => {
       if (o.sales_staff_name && String(o.sales_staff_name).trim()) names.add(String(o.sales_staff_name).trim());
       if (o.sales_person && String(o.sales_person).trim()) names.add(String(o.sales_person).trim());
     });
@@ -28,7 +31,7 @@ export const SalesCalendar: React.FC<SalesCalendarProps> = ({ onSelectLead }) =>
     });
     if (currentUser?.name) names.add(currentUser.name);
     return Array.from(names).filter(n => n && !['unassigned', 'none', 'n/a', 'null', 'undefined', '—', '-'].includes(n.toLowerCase())).sort();
-  }, [leads, orders, quotations, currentUser]);
+  }, [effectiveLeads, effectiveOrders, quotations, currentUser]);
 
   return (
     <div className="space-y-4">

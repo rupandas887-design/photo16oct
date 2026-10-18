@@ -4008,37 +4008,45 @@ export function generateWhatsAppAssignmentMessage(params: {
   const phone = order?.mobile || lead?.mobile || order?.customer_mobile || lead?.customer_mobile || '';
   const staffDisplayName = targetStaffName && targetStaffName.trim() ? targetStaffName.trim() : 'Staff Member';
 
-  let msg = `Hello, ${staffDisplayName}!\n\n`;
-  msg += `You have been assigned an event with the following details:\n\n`;
-  msg += `Customer: ${customerName}\n`;
-  if (phone) {
-    msg += `Customer Mobile: ${phone}\n`;
-  }
+  let msg = `*PHOTOCREW — EVENT ASSIGNMENT*\n\n`;
+  msg += `Hello *${staffDisplayName}*,\n\n`;
+  msg += `You have been assigned to the following event.\n\n`;
 
   const totalGroups = filteredGroups.length;
 
   filteredGroups.forEach((group, idx) => {
+    msg += `*EVENT DETAILS*\n`;
+    const orderIdVal = order?.order_id || lead?.lead_id || '—';
+    msg += `• Order ID: ${orderIdVal}\n`;
+    msg += `• Customer: ${customerName}\n`;
+    
+    const eventNameVal = group.eventName || 'Event';
     if (totalGroups > 1) {
-      msg += `Event (${idx + 1}): ${group.eventName}\n`;
+      msg += `• Event (${idx + 1}): ${eventNameVal}\n`;
     } else {
-      msg += `Event: ${group.eventName}\n`;
+      msg += `• Event: ${eventNameVal}\n`;
     }
 
     const repDate = (group.reportingDate && group.reportingDate !== 'N/A') ? group.reportingDate : (group.eventDate && group.eventDate !== 'N/A' ? group.eventDate : '');
     const formattedDate = formatOperationWhatsAppDate(repDate);
     if (formattedDate) {
-      msg += `Reporting Date: ${formattedDate}\n`;
+      msg += `• Event Date: ${formattedDate}\n`;
     }
     if (group.reportingTime && group.reportingTime !== 'N/A') {
-      msg += `Reporting Time: ${group.reportingTime}\n`;
+      msg += `• Reporting Time: ${group.reportingTime}\n`;
     }
 
     if (group.location && group.location !== 'N/A' && group.location.trim() !== '') {
-      msg += `Event Location: ${group.location.trim()}\n`;
+      msg += `• Event Location: ${group.location.trim()}\n`;
     }
     if (group.googleMapsLink && group.googleMapsLink !== 'N/A' && group.googleMapsLink.trim() !== '') {
-      msg += `Google Maps: ${group.googleMapsLink.trim()}\n`;
+      msg += `• Google Maps: ${group.googleMapsLink.trim()}\n`;
     }
+
+    msg += `\n*TEAM INFORMATION*\n`;
+    const otherStaffNames = getOtherAssignedStaffForEvent(group, params, groups);
+    const otherStaffStr = otherStaffNames.length > 0 ? otherStaffNames.join(', ') : 'None';
+    msg += `• Assigned Staff: ${otherStaffStr}\n`;
 
     // Assigned Role / Team Members included
     const rolesSet = new Set<string>();
@@ -4071,7 +4079,6 @@ export function generateWhatsAppAssignmentMessage(params: {
       });
     }
     const assignedRoleStr = rolesSet.size > 0 ? Array.from(rolesSet).join(', ') : 'Operations Staff';
-    msg += `Assigned Role: ${assignedRoleStr}\n`;
 
     // Assigned Equipment specific to this staff member for this event
     const eqSet = new Set<string>();
@@ -4114,20 +4121,18 @@ export function generateWhatsAppAssignmentMessage(params: {
       });
     }
 
-    const assignedEquipmentStr = eqSet.size > 0 ? Array.from(eqSet).join(', ') : 'No equipment assigned';
-    msg += `Assigned Equipment: ${assignedEquipmentStr}\n`;
-
-    // Other Staff Assigned to This Event
-    const otherStaffNames = getOtherAssignedStaffForEvent(group, params, groups);
-    const otherStaffStr = otherStaffNames.length > 0 ? otherStaffNames.join(', ') : 'None';
-    msg += `Other Staff Assigned to This Event: ${otherStaffStr}\n`;
+    const assignedEquipmentStr = eqSet.size > 0 ? `, Equipment: ${Array.from(eqSet).join(', ')}` : '';
+    const yourAssignmentStr = `${assignedRoleStr}${assignedEquipmentStr}`;
+    msg += `• Your Assignment: ${yourAssignmentStr}\n`;
 
     if (idx < totalGroups - 1) {
       msg += `\n---\n\n`;
     }
   });
 
-  msg += `\nPlease review the event details and coordinate accordingly.`;
+  msg += `\nPlease review the event details and coordinate with the team as required.\n\n`;
+  msg += `Thank you,\n`;
+  msg += `*PhotoCrew Operations Team*`;
 
   return msg.trim();
 }
