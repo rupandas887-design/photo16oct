@@ -1446,13 +1446,11 @@ export const StaffModule: React.FC = () => {
       return base64Url;
     }
 
-    // Determine correct MIME type from base64 data URI
     const isPng = base64Url.startsWith('data:image/png');
     const isWebp = base64Url.startsWith('data:image/webp');
     const isGif = base64Url.startsWith('data:image/gif');
     const resolvedMime = isPng ? 'image/png' : isWebp ? 'image/webp' : isGif ? 'image/gif' : 'image/jpeg';
 
-    // Ensure extension matches MIME type
     let finalFileName = fileName;
     if (isPng && !finalFileName.toLowerCase().endsWith('.png')) {
       finalFileName = finalFileName.replace(/\.[a-z0-9]+$/i, '') + '.png';
@@ -1460,88 +1458,74 @@ export const StaffModule: React.FC = () => {
       finalFileName = finalFileName.replace(/\.[a-z0-9]+$/i, '') + '.webp';
     }
     
+    // 1. Try direct client-side Supabase upload first for speed
     try {
-      // 1. Try server API first (useful for bypassing CORS/RLS if configured)
-      try {
-        const uploadRes = await fetch('/api/upload-proof', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base64: base64Url, fileName: finalFileName, contentType: resolvedMime, bucketName: 'img' })
-        });
+      if (supabaseClient) {
+        const base64Data = base64Url.includes(';base64,') 
+          ? base64Url.split(';base64,')[1] 
+          : base64Url.replace(/^data:[^;]+;base64,/, '');
+        const byteCharacters = atob(base64Data);
+        const byteArrays = [];
         
-        if (uploadRes.ok) {
-          const text = await uploadRes.text();
-          try {
-            const uploadData = JSON.parse(text);
-            if (uploadData && uploadData.success && uploadData.publicUrl) {
-              return uploadData.publicUrl;
-            }
-          } catch (e) {
-            console.warn("[UploadProof] Server returned non-JSON response, falling back to client-side upload.");
+        for (let offset = 0; offset < byteCharacters.length; offset += 8192) {
+          const slice = byteCharacters.slice(offset, offset + 8192);
+          const byteNumbers = new Array(slice.length);
+          for (let i = 0; i < slice.length; i++) {
+            byteNumbers[i] = slice.charCodeAt(i);
           }
-        } else {
-          console.warn(`[UploadProof] Server returned ${uploadRes.status}, falling back to client-side upload.`);
+          byteArrays.push(new Uint8Array(byteNumbers));
         }
-      } catch (proxyErr) {
-        console.warn("[UploadProof] Proxy failed, falling back to client-side Supabase upload", proxyErr);
-      }
-      
-      // 2. Fallback to client-side direct upload
-      console.log("[UploadProof] Using client-side Supabase upload as fallback...");
-      
-      // Convert base64 to Blob
-      const base64Data = base64Url.includes(';base64,') 
-        ? base64Url.split(';base64,')[1] 
-        : base64Url.replace(/^data:[^;]+;base64,/, '');
-      const byteCharacters = atob(base64Data);
-      const byteArrays = [];
-      
-      for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-        const slice = byteCharacters.slice(offset, offset + 512);
-        const byteNumbers = new Array(slice.length);
-        for (let i = 0; i < slice.length; i++) {
-          byteNumbers[i] = slice.charCodeAt(i);
+        
+        const blob = new Blob(byteArrays, { type: resolvedMime });
+
+        const { data, error } = await supabaseClient.storage
+          .from('img')
+          .upload(finalFileName, blob, {
+            contentType: resolvedMime,
+            upsert: true
+          });
+
+        if (!error && data) {
+          const { data: publicData } = supabaseClient.storage
+            .from('img')
+            .getPublicUrl(data.path || finalFileName);
+          if (publicData?.publicUrl) {
+            return publicData.publicUrl;
+          }
         }
-        const byteArray = new Uint8Array(byteNumbers);
-        byteArrays.push(byteArray);
       }
-      
-      const blob = new Blob(byteArrays, { type: resolvedMime });
-
-      // Upload directly to Supabase storage bucket 'img'
-      if (!supabaseClient) throw new Error("Supabase client is not initialized.");
-      
-      const { data, error } = await supabaseClient.storage
-        .from('img')
-        .upload(finalFileName, blob, {
-          contentType: resolvedMime,
-          upsert: true
-        });
-
-      if (error) {
-        throw new Error("Supabase Storage Error: " + (error.message || JSON.stringify(error)));
-      }
-
-      // Get public URL
-      const { data: publicData } = supabaseClient.storage
-        .from('img')
-        .getPublicUrl(data?.path || finalFileName);
-
-      if (!publicData || !publicData.publicUrl) {
-        throw new Error("Failed to generate public URL for uploaded proof.");
-      }
-
-      return publicData.publicUrl;
-
-    } catch (err: any) {
-      console.error("[UploadProof] Upload exception:", err);
-      // Fallback: If network storage upload fails, return base64 data URI so user submission does not fail
-      if (base64Url) {
-        console.warn("[UploadProof] Network storage upload failed, falling back to data URI proof URL.");
-        return base64Url;
-      }
-      throw new Error(err.message || String(err));
+    } catch (clientUploadErr) {
+      console.warn("[UploadProof] Direct client-side upload failed, falling back to server API...", clientUploadErr);
     }
+
+    // 2. Fallback to server API with 8s timeout controller
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const uploadRes = await fetch('/api/upload-proof', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64: base64Url, fileName: finalFileName, contentType: resolvedMime, bucketName: 'img' }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      
+      if (uploadRes.ok) {
+        const text = await uploadRes.text();
+        try {
+          const uploadData = JSON.parse(text);
+          if (uploadData && uploadData.success && uploadData.publicUrl) {
+            return uploadData.publicUrl;
+          }
+        } catch (e) {}
+      }
+    } catch (proxyErr) {
+      console.warn("[UploadProof] Server API upload failed or timed out", proxyErr);
+    }
+
+    // Fallback: Return base64 data URI if storage uploads fail so user submission succeeds
+    return base64Url;
   };
 
   // Close Photo Verification Modal and cleanly reset state & body scroll

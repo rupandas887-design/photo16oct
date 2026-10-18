@@ -2513,7 +2513,7 @@ export const OperationsLeads: React.FC = () => {
     // Check leadEquipmentHistory for Raw Footage Verification
     const hasEqVerification = leadEquipmentHistory?.some(h => 
       (h.order_id === o.order_id || (o.lead_id && h.lead_id === o.lead_id)) &&
-      (h.equipment_name === 'Raw Footage Verification' || h.equipment_status === 'Verified Footage' || h.equipment_status === 'Verified')
+      (h.equipment_name === 'Raw Footage Verification' && (h.equipment_status === 'Verified Footage' || h.equipment_status === 'Verified' || h.status === 'Verified'))
     );
     if (hasEqVerification) return true;
 
@@ -2523,13 +2523,6 @@ export const OperationsLeads: React.FC = () => {
       postOpStages.includes((p.editing_status || p.production_status || p.current_status || '').trim())
     );
     if (hasProdRecord) return true;
-
-    // Check rawFootage
-    const hasRawFootage = rawFootage?.some(rf =>
-      (rf.order_id === o.order_id || (o.lead_id && rf.lead_id === o.lead_id)) &&
-      (rf.raw_received === true || rf.status === 'Received')
-    );
-    if (hasRawFootage) return true;
 
     return false;
   };
