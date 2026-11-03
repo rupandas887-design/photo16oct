@@ -1837,7 +1837,7 @@ export const UnifiedCalendar: React.FC<UnifiedCalendarProps> = ({
 
                                 {/* 4. Reporting Time */}
                                 <td className="p-3 whitespace-nowrap text-zinc-300 min-w-[130px]">
-                                  <span className="font-mono">{ev.reportingTime || '08:00 AM'}</span>
+                                  <span className="font-mono">{formatTime12Hour(ev.reportingTime) || ev.reportingTime || '08:00 AM'}</span>
                                 </td>
 
                                 {/* 5. Assigned Role */}

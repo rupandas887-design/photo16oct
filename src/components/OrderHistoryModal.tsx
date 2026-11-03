@@ -162,11 +162,21 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
   }, [payments, primaryOrderId, primaryLeadId]);
 
   const matchedStatusHistory = useMemo(() => {
-    return (statusHistory || []).filter(sh => 
-      (primaryOrderId && sh.order_id === primaryOrderId) || 
-      (primaryLeadId && sh.lead_id === primaryLeadId)
-    );
-  }, [statusHistory, primaryOrderId, primaryLeadId]);
+    const ids = new Set<string>();
+    if (primaryOrderId) ids.add(String(primaryOrderId).trim().toLowerCase());
+    if (targetOrderId) ids.add(String(targetOrderId).trim().toLowerCase());
+    if (primaryLeadId) ids.add(String(primaryLeadId).trim().toLowerCase());
+    if (targetLeadId) ids.add(String(targetLeadId).trim().toLowerCase());
+    if (matchedOrder?.order_id) ids.add(String(matchedOrder.order_id).trim().toLowerCase());
+    if (matchedOrder?.lead_id) ids.add(String(matchedOrder.lead_id).trim().toLowerCase());
+    if (matchedLead?.lead_id) ids.add(String(matchedLead.lead_id).trim().toLowerCase());
+
+    return (statusHistory || []).filter(sh => {
+      const shOrder = sh.order_id ? String(sh.order_id).trim().toLowerCase() : '';
+      const shLead = sh.lead_id ? String(sh.lead_id).trim().toLowerCase() : '';
+      return (shOrder && ids.has(shOrder)) || (shLead && ids.has(shLead));
+    });
+  }, [statusHistory, primaryOrderId, targetOrderId, primaryLeadId, targetLeadId, matchedOrder, matchedLead]);
 
   const matchedLogs = useMemo(() => {
     return (logs || []).filter(log => 
@@ -946,6 +956,67 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     });
   }, [timelineItems, searchTerm]);
 
+  // Dedicated Status Change History Records for the History Log table
+  const statusHistoryRecords = useMemo(() => {
+    const list: any[] = [];
+
+    // Baseline creation / initial status if available
+    const initialDate = matchedLead?.created_at || matchedLead?.created_date || matchedOrder?.created_at;
+    const initialStatus = matchedLead?.status || matchedLead?.current_stage || matchedOrder?.order_status || 'Lead Initiated';
+    const initialStaff = matchedLead?.sales_person || matchedLead?.sales_staff_name || matchedOrder?.sales_person || 'Sales Representative';
+
+    if (initialDate) {
+      list.push({
+        id: `initial_${primaryLeadId || primaryOrderId}`,
+        created_at: initialDate,
+        new_status: initialStatus,
+        changed_by: initialStaff,
+        timestamp: initialDate
+      });
+    }
+
+    // Add all status change records from matchedStatusHistory
+    matchedStatusHistory.forEach((sh, idx) => {
+      list.push({
+        id: sh.id || `sh_${idx}`,
+        created_at: sh.created_at || sh.timestamp,
+        new_status: sh.new_status || sh.old_status || sh.status || 'Updated',
+        changed_by: sh.changed_by || sh.staff_name || 'System',
+        timestamp: sh.created_at || sh.timestamp
+      });
+    });
+
+    // Deduplicate by ID
+    const unique = new Map<string, any>();
+    list.forEach(item => {
+      if (!unique.has(String(item.id))) {
+        unique.set(String(item.id), item);
+      }
+    });
+
+    const result = Array.from(unique.values());
+
+    result.sort((a, b) => {
+      const timeA = new Date(a.created_at || a.timestamp || 0).getTime() || 0;
+      const timeB = new Date(b.created_at || b.timestamp || 0).getTime() || 0;
+      return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
+    });
+
+    return result;
+  }, [matchedStatusHistory, matchedLead, matchedOrder, primaryLeadId, primaryOrderId, sortOrder]);
+
+  const filteredStatusHistory = useMemo(() => {
+    return statusHistoryRecords.filter(item => {
+      if (!searchTerm.trim()) return true;
+      const q = searchTerm.toLowerCase();
+      const dt = parseDateTime(item.created_at || item.timestamp);
+      const dateStr = `${dt.date} ${dt.time}`.toLowerCase();
+      const statusStr = String(item.new_status || '').toLowerCase();
+      const staffStr = String(item.changed_by || '').toLowerCase();
+      return dateStr.includes(q) || statusStr.includes(q) || staffStr.includes(q);
+    });
+  }, [statusHistoryRecords, searchTerm]);
+
   // 6. Roadmap Macro Milestones Steps Calculation
   const roadmapSteps = useMemo(() => {
     let stages = [
@@ -1163,7 +1234,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
               }`}
             >
               <History className="w-3.5 h-3.5" />
-              <span>Full Roadmap</span>
+              <span>History Log</span>
             </button>
 
             <div className="relative">
@@ -1247,7 +1318,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
               <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-2.5" />
               <input
                 type="text"
-                placeholder="Search history, staff, task..."
+                placeholder="Search history, staff..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-amber-500 font-mono placeholder-zinc-600"
@@ -1268,119 +1339,48 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         {/* SCROLLABLE MAIN CONTENT AREA */}
         <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-5 custom-scrollbar">
 
-          {/* TAB 1: FULL CHRONOLOGICAL ROADMAP */}
+          {/* TAB 1: HISTORY LOG TABLE */}
           {activeTab === 'roadmap' && (
             <div className="space-y-4">
-              {filteredTimeline.length === 0 ? (
+              {filteredStatusHistory.length === 0 ? (
                 <div className="py-16 text-center bg-zinc-900/30 border border-zinc-800 border-dashed rounded-2xl space-y-2">
                   <History className="w-10 h-10 text-zinc-700 mx-auto" />
-                  <p className="text-zinc-400 font-medium text-sm">No historical log entries match your search query.</p>
+                  <p className="text-zinc-400 font-medium text-sm">No status change history found.</p>
                 </div>
               ) : (
-                <div className="relative border-l-2 border-zinc-800 pl-4 sm:pl-6 ml-2 sm:ml-4 space-y-5">
-                  {filteredTimeline.map((item) => (
-                    <div key={item.id} className="relative group">
-                      
-                      {/* Timeline Dot */}
-                      <div className="absolute -left-[23px] sm:-left-[31px] top-1.5 w-4 h-4 rounded-full bg-zinc-950 border-2 border-amber-400 shadow-md"></div>
-
-                      <div className="bg-zinc-900/70 hover:bg-zinc-900 border border-zinc-800 rounded-2xl p-4 transition-all space-y-3">
-                        
-                        {/* Top Bar: Date, Staff, Category Badge & Status */}
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-850 pb-2.5">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-300 text-xs font-mono font-bold">
-                              <Calendar className="w-3.5 h-3.5 text-amber-400" />
-                              <span>{item.formattedDate}</span>
-                              {item.formattedTime && item.formattedTime !== 'N/A' && (
-                                <span className="text-zinc-500">• {item.formattedTime}</span>
+                <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950 shadow-sm">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-zinc-900/90 border-b border-zinc-800 text-zinc-400 uppercase tracking-wider text-[11px]">
+                      <tr>
+                        <th className="py-3 px-4 font-bold">Date</th>
+                        <th className="py-3 px-4 font-bold">Stage / Status</th>
+                        <th className="py-3 px-4 font-bold">Staff Name</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-850">
+                      {filteredStatusHistory.map((item, idx) => {
+                        const dt = parseDateTime(item.created_at || item.timestamp);
+                        return (
+                          <tr key={item.id || idx} className="hover:bg-zinc-900/50 transition-colors">
+                            <td className="py-3 px-4 whitespace-nowrap text-zinc-300">
+                              <span className="font-bold">{dt.date}</span>
+                              {dt.time && dt.time !== 'N/A' && (
+                                <span className="text-zinc-500 ml-2">{dt.time}</span>
                               )}
-                            </span>
-
-                            <span className="text-xs font-mono text-zinc-400">
-                              Dept: <strong className="text-zinc-200">{item.category}</strong>
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs text-zinc-400 font-mono">
-                              By: <strong className="text-zinc-200">{item.staffName}</strong> {item.staffRole && <span className="text-zinc-500 text-[10px]">({item.staffRole})</span>}
-                            </span>
-
-                            <span className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold border ${item.statusColor}`}>
-                              {item.status}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Title & Description */}
-                        <div className="space-y-1">
-                          <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                            <span className="text-amber-400">⚡</span>
-                            <span>{item.activity}</span>
-                          </h4>
-                          <p className="text-xs text-zinc-300 leading-relaxed font-sans">
-                            {item.description}
-                          </p>
-                        </div>
-
-                        {/* Attached Proofs in Timeline */}
-                        {item.proofs && item.proofs.length > 0 && (
-                          <div className="pt-2 border-t border-zinc-850 space-y-2">
-                            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
-                              <ImageIcon className="w-3.5 h-3.5" />
-                              <span>Attached Proofs & Documents ({item.proofs.length})</span>
-                            </span>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                              {item.proofs.map((p) => (
-                                <div key={p.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-2 flex items-center justify-between gap-2">
-                                  <div className="min-w-0 flex-1">
-                                    <span className="text-xs font-bold text-zinc-200 block truncate" title={p.label}>
-                                      {p.label}
-                                    </span>
-                                    <span className="text-[10px] text-zinc-500 font-mono block">
-                                      {p.type === 'image' ? 'Image Attachment' : 'Link / File'}
-                                    </span>
-                                  </div>
-
-                                  {p.type === 'image' ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => setPreviewImage({
-                                        url: p.url,
-                                        title: p.label,
-                                        taskName: p.taskName,
-                                        staffName: p.staffName,
-                                        department: p.department,
-                                        uploadDate: p.uploadDate
-                                      })}
-                                      className="px-2 py-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-mono font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                                    >
-                                      <Eye className="w-3 h-3" />
-                                      <span>View</span>
-                                    </button>
-                                  ) : (
-                                    <a
-                                      href={p.url && p.url.startsWith('http') ? p.url : p.url ? `https://${p.url}` : '#'}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      referrerPolicy="no-referrer"
-                                      className="px-2 py-1 rounded bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-mono font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                                    >
-                                      <ExternalLink className="w-3 h-3" />
-                                      <span>Open</span>
-                                    </a>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                      </div>
-                    </div>
-                  ))}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-zinc-900 border border-zinc-700 text-amber-400">
+                                {item.new_status || item.status || '—'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap text-zinc-200 font-bold">
+                              {item.changed_by || 'System'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>

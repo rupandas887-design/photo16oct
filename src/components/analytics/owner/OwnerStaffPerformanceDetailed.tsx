@@ -1935,7 +1935,7 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
                         <th className="p-3 text-[10px] font-black uppercase tracking-widest text-zinc-400 font-mono">Assigned Date</th>
                         <th className="p-3 text-[10px] font-black uppercase tracking-widest text-zinc-400 font-mono">Target Date</th>
                         <th className="p-3 text-[10px] font-black uppercase tracking-widest text-zinc-400 font-mono">Completed Date</th>
-                        <th className="p-3 text-[10px] font-black uppercase tracking-widest text-zinc-400 font-mono">Current Status</th>
+                        <th className="p-3 text-[10px] font-black uppercase tracking-widest text-zinc-400 font-mono">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-850">

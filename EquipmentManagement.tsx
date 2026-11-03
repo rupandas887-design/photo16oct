@@ -8,7 +8,7 @@ import {
 import { Equipment } from '../../types';
 import { supabaseClient } from '../../supabaseClient';
 
-import { formatTime12Hour, formatDateDDMMYY, getStoredEquipmentCategories, saveEquipmentCategoryToStorage, scrollToFirstError } from "../../utils";
+import { formatTime12Hour, formatDateDDMMYY, getStoredEquipmentCategories, saveEquipmentCategoryToStorage, updateStoredEquipmentCategory, getEquipmentCategoryRenames, scrollToFirstError } from "../../utils";
 
 const toCalendarDateString = (dateVal?: string | null | Date): string | null => {
   if (!dateVal && (dateVal as any) !== 0) return null;
@@ -97,26 +97,27 @@ const getTodayDateString = (): string => {
 // Helper to accurately extract or infer category from equipment
 const getEquipmentCategory = (eq: any): string => {
   if (!eq) return 'Other';
+  const renames = getEquipmentCategoryRenames();
   const raw = eq.equipment_type || eq.category || eq.Equipment_Category || eq.equipment_category;
   if (typeof raw === 'string' && raw.trim()) {
     const trimmed = raw.trim();
-    if (trimmed.toLowerCase() === 'audio equipment') return 'Audio';
-    if (trimmed.toLowerCase() === 'memory cards' || trimmed.toLowerCase() === 'memory card') return 'Memory Card';
-    if (trimmed.toLowerCase() === 'batteries' || trimmed.toLowerCase() === 'battery') return 'Battery';
-    if (trimmed.toLowerCase() === 'light' || trimmed.toLowerCase() === 'lights') return 'Lighting';
+    if (renames[trimmed.toLowerCase()]) return renames[trimmed.toLowerCase()];
+    if (trimmed.toLowerCase() === 'memory cards' || trimmed.toLowerCase() === 'memory card') return renames['memory cards'] || renames['memory card'] || 'Memory Cards';
+    if (trimmed.toLowerCase() === 'batteries' || trimmed.toLowerCase() === 'battery') return renames['batteries'] || renames['battery'] || 'Batteries';
+    if (trimmed.toLowerCase() === 'light' || trimmed.toLowerCase() === 'lights') return renames['light'] || renames['lights'] || renames['lighting'] || 'Lighting';
     return trimmed;
   }
   const name = (eq.equipment_name || eq.name || '').toLowerCase();
-  if (name.includes('camera') || name.includes('fx3') || name.includes('a7') || name.includes('eos') || name.includes('cinema body') || name.includes('red') || name.includes('lumix')) return 'Camera';
-  if (name.includes('lens') || name.includes('mm') || name.includes('f/') || name.includes('prime') || name.includes('zoom')) return 'Lens';
-  if (name.includes('light') || name.includes('godox') || name.includes('aputure') || name.includes('softbox') || name.includes('flash')) return 'Lighting';
-  if (name.includes('audio') || name.includes('mic') || name.includes('rode') || name.includes('dji mic') || name.includes('receiver') || name.includes('transmitter')) return 'Audio';
-  if (name.includes('tripod') || name.includes('monopod') || name.includes('stand')) return 'Tripod';
-  if (name.includes('gimbal') || name.includes('ronin') || name.includes('stabilizer') || name.includes('rs3') || name.includes('rs2')) return 'Gimbal';
-  if (name.includes('card') || name.includes('sd ') || name.includes('cfexpress') || name.includes('memory')) return 'Memory Card';
-  if (name.includes('battery') || name.includes('batteries') || name.includes('v-mount') || name.includes('power')) return 'Battery';
-  if (name.includes('drone') || name.includes('mavic') || name.includes('mini 4') || name.includes('inspire')) return 'Drone';
-  return 'Other';
+  if (name.includes('camera') || name.includes('fx3') || name.includes('a7') || name.includes('eos') || name.includes('cinema body') || name.includes('red') || name.includes('lumix')) return renames['camera'] || 'Camera';
+  if (name.includes('lens') || name.includes('mm') || name.includes('f/') || name.includes('prime') || name.includes('zoom')) return renames['lens'] || 'Lens';
+  if (name.includes('light') || name.includes('godox') || name.includes('aputure') || name.includes('softbox') || name.includes('flash')) return renames['lighting'] || renames['light'] || 'Lighting';
+  if (name.includes('audio') || name.includes('mic') || name.includes('rode') || name.includes('dji mic') || name.includes('receiver') || name.includes('transmitter')) return renames['other'] || 'Other';
+  if (name.includes('tripod') || name.includes('monopod') || name.includes('stand')) return renames['tripod'] || 'Tripod';
+  if (name.includes('gimbal') || name.includes('ronin') || name.includes('stabilizer') || name.includes('rs3') || name.includes('rs2')) return renames['gimbal'] || 'Gimbal';
+  if (name.includes('card') || name.includes('sd ') || name.includes('cfexpress') || name.includes('memory')) return renames['memory card'] || renames['memory cards'] || 'Memory Card';
+  if (name.includes('battery') || name.includes('batteries') || name.includes('v-mount') || name.includes('power')) return renames['battery'] || renames['batteries'] || 'Battery';
+  if (name.includes('drone') || name.includes('mavic') || name.includes('mini 4') || name.includes('inspire')) return renames['drone'] || 'Drone';
+  return renames['other'] || 'Other';
 };
 
 // Helper to parse equipment notes containing structured metadata
@@ -231,10 +232,57 @@ export const EquipmentManagement: React.FC = () => {
 
   // Category management states
   const [customCategories, setCustomCategories] = useState<string[]>(() => getStoredEquipmentCategories());
+  const [categoryRenames, setCategoryRenames] = useState<Record<string, string>>(() => getEquipmentCategoryRenames());
+  const [dbCategories, setDbCategories] = useState<{ id: string; category_name: string; status?: string }[]>([]);
+  const [dbCategoryMap, setDbCategoryMap] = useState<Record<string, string>>({}); // lowercase category_name -> id and id -> category_name
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryError, setNewCategoryError] = useState('');
   const [isSavingCategory, setIsSavingCategory] = useState(false);
+
+  // Edit category modal states with permanent unique UUID tracking
+  const [showEditCategoryModal, setShowEditCategoryModal] = useState(false);
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState('');
+  const [editCategoryNameInput, setEditCategoryNameInput] = useState('');
+  const [editCategoryError, setEditCategoryError] = useState('');
+  const [isUpdatingCategory, setIsUpdatingCategory] = useState(false);
+
+  // Load existing category records and IDs from Supabase equipment_categories table
+  const fetchDbCategories = async () => {
+    try {
+      const res = await fetch('/api/db/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: 'equipment_categories' })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json?.success && Array.isArray(json.data)) {
+          setDbCategories(json.data);
+          const map: Record<string, string> = {};
+          const dbNames: string[] = [];
+          json.data.forEach((r: any) => {
+            if (r.category_name && r.id) {
+              map[r.category_name.toLowerCase()] = r.id;
+              map[r.id] = r.category_name;
+              dbNames.push(r.category_name);
+            }
+          });
+          setDbCategoryMap(map);
+          if (dbNames.length > 0) {
+            setCustomCategories(dbNames);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load equipment_categories from DB:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchDbCategories();
+  }, []);
 
   useEffect(() => {
     const handleCategoryUpdate = (e: any) => {
@@ -243,6 +291,7 @@ export const EquipmentManagement: React.FC = () => {
       } else {
         setCustomCategories(getStoredEquipmentCategories());
       }
+      setCategoryRenames(getEquipmentCategoryRenames());
     };
     window.addEventListener('equipment-categories-updated', handleCategoryUpdate);
     return () => {
@@ -268,7 +317,7 @@ export const EquipmentManagement: React.FC = () => {
   }, [formErrors]);
 
   useEffect(() => {
-    if (showGearForm || selectedEq || busyEquipment || showAddCategoryModal) {
+    if (showGearForm || selectedEq || busyEquipment || showAddCategoryModal || showEditCategoryModal) {
       document.body.style.overflow = 'hidden';
     } else {
       document.body.style.overflow = '';
@@ -276,7 +325,7 @@ export const EquipmentManagement: React.FC = () => {
     return () => {
       document.body.style.overflow = '';
     };
-  }, [showGearForm, selectedEq, busyEquipment, showAddCategoryModal]);
+  }, [showGearForm, selectedEq, busyEquipment, showAddCategoryModal, showEditCategoryModal]);
 
   // Handle selecting an item for editing
   const handleSelectEdit = (eq: Equipment, e?: React.MouseEvent) => {
@@ -410,18 +459,20 @@ export const EquipmentManagement: React.FC = () => {
   }, [equipment]);
 
   const allEquipmentCategories = useMemo(() => {
-    const defaults = ['Camera', 'Lens', 'Drone', 'Gimbal', 'Tripod', 'Light', 'Audio Equipment', 'Memory Cards', 'Batteries', 'Other'];
+    const rawDefaults = ['Camera', 'Lens', 'Drone', 'Gimbal', 'Tripod', 'Lighting', 'Light', 'Memory Cards', 'Batteries', 'Other'];
+    const mappedDefaults = rawDefaults.map(d => categoryRenames[d.toLowerCase()] || d);
     const fromEq = equipment.map(e => getEquipmentCategory(e)).filter(Boolean);
-    return Array.from(new Set([...defaults, ...fromEq, ...customCategories])).filter(Boolean);
-  }, [equipment, customCategories]);
+    return Array.from(new Set([...mappedDefaults, ...fromEq, ...customCategories])).filter(Boolean);
+  }, [equipment, customCategories, categoryRenames]);
 
   const uniqueCategories = useMemo(() => {
     const fromEq = equipment.map(e => getEquipmentCategory(e)).filter(Boolean);
-    const defaults = ['Camera', 'Lens', 'Drone', 'Gimbal', 'Tripod', 'Lighting', 'Light', 'Audio', 'Audio Equipment', 'Memory Cards', 'Batteries', 'Other'];
-    return Array.from(new Set([...fromEq, ...defaults, ...customCategories])).filter(Boolean).sort();
-  }, [equipment, customCategories]);
+    const rawDefaults = ['Camera', 'Lens', 'Drone', 'Gimbal', 'Tripod', 'Lighting', 'Light', 'Memory Cards', 'Batteries', 'Other'];
+    const mappedDefaults = rawDefaults.map(d => categoryRenames[d.toLowerCase()] || d);
+    return Array.from(new Set([...fromEq, ...mappedDefaults, ...customCategories])).filter(Boolean).sort();
+  }, [equipment, customCategories, categoryRenames]);
 
-  const handleSaveNewCategory = (e?: React.FormEvent) => {
+  const handleSaveNewCategory = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const trimmed = newCategoryName.trim();
     if (!trimmed) {
@@ -445,6 +496,32 @@ export const EquipmentManagement: React.FC = () => {
         ...prev,
         equipment_type: trimmed
       }));
+
+      // Also persist in Supabase equipment_categories table
+      try {
+        const insRes = await fetch('/api/db/insert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            table: 'equipment_categories',
+            record: {
+              category_name: trimmed,
+              status: 'Active',
+              created_by: currentUserName || 'Operations Team'
+            }
+          })
+        });
+        const insJson = await insRes.json().catch(() => null);
+        if (insJson?.data?.[0]?.id) {
+          setDbCategoryMap(prev => ({
+            ...prev,
+            [trimmed.toLowerCase()]: insJson.data[0].id
+          }));
+        }
+      } catch (dbErr) {
+        console.warn('DB insert equipment_categories note:', dbErr);
+      }
+
       showToast('success', `Equipment category "${trimmed}" added successfully.`);
       setNewCategoryName('');
       setNewCategoryError('');
@@ -453,6 +530,154 @@ export const EquipmentManagement: React.FC = () => {
       showToast('error', err.message || 'Failed to save category.');
     } finally {
       setIsSavingCategory(false);
+    }
+  };
+
+  const handleOpenEditCategory = (catId: string, catName: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!canEdit) {
+      showToast('error', 'Unauthorized! Operations Team or Business Owner privileges required.');
+      return;
+    }
+    setEditingCategoryId(catId);
+    setEditingCategoryName(catName);
+    setEditCategoryNameInput(catName);
+    setEditCategoryError('');
+    setShowEditCategoryModal(true);
+  };
+
+  const handleSaveEditCategory = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!canEdit) {
+      showToast('error', 'Unauthorized! Operations Team or Business Owner privileges required.');
+      return;
+    }
+
+    const trimmedNew = editCategoryNameInput.trim();
+    if (!trimmedNew) {
+      setEditCategoryError('Category Name cannot be empty.');
+      return;
+    }
+
+    if (!editingCategoryId) {
+      setEditCategoryError('Missing category ID. Please close and re-open the edit dialog.');
+      return;
+    }
+
+    if (trimmedNew.toLowerCase() === editingCategoryName.trim().toLowerCase()) {
+      setEditCategoryError('New category name is identical to the current name.');
+      return;
+    }
+
+    // Check duplicate against all other categories in database (strictly excluding current category by ID)
+    const isDuplicate = dbCategories.some(
+      c => c.id !== editingCategoryId && c.category_name.trim().toLowerCase() === trimmedNew.toLowerCase()
+    );
+    if (isDuplicate) {
+      setEditCategoryError(`A category with the name "${trimmedNew}" already exists.`);
+      return;
+    }
+
+    setIsUpdatingCategory(true);
+    setEditCategoryError('');
+
+    try {
+      const now = new Date().toISOString();
+      const oldCatLower = editingCategoryName.trim().toLowerCase();
+
+      // 1. UPDATE existing database record using its permanent unique UUID (.eq('id', categoryId))
+      // Strictly UPDATE - NEVER use INSERT or UPSERT when editing an existing category.
+      const updateRes = await fetch('/api/db/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          table: 'equipment_categories',
+          matchColumn: 'id',
+          matchValue: editingCategoryId,
+          updates: {
+            category_name: trimmedNew,
+            updated_at: now
+          }
+        })
+      });
+      const updateJson = await updateRes.json().catch(() => null);
+      if (!updateJson || !updateJson.success) {
+        throw new Error(updateJson?.error || 'Failed to update category record in database.');
+      }
+
+      // Update local dbCategories array and dbCategoryMap
+      setDbCategories(prev => prev.map(c => c.id === editingCategoryId ? { ...c, category_name: trimmedNew, updated_at: now } : c));
+      setDbCategoryMap(prev => {
+        const next = { ...prev };
+        delete next[oldCatLower];
+        next[trimmedNew.toLowerCase()] = editingCategoryId;
+        next[editingCategoryId] = trimmedNew;
+        return next;
+      });
+
+      // 2. Update associated equipment records in Supabase equipment table preserving equipment IDs & relationships
+      const matchingEqItems = equipment.filter(eq => {
+        const eqCat = getEquipmentCategory(eq);
+        return eqCat.toLowerCase() === oldCatLower ||
+               (eq.equipment_type && eq.equipment_type.toLowerCase() === oldCatLower) ||
+               (eq.Equipment_Category && eq.Equipment_Category.toLowerCase() === oldCatLower);
+      });
+
+      if (matchingEqItems.length > 0) {
+        await Promise.all(
+          matchingEqItems.map(eq =>
+            fetch('/api/db/update', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                table: 'equipment',
+                matchColumn: 'equipment_id',
+                matchValue: eq.equipment_id,
+                updates: {
+                  equipment_type: trimmedNew,
+                  Equipment_Category: trimmedNew,
+                  updated_at: now,
+                  updated_by: currentUserName || 'Operations Team'
+                }
+              })
+            })
+          )
+        );
+      }
+
+      // 3. Update persistent local storage and category rename mappings
+      const updatedCategories = updateStoredEquipmentCategory(editingCategoryName, trimmedNew);
+      setCustomCategories(updatedCategories);
+      setCategoryRenames(getEquipmentCategoryRenames());
+
+      // 4. Update local active view / filter states
+      if (selectedCategoryView && selectedCategoryView.toLowerCase() === oldCatLower) {
+        setSelectedCategoryView(trimmedNew);
+      }
+      if (filters.type && filters.type.toLowerCase() === oldCatLower) {
+        setFilters(prev => ({ ...prev, type: trimmedNew }));
+      }
+      if (form.equipment_type && form.equipment_type.toLowerCase() === oldCatLower) {
+        setForm(prev => ({ ...prev, equipment_type: trimmedNew }));
+      }
+
+      // 5. Trigger refresh of RoleContext equipment and re-fetch categories from DB
+      await fetchDbCategories();
+      refreshData();
+
+      showToast('success', `Equipment category "${editingCategoryName}" updated to "${trimmedNew}" successfully.`);
+      setShowEditCategoryModal(false);
+      setEditingCategoryId(null);
+      setEditingCategoryName('');
+      setEditCategoryNameInput('');
+      setEditCategoryError('');
+    } catch (err: any) {
+      console.error('Error updating category:', err);
+      const msg = err.message || 'Failed to update equipment category in database.';
+      setEditCategoryError(msg);
+      showToast('error', msg);
+    } finally {
+      setIsUpdatingCategory(false);
     }
   };
 
@@ -954,6 +1179,7 @@ export const EquipmentManagement: React.FC = () => {
   // 2. Compute Category-first Summary Table Data based on actual equipment records
   const categoriesSummary = useMemo(() => {
     const catMap = new Map<string, {
+      id: string;
       category: string;
       totalUnits: number;
       availableCount: number;
@@ -961,21 +1187,35 @@ export const EquipmentManagement: React.FC = () => {
       maintenanceCount: number;
     }>();
 
-    allEquipmentWithStatus.forEach(item => {
+    // First populate from all known database categories with their permanent unique UUIDs
+    dbCategories.forEach(dbCat => {
+      if (!dbCat.category_name) return;
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase();
-        const match = 
-          item.equipment_name.toLowerCase().includes(query) ||
-          item.categoryName.toLowerCase().includes(query) ||
-          item.brand.toLowerCase().includes(query) ||
-          (item.model && item.model.toLowerCase().includes(query)) ||
-          (item.serial_number && item.serial_number.toLowerCase().includes(query));
-        if (!match) return;
+        if (!dbCat.category_name.toLowerCase().includes(query)) return;
       }
+      catMap.set(dbCat.id, {
+        id: dbCat.id,
+        category: dbCat.category_name,
+        totalUnits: 0,
+        availableCount: 0,
+        assignedCount: 0,
+        maintenanceCount: 0
+      });
+    });
 
-      const cat = item.categoryName || 'Other';
-      if (!catMap.has(cat)) {
-        catMap.set(cat, {
+    // Also include any customCategories or fallback defaults if not already present
+    customCategories.forEach(cat => {
+      if (!cat) return;
+      const alreadyHas = Array.from(catMap.values()).some(e => e.category.toLowerCase() === cat.toLowerCase());
+      if (!alreadyHas) {
+        if (searchQuery.trim()) {
+          const query = searchQuery.toLowerCase();
+          if (!cat.toLowerCase().includes(query)) return;
+        }
+        const dbId = dbCategoryMap[cat.toLowerCase()] || `cat_${cat.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        catMap.set(dbId, {
+          id: dbId,
           category: cat,
           totalUnits: 0,
           availableCount: 0,
@@ -983,19 +1223,47 @@ export const EquipmentManagement: React.FC = () => {
           maintenanceCount: 0
         });
       }
-      const entry = catMap.get(cat)!;
-      entry.totalUnits += (item.quantity || 1);
+    });
+
+    // Accumulate unit counts from all equipment
+    allEquipmentWithStatus.forEach(item => {
+      const cat = item.categoryName || 'Other';
+      let targetEntry = Array.from(catMap.values()).find(e => e.category.toLowerCase() === cat.toLowerCase());
+      if (!targetEntry) {
+        if (searchQuery.trim()) {
+          const query = searchQuery.toLowerCase();
+          const match = 
+            item.equipment_name.toLowerCase().includes(query) ||
+            item.categoryName.toLowerCase().includes(query) ||
+            item.brand.toLowerCase().includes(query) ||
+            (item.model && item.model.toLowerCase().includes(query)) ||
+            (item.serial_number && item.serial_number.toLowerCase().includes(query));
+          if (!match) return;
+        }
+        const dbId = dbCategoryMap[cat.toLowerCase()] || `cat_${cat.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        targetEntry = {
+          id: dbId,
+          category: cat,
+          totalUnits: 0,
+          availableCount: 0,
+          assignedCount: 0,
+          maintenanceCount: 0
+        };
+        catMap.set(dbId, targetEntry);
+      }
+
+      targetEntry.totalUnits += (item.quantity || 1);
       if (item.dynamicStatus === 'Busy') {
-        entry.assignedCount += (item.quantity || 1);
+        targetEntry.assignedCount += (item.quantity || 1);
       } else if (item.dynamicStatus === 'Available') {
-        entry.availableCount += (item.quantity || 1);
+        targetEntry.availableCount += (item.quantity || 1);
       } else {
-        entry.maintenanceCount += (item.quantity || 1);
+        targetEntry.maintenanceCount += (item.quantity || 1);
       }
     });
 
     return Array.from(catMap.values()).sort((a, b) => a.category.localeCompare(b.category));
-  }, [allEquipmentWithStatus, searchQuery]);
+  }, [allEquipmentWithStatus, dbCategories, customCategories, dbCategoryMap, searchQuery]);
 
   // Filtered and sorted equipment list for the selected event date
   const filteredAndSortedEquipment = useMemo(() => {
@@ -1525,6 +1793,111 @@ export const EquipmentManagement: React.FC = () => {
           </div>
         )}
 
+        {/* Edit Equipment Category Modal */}
+        {showEditCategoryModal && (
+          <div 
+            className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150"
+            onClick={() => {
+              if (!isUpdatingCategory) {
+                setShowEditCategoryModal(false);
+                setEditingCategoryId(null);
+                setEditCategoryError('');
+                setEditingCategoryName('');
+                setEditCategoryNameInput('');
+              }
+            }}
+          >
+            <div 
+              className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 shadow-2xl w-full max-w-md relative flex flex-col gap-4 text-left"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+                <div className="flex items-center gap-2">
+                  <Edit3 className="w-4 h-4 text-amber-500" />
+                  <h3 className="text-xs font-mono font-black uppercase text-zinc-200 tracking-wider">
+                    Edit Equipment Category
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  disabled={isUpdatingCategory}
+                  onClick={() => {
+                    setShowEditCategoryModal(false);
+                    setEditingCategoryId(null);
+                    setEditCategoryError('');
+                    setEditingCategoryName('');
+                    setEditCategoryNameInput('');
+                  }}
+                  className="text-zinc-400 hover:text-white p-1 rounded-full bg-zinc-800/50 hover:bg-zinc-800 transition-colors cursor-pointer disabled:opacity-50"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveEditCategory} className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label htmlFor="edit_category_name_input" className="block text-[10px] font-mono font-extrabold uppercase text-zinc-400">
+                      Category Name *
+                    </label>
+                    <span className="text-[10px] font-mono text-zinc-500">
+                      Current: <span className="text-zinc-300 font-bold">{editingCategoryName}</span>
+                    </span>
+                  </div>
+                  <input
+                    id="edit_category_name_input"
+                    aria-label="Category Name"
+                    type="text"
+                    placeholder="Enter updated category name..."
+                    value={editCategoryNameInput}
+                    autoFocus
+                    disabled={isUpdatingCategory}
+                    onChange={(e) => {
+                      setEditCategoryNameInput(e.target.value);
+                      if (editCategoryError) setEditCategoryError('');
+                    }}
+                    className={`w-full bg-zinc-955 border ${editCategoryError ? 'border-rose-500 focus:border-rose-500' : 'border-zinc-850 focus:border-amber-500/50'} rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none font-mono transition-colors disabled:opacity-50`}
+                  />
+                  {editCategoryError && (
+                    <p className="text-rose-400 text-[10px] mt-1.5 font-mono flex items-center gap-1">
+                      <span>⚠️</span> {editCategoryError}
+                    </p>
+                  )}
+                  <p className="text-[10px] text-zinc-500 font-mono mt-2">
+                    Updating this category name will update the category across all associated gear while preserving equipment IDs and relationships.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-zinc-850">
+                  <button
+                    type="button"
+                    disabled={isUpdatingCategory}
+                    onClick={() => {
+                      setShowEditCategoryModal(false);
+                      setEditingCategoryId(null);
+                      setEditCategoryError('');
+                      setEditingCategoryName('');
+                      setEditCategoryNameInput('');
+                    }}
+                    className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold rounded-xl text-xs transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    id="btn_update_equipment_category"
+                    type="submit"
+                    disabled={isUpdatingCategory}
+                    className="px-4 py-2 bg-amber-500 hover:bg-amber-600 active:scale-95 disabled:opacity-50 text-black font-semibold rounded-xl text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+                  >
+                    <span>{isUpdatingCategory ? 'Saving Changes...' : 'Save Changes'}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* Gear Form Modal */}
         {showGearForm && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm">
@@ -1694,9 +2067,21 @@ export const EquipmentManagement: React.FC = () => {
                   <span>Back to Categories</span>
                 </button>
                 <span className="text-zinc-600 font-mono">/</span>
-                <h3 className="text-xs font-mono font-black text-amber-400 uppercase tracking-widest flex items-center gap-1.5">
+                <h3 className="text-xs font-mono font-black text-amber-400 uppercase tracking-widest flex items-center gap-1.5 flex-wrap">
                   <Package className="w-4 h-4 text-amber-500" />
                   <span>{selectedCategoryView} ({filteredAndSortedEquipment.length} ITEMS)</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleOpenEditCategory(selectedCategoryView);
+                    }}
+                    className="ml-2 px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-amber-400 border border-zinc-750 hover:border-amber-500/40 rounded-xl text-[10px] font-mono font-bold transition-all cursor-pointer inline-flex items-center gap-1 shadow-sm"
+                    title={`Edit category name: ${selectedCategoryView}`}
+                  >
+                    <Edit3 className="w-3 h-3 text-amber-400" />
+                    <span>Edit Category</span>
+                  </button>
                 </h3>
               </div>
             ) : (
@@ -1759,7 +2144,20 @@ export const EquipmentManagement: React.FC = () => {
                               <Package className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-sm font-bold text-zinc-100 group-hover:text-amber-400 transition-colors">{cat.category}</div>
+                              <div className="text-sm font-bold text-zinc-100 group-hover:text-amber-400 transition-colors flex items-center gap-2">
+                                <span>{cat.category}</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenEditCategory(cat.id, cat.category, e);
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-amber-400 transition-all cursor-pointer"
+                                  title={`Edit category name: ${cat.category}`}
+                                >
+                                  <Edit3 className="w-3 h-3 text-amber-400" />
+                                </button>
+                              </div>
                               <div className="text-[10px] font-mono text-zinc-500">Click to view all {cat.category.toLowerCase()} units</div>
                             </div>
                           </div>
@@ -1792,19 +2190,35 @@ export const EquipmentManagement: React.FC = () => {
 
                         {/* Action */}
                         <td className="p-3.5 text-right">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedCategoryView(cat.category);
-                              setFilters(prev => ({ ...prev, type: cat.category }));
-                              setCurrentPage(1);
-                            }}
-                            className="px-3.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 hover:gap-2 shadow-sm"
-                          >
-                            <span>View</span>
-                            <ChevronRight className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="inline-flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              id={`btn_edit_category_${cat.category.toLowerCase().replace(/[^a-z0-9]/g, '_')}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenEditCategory(cat.id, cat.category, e);
+                              }}
+                              className="px-3 py-1.5 bg-zinc-800/80 hover:bg-zinc-750 text-zinc-300 hover:text-amber-400 border border-zinc-750 hover:border-amber-500/40 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 shadow-sm"
+                              title={`Edit category name: ${cat.category}`}
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Edit</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedCategoryView(cat.category);
+                                setFilters(prev => ({ ...prev, type: cat.category }));
+                                setCurrentPage(1);
+                              }}
+                              className="px-3.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 hover:gap-2 shadow-sm"
+                              title={`View ${cat.category} equipment`}
+                            >
+                              <span>View</span>
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))

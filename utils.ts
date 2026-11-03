@@ -1720,9 +1720,9 @@ export function getCustomers(leads: Lead[], orders: Order[], payments: Payment[]
   });
 }
 
-export * from './utils/modalViewportHandler';
-export * from './utils/errorViewportHandler';
-import { ensureModalScrolledToTop } from './utils/modalViewportHandler';
+export * from './modalViewportHandler';
+export * from './errorViewportHandler';
+import { ensureModalScrolledToTop } from './modalViewportHandler';
 
 /**
  * Automatically scrolls to a popup or container, resets its internal scroll position to top, and focuses the first input/interactive field inside it.
@@ -4251,6 +4251,63 @@ export function saveEquipmentCategoryToStorage(catName: string): string[] {
     window.dispatchEvent(new CustomEvent('equipment-categories-updated', { detail: updated }));
   } catch (_) {}
   return updated;
+}
+
+/**
+ * Updates an existing equipment category name in persistent local storage and dispatches sync event
+ */
+export function updateStoredEquipmentCategory(oldName: string, newName: string): string[] {
+  if (!oldName || !newName || typeof window === 'undefined') return getStoredEquipmentCategories();
+  const cleanOld = oldName.trim();
+  const cleanNew = newName.trim();
+  if (!cleanOld || !cleanNew) return getStoredEquipmentCategories();
+  let current = getStoredEquipmentCategories();
+  let updated: string[] = [];
+  try {
+    let replaced = false;
+    current.forEach(c => {
+      if (c.toLowerCase() === cleanOld.toLowerCase()) {
+        if (!replaced) {
+          updated.push(cleanNew);
+          replaced = true;
+        }
+      } else if (c.toLowerCase() !== cleanNew.toLowerCase()) {
+        updated.push(c);
+      }
+    });
+    if (!replaced) {
+      updated.push(cleanNew);
+    }
+    localStorage.setItem('erp_custom_equipment_categories', JSON.stringify(updated));
+    localStorage.setItem('equipment_categories', JSON.stringify(updated));
+
+    // Also persist category rename mappings for default categories
+    const rawRenames = localStorage.getItem('erp_equipment_category_renames');
+    let renames: Record<string, string> = {};
+    if (rawRenames) {
+      try { renames = JSON.parse(rawRenames) || {}; } catch (_) {}
+    }
+    renames[cleanOld.toLowerCase()] = cleanNew;
+    localStorage.setItem('erp_equipment_category_renames', JSON.stringify(renames));
+  } catch (_) {}
+  try {
+    window.dispatchEvent(new CustomEvent('equipment-categories-updated', { detail: updated }));
+  } catch (_) {}
+  return updated;
+}
+
+/**
+ * Gets recorded equipment category rename mappings
+ */
+export function getEquipmentCategoryRenames(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem('erp_equipment_category_renames');
+    if (!raw) return {};
+    return JSON.parse(raw) || {};
+  } catch (_) {
+    return {};
+  }
 }
 
 /**
