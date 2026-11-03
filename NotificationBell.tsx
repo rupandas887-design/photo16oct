@@ -66,12 +66,12 @@ export const NotificationBell: React.FC = () => {
     setLastNotificationCount(visibleNotifs.length);
   }, [visibleNotifs.length, lastNotificationCount, soundEnabled]);
 
-  // Auto Refresh interval (Realtime handles instant updates; 60s fallback avoids rate limits)
+  // Auto Refresh interval
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
       refreshData();
-    }, 60000);
+    }, 15000); // Poll every 15s to keep things highly active
     return () => clearInterval(interval);
   }, [autoRefresh, refreshData]);
 

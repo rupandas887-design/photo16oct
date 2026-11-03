@@ -386,148 +386,6 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     });
   }, [production, startDate, endDate, datePreset]);
 
-  // Operations Event End Footage Link Filters & Records
-  const [eventEndFootageFilter, setEventEndFootageFilter] = useState<'all' | 'uploaded' | 'not_uploaded'>('all');
-
-  const eventEndItems = useMemo(() => {
-    const safeOps = Array.isArray(operations) ? operations : [];
-    const safeOrders = Array.isArray(orders) ? orders : [];
-    const safeLeads = Array.isArray(leads) ? leads : [];
-
-    const isWithinDate = (dateStr?: string) => {
-      if (datePreset === 'all') return true;
-      if (!startDate || !endDate) return true;
-      if (!dateStr) return true;
-      const clean = dateStr.split('T')[0];
-      return clean >= startDate && clean <= endDate;
-    };
-
-    const map = new Map<string, any>();
-
-    safeOps.forEach((op, idx) => {
-      if (!op) return;
-      const key = op.operation_id || op.event_id || `${op.order_id || 'op'}_${idx}`;
-      
-      const ord = safeOrders.find(o => o.order_id === op.order_id || (o.lead_id && o.lead_id === op.order_id));
-      const ld = safeLeads.find(l => (ord && l.lead_id === ord.lead_id) || l.lead_id === op.order_id || (l.order_id && l.order_id === op.order_id));
-
-      const eventDate = op.event_date || ord?.event_date || op.created_at || '';
-      if (!isWithinDate(eventDate)) return;
-
-      const customerName = 
-        ord?.customer_name || 
-        ld?.customer_name || 
-        (op as any).customer_name || 
-        (op as any).client_name || 
-        'Customer';
-
-      const eventName = 
-        (op as any).custom_event_name || 
-        (op as any).event_name || 
-        ord?.custom_event_name || 
-        ord?.event_type || 
-        ld?.custom_event_name || 
-        ld?.event_type || 
-        'Event';
-
-      const rawLink = 
-        op.raw_footage_drive_link || 
-        op.Raw_Footage_Drive_Link || 
-        op.consolidated_drive_link || 
-        op.Consolidated_Drive_Link || 
-        ord?.raw_footage_link || 
-        ord?.drive_link || 
-        ld?.raw_footage_link || 
-        '';
-
-      const footageLink = (typeof rawLink === 'string') ? rawLink.trim() : '';
-      const isUploaded = Boolean(
-        footageLink && 
-        footageLink.length > 5 && 
-        !['pending', 'not uploaded', 'n/a', 'none', 'null', 'undefined'].includes(footageLink.toLowerCase())
-      );
-
-      let clickableUrl = footageLink;
-      if (isUploaded && !clickableUrl.startsWith('http://') && !clickableUrl.startsWith('https://')) {
-        clickableUrl = `https://${clickableUrl}`;
-      }
-
-      map.set(key, {
-        id: key,
-        orderId: op.order_id || ord?.order_id || '',
-        customerName,
-        eventName,
-        footageLink,
-        clickableUrl,
-        isUploaded,
-        eventDate,
-        status: op.event_status || ord?.current_stage || 'Assigned',
-        rawOp: op,
-        rawOrder: ord
-      });
-    });
-
-    safeOrders.forEach(ord => {
-      if (!ord || !ord.order_id) return;
-      const isOpsStage = [
-        'Operations Assigned', 'Assigned Crew', 'Staff Assigned', 'Event Scheduled',
-        'Event Started', 'Event Start', 'Event Ended', 'Event End',
-        'Event Completed', 'Event Complete', 'Footage Handover', 'Verified Footage',
-        'Raw Footage Received'
-      ].includes(ord.current_stage || '');
-
-      const alreadyExists = Array.from(map.values()).some(item => item.orderId === ord.order_id);
-      if (!alreadyExists && isOpsStage) {
-        const eventDate = ord.event_date || ord.created_at || '';
-        if (!isWithinDate(eventDate)) return;
-
-        const ld = safeLeads.find(l => l.lead_id === ord.lead_id || l.order_id === ord.order_id);
-        const customerName = ord.customer_name || ld?.customer_name || 'Customer';
-        const eventName = ord.custom_event_name || ord.event_type || ld?.custom_event_name || ld?.event_type || 'Event';
-        const rawLink = ord.raw_footage_link || ord.drive_link || ld?.raw_footage_link || '';
-        const footageLink = (typeof rawLink === 'string') ? rawLink.trim() : '';
-        const isUploaded = Boolean(
-          footageLink && 
-          footageLink.length > 5 && 
-          !['pending', 'not uploaded', 'n/a', 'none', 'null', 'undefined'].includes(footageLink.toLowerCase())
-        );
-        let clickableUrl = footageLink;
-        if (isUploaded && !clickableUrl.startsWith('http://') && !clickableUrl.startsWith('https://')) {
-          clickableUrl = `https://${clickableUrl}`;
-        }
-
-        map.set(`ord_${ord.order_id}`, {
-          id: `ord_${ord.order_id}`,
-          orderId: ord.order_id,
-          customerName,
-          eventName,
-          footageLink,
-          clickableUrl,
-          isUploaded,
-          eventDate: ord.event_date || '',
-          status: ord.current_stage || 'Operations Assigned',
-          rawOrder: ord
-        });
-      }
-    });
-
-    const list = Array.from(map.values());
-    return list.sort((a, b) => compareRecordsByDate(a, b, 'latest'));
-  }, [operations, orders, leads, datePreset, startDate, endDate]);
-
-  const filteredEventEndList = useMemo(() => {
-    if (eventEndFootageFilter === 'uploaded') {
-      return eventEndItems.filter(item => item.isUploaded);
-    }
-    if (eventEndFootageFilter === 'not_uploaded') {
-      return eventEndItems.filter(item => !item.isUploaded);
-    }
-    return eventEndItems;
-  }, [eventEndItems, eventEndFootageFilter]);
-
-  const eventEndUploadedCount = useMemo(() => eventEndItems.filter(i => i.isUploaded).length, [eventEndItems]);
-  const eventEndNotUploadedCount = useMemo(() => eventEndItems.filter(i => !i.isUploaded).length, [eventEndItems]);
-
   const [unlockRequests, setUnlockRequests] = useState<any[]>([]);
 
   useEffect(() => {
@@ -1269,7 +1127,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
 
     return {
       salesTotalLeads, salesConverted, salesLost, salesFollowup,
-      opsNew, opsCompleted, opsUpcoming, opsScheduled, opsEventEnd: eventEndItems, opsAll,
+      opsNew, opsCompleted, opsUpcoming, opsScheduled, opsAll,
       // Production - 5 standardized production-only metrics
       prodTotal, prodPending, prodInProgress, prodCompleted, prodOverdue,
       // Aliases for backwards compatibility
@@ -1278,7 +1136,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       prodClientAcceptance: prodCompleted,
       prodAll: prodTotal
     };
-  }, [unifiedPipeline, productionProjects, eventEndItems]);
+  }, [unifiedPipeline, productionProjects]);
 
   // Unified pending payment records matching Sales Dashboard Payment Pending exactly
   const allPendingRecords = useMemo(() => {
@@ -1330,12 +1188,11 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     }
 
     // OPERATIONS CARDS
-    if (selectedCard === 'ops_new' || selectedCard === 'ops_completed' || selectedCard === 'ops_upcoming' || selectedCard === 'ops_scheduled' || selectedCard === 'ops_event_end' || selectedCard === 'overview_ops') {
+    if (selectedCard === 'ops_new' || selectedCard === 'ops_completed' || selectedCard === 'ops_upcoming' || selectedCard === 'ops_scheduled' || selectedCard === 'overview_ops') {
       return selectedCard === 'ops_new' ? boCardsData.opsNew
         : selectedCard === 'ops_completed' ? boCardsData.opsCompleted
         : selectedCard === 'ops_upcoming' ? boCardsData.opsUpcoming
         : selectedCard === 'ops_scheduled' ? boCardsData.opsScheduled
-        : selectedCard === 'ops_event_end' ? boCardsData.opsEventEnd
         : boCardsData.opsAll;
     }
 
@@ -1496,56 +1353,6 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     if (selectedCard === 'overview_approval') return [...baseOrderCols, { key: 'current_stage', label: 'Status', render: (item: any) => <span className="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold font-mono text-[10px]">{item.current_stage || 'Awaiting Approval'}</span> }, actionCol];
     if (selectedCard === 'overview_outstanding') return [...baseOrderCols, { key: 'totalRevenue', label: 'Total Revenue', render: (item: any) => <span className="font-mono text-zinc-400">{formatINR(item.totalRevenue || 0)}</span> }, { key: 'paymentReceived', label: 'Received', render: (item: any) => <span className="font-mono text-emerald-400">{formatINR(item.paymentReceived || 0)}</span> }, { key: 'outstandingAmount', label: 'Outstanding Balance', render: (item: any) => <span className="font-mono text-rose-400 font-bold">{formatINR(item.outstandingAmount || 0)}</span> }, actionCol];
 
-    if (selectedCard === 'ops_event_end') {
-      return [
-        { 
-          key: 'customer_name', 
-          label: 'Customer Name', 
-          render: (item: any) => (
-            <div>
-              <span className="font-bold text-white block">{item.customerName || item.customer_name}</span>
-              {item.orderId && <span className="text-[10px] text-zinc-500 font-mono">Order: {item.orderId}</span>}
-            </div>
-          ) 
-        },
-        { 
-          key: 'custom_event_name', 
-          label: 'Event Name', 
-          render: (item: any) => (
-            <div>
-              <span className="text-zinc-200 font-medium block">{item.eventName || item.custom_event_name || item.event_name || 'Event'}</span>
-              {item.eventDate && <span className="text-[10px] text-zinc-500 font-mono">{formatDateDDMMYY(item.eventDate)}</span>}
-            </div>
-          ) 
-        },
-        { 
-          key: 'footage_link', 
-          label: 'Footage Link', 
-          render: (item: any) => {
-            if (item.isUploaded && item.clickableUrl) {
-              return (
-                <a
-                  href={item.clickableUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>Uploaded</span>
-                </a>
-              );
-            }
-            return (
-              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-zinc-900 border border-zinc-800 text-zinc-400">
-                Not Uploaded
-              </span>
-            );
-          }
-        },
-        actionCol
-      ];
-    }
-
     if (selectedCard && (selectedCard.startsWith('sales_') || selectedCard === 'overview_sales')) return [...baseLeadCols, actionCol];
     if (selectedCard && (selectedCard.startsWith('ops_') || selectedCard === 'overview_ops')) return [...baseOpsCols, actionCol];
     if (selectedCard && (selectedCard.startsWith('prod_') || selectedCard === 'overview_prod' || selectedCard === 'overview_acceptance')) return [...baseProdCols, actionCol];
@@ -1571,7 +1378,6 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       case 'ops_completed': return { title: 'Total Completed Shoot Projects', totalLabel: 'Completed Count', totalValue: `${modalData.length}`, accentColor: 'emerald' as const, filterDescription: 'Shoot assignments successfully completed on location.' };
       case 'ops_upcoming': return { title: 'Total Upcoming Shoots', totalLabel: 'Upcoming Count', totalValue: `${modalData.length}`, accentColor: 'blue' as const, filterDescription: 'Scheduled shoots with future event dates.' };
       case 'ops_scheduled': return { title: 'Total Scheduled Shoots', totalLabel: 'Scheduled Count', totalValue: `${modalData.length}`, accentColor: 'blue' as const, filterDescription: 'Events where crew, equipment, and shoot timing have been scheduled.' };
-      case 'ops_event_end': return { title: 'Event End – Footage Upload Status', totalLabel: 'Total Events', totalValue: `${modalData.length}`, accentColor: 'blue' as const, filterDescription: 'Operational shoot events tracking footage drive link upload status.' };
       case 'overview_ops': return { title: 'Operations Pipeline Breakdown', totalLabel: 'Total Operations Count', totalValue: `${modalData.length}`, accentColor: 'blue' as const, filterDescription: 'Comprehensive overview of all operations tasks and event shoots.' };
 
       case 'prod_total': return { title: 'Total Production Projects', totalLabel: 'Total Projects Count', totalValue: `${modalData.length}`, accentColor: 'purple' as const, filterDescription: 'All post-production projects across all editing workflows.' };
@@ -2107,9 +1913,9 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
             </div>
 
             {/* OPERATIONS PERFORMANCE */}
-            <div className="space-y-4">
+            <div className="space-y-3">
               <h3 className="text-xs font-black font-mono tracking-wider text-blue-400 uppercase">Operations Performance</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <CameraLensStatsCard
                   label="Total New Projects"
                   val={boCardsData.opsNew.length}
@@ -2146,137 +1952,6 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
                   chartPoints={[10, 14, 12, 18, 16, 22, 21]}
                   onClick={() => setSelectedCard('ops_scheduled')}
                 />
-                <CameraLensStatsCard
-                  label="Event End"
-                  val={eventEndItems.length}
-                  theme="blue"
-                  trendText={`${eventEndUploadedCount} Uploaded`}
-                  lensLabel="WRAP 35mm"
-                  chartPoints={[10, 14, 12, 18, 16, 22, 20]}
-                  onClick={() => setSelectedCard('ops_event_end')}
-                />
-              </div>
-
-              {/* EVENT END CARD */}
-              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl space-y-4">
-                {/* Header with Title and Filters */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-850 pb-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400">
-                      <Video className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-sm font-bold font-mono uppercase tracking-wider text-white">
-                          Event End
-                        </h4>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-zinc-900 border border-zinc-800 text-zinc-400">
-                          {eventEndItems.length} Total
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-mono text-zinc-400 mt-0.5">
-                        Track customer shoot events and footage drive links
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Uploaded / Not Uploaded Filters */}
-                  <div className="flex items-center gap-1.5 bg-zinc-900 p-1 rounded-xl border border-zinc-800 text-xs font-mono self-start sm:self-auto">
-                    <button
-                      type="button"
-                      onClick={() => setEventEndFootageFilter('all')}
-                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer font-bold ${
-                        eventEndFootageFilter === 'all'
-                          ? 'bg-zinc-800 text-white shadow-sm'
-                          : 'text-zinc-400 hover:text-white'
-                      }`}
-                    >
-                      All ({eventEndItems.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEventEndFootageFilter('uploaded')}
-                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer font-bold flex items-center gap-1.5 ${
-                        eventEndFootageFilter === 'uploaded'
-                          ? 'bg-emerald-500 text-black shadow-sm'
-                          : 'text-zinc-400 hover:text-emerald-400'
-                      }`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${eventEndFootageFilter === 'uploaded' ? 'bg-black' : 'bg-emerald-400'}`}></span>
-                      <span>Uploaded ({eventEndUploadedCount})</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEventEndFootageFilter('not_uploaded')}
-                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer font-bold flex items-center gap-1.5 ${
-                        eventEndFootageFilter === 'not_uploaded'
-                          ? 'bg-amber-500 text-black shadow-sm'
-                          : 'text-zinc-400 hover:text-amber-400'
-                      }`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${eventEndFootageFilter === 'not_uploaded' ? 'bg-black' : 'bg-amber-400'}`}></span>
-                      <span>Not Uploaded ({eventEndNotUploadedCount})</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Table Content */}
-                {filteredEventEndList.length === 0 ? (
-                  <div className="py-10 text-center bg-zinc-900/30 border border-zinc-850 border-dashed rounded-xl space-y-2">
-                    <Video className="w-8 h-8 text-zinc-700 mx-auto" />
-                    <p className="text-zinc-400 text-xs font-mono">
-                      No events found for &quot;{eventEndFootageFilter === 'uploaded' ? 'Uploaded' : eventEndFootageFilter === 'not_uploaded' ? 'Not Uploaded' : 'All'}&quot;.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto rounded-xl border border-zinc-850">
-                    <table className="w-full text-left text-xs font-mono border-collapse min-w-[540px]">
-                      <thead>
-                        <tr className="bg-zinc-900/80 border-b border-zinc-800 text-[11px] font-mono uppercase tracking-wider text-zinc-400">
-                          <th className="py-3 px-4">Customer Name</th>
-                          <th className="py-3 px-4">Event Name</th>
-                          <th className="py-3 px-4">Footage Link</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-zinc-850">
-                        {filteredEventEndList.map((item) => (
-                          <tr key={item.id} className="hover:bg-zinc-900/40 transition-colors">
-                            <td className="py-3 px-4 text-zinc-100 font-bold text-sm">
-                              <div>{item.customerName}</div>
-                              {item.orderId && (
-                                <div className="text-[10px] text-zinc-500 font-mono mt-0.5 font-normal">Order: {item.orderId}</div>
-                              )}
-                            </td>
-                            <td className="py-3 px-4 text-zinc-300">
-                              <span className="font-semibold text-zinc-200">{item.eventName}</span>
-                              {item.eventDate && (
-                                <div className="text-[10px] text-zinc-500 font-mono mt-0.5">{formatDateDDMMYY(item.eventDate)}</div>
-                              )}
-                            </td>
-                            <td className="py-3 px-4">
-                              {item.isUploaded && item.clickableUrl ? (
-                                <a
-                                  href={item.clickableUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:text-emerald-300 transition-colors cursor-pointer group shadow-sm"
-                                  title={item.clickableUrl}
-                                >
-                                  <ExternalLink className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
-                                  <span>Uploaded</span>
-                                </a>
-                              ) : (
-                                <span className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-mono font-bold bg-zinc-900 border border-zinc-800 text-zinc-400">
-                                  Not Uploaded
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
               </div>
             </div>
 
@@ -4972,7 +4647,7 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
       const combined = rawLeadEvents.length > 0 ? rawLeadEvents : (deserialized.length > 0 ? deserialized : []);
 
       if (combined && combined.length > 0) {
-        const eventsList = combined.map((ev: any, idx: number) => {
+        return combined.map((ev: any, idx: number) => {
           if (!ev) return {
             id: `ev_${idx + 1}`,
             eventName: `Event ${idx + 1}`,
@@ -5033,22 +4708,9 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
             eventLocation: eLocation,
             googleMapsLink: eMapsLink,
             deliverables: deliverablesList,
-            assignments: matchedAssignments,
-            createdAt: new Date(ev?.created_at || ev?.createdAt || 0).getTime() || 0
+            assignments: matchedAssignments
           };
         });
-
-        eventsList.sort((a, b) => {
-          const tA = a.eventDate && a.eventDate !== 'N/A' ? new Date(a.eventDate).getTime() : 0;
-          const tB = b.eventDate && b.eventDate !== 'N/A' ? new Date(b.eventDate).getTime() : 0;
-          if (tA && tB && tA !== tB) return tB - tA;
-          if (tA && !tB) return -1;
-          if (!tA && tB) return 1;
-          if (a.createdAt && b.createdAt && a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
-          return String(b.id || '').localeCompare(String(a.id || ''));
-        });
-
-        return eventsList;
       }
 
       // Fallback single event if no event array exists

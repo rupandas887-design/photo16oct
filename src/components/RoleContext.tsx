@@ -3252,15 +3252,6 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
   const fetchFromDb = async (showLoader = false) => {
     if (!supabaseClient) return;
 
-    // Throttle non-forced background fetches to prevent flooding and triggering rate limits
-    const now = Date.now();
-    if (!showLoader && isFetchingRef.current) {
-      return activeFetchPromiseRef.current || Promise.resolve();
-    }
-    if (!showLoader && now - lastFetchTimeRef.current < 8000) {
-      return activeFetchPromiseRef.current || Promise.resolve();
-    }
-
     if (showLoader) setIsDataLoading(true);
 
     if (activeFetchPromiseRef.current) {
@@ -4210,17 +4201,17 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Background polling fallback every 60 seconds as a safety net (Realtime subscriptions stream updates immediately)
+    // Background polling fallback every 4 seconds to guarantee immediate synchronization with external DB updates
     const pollingInterval = setInterval(() => {
       if (document.visibilityState !== 'visible') {
         return; // Skip polling if tab is hidden
       }
       const now = Date.now();
-      if (now - lastFetchTimeRef.current < 45000) {
+      if (now - lastFetchTimeRef.current < 4000) {
         return; // Skip polling if we fetched recently
       }
       fetchFromDb(false).catch(e => console.warn('fetchFromDb polling failed:', e?.message || e));
-    }, 60000);
+    }, 4000);
 
     // Realtime subscriptions handle granular updates. No global sync needed.
     return () => {
