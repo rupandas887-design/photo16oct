@@ -2133,8 +2133,10 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         );
       }
 
-      // Optimistically update local states immediately for zero delay
-      setOrders(prev => prev.map(o => o.order_id === order.order_id ? { ...o, current_stage: 'Order Closed' } : o));
+      // Optimistically update local states immediately via updateOrderStage and refreshData
+      if (updateOrderStage) {
+        await updateOrderStage(order.order_id, 'Order Closed');
+      }
       setProduction(prev => prev.map(p => 
         (p.order_id === order.order_id || p.tracking_id === order.lead_id || p.production_id === targetProdId)
           ? { ...p, editing_status: 'Order Closed', production_status: 'Order Closed', current_status: 'Order Closed' }
