@@ -1178,118 +1178,191 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     const opsUpcoming = opsAll.filter(i => i.event_date && new Date(i.event_date) >= new Date() && !(i.ops_status || '').toLowerCase().includes('complete'));
     const opsScheduled = opsAll.filter(i => (i.ops_status || '').toLowerCase().includes('scheduled') || i.assigned_crew !== 'Unassigned');
 
-    // OPERATIONS - Event End (events whose current status is Event End)
-    const isEventEndStatus = (st?: string | null) => {
+    // OPERATIONS - Event End (orders whose event end date has passed or reached Event End stage)
+    const isPastDate = (targetDateStr?: string | null): boolean => {
+      if (!targetDateStr || targetDateStr === 'N/A' || targetDateStr === '—' || targetDateStr === 'null' || targetDateStr === 'undefined') {
+        return false;
+      }
+      const trimmed = targetDateStr.trim();
+      let d: Date;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+        const [y, m, day] = trimmed.split('-').map(Number);
+        d = new Date(y, m - 1, day, 23, 59, 59, 999);
+      } else if (/^\d{2}[-/]\d{2}[-/]\d{4}$/.test(trimmed)) {
+        const parts = trimmed.split(/[-/]/).map(Number);
+        d = new Date(parts[2], parts[1] - 1, parts[0], 23, 59, 59, 999);
+      } else {
+        d = new Date(trimmed);
+      }
+      return !isNaN(d.getTime()) && d.getTime() <= Date.now();
+    };
+
+    const isEventEndOrPostStatus = (st?: string | null): boolean => {
       if (!st || typeof st !== 'string') return false;
       const s = st.trim().toLowerCase();
-      return s === 'event ended' || s === 'event end' || s === 'event completed' || s === 'event complete';
+      return (
+        s === 'event ended' ||
+        s === 'event end' ||
+        s === 'event completed' ||
+        s === 'event complete' ||
+        s.includes('footage') ||
+        s.includes('production') ||
+        s.includes('editing') ||
+        s.includes('client acceptance') ||
+        s.includes('order closed') ||
+        s === 'closed' ||
+        s === 'completed'
+      );
+    };
+
+    const getLatestFootageLink = (orderId: string, leadId?: string): string | null => {
+      // 1. Check raw_footage sorted by uploaded_date desc (newest upload first)
+      const matchedRF = (rawFootage || []).filter((f: any) => 
+        (orderId && (f.order_id === orderId || f.tracking_id === orderId)) ||
+        (leadId && (f.tracking_id === leadId || f.order_id === leadId))
+      );
+      matchedRF.sort((a: any, b: any) => {
+        const tA = new Date(a.uploaded_date || a.created_at || 0).getTime();
+        const tB = new Date(b.uploaded_date || b.created_at || 0).getTime();
+        return tB - tA;
+      });
+      for (const rf of matchedRF) {
+        const link = rf.server_path || rf.drive_link;
+        if (link && typeof link === 'string' && link.trim() && link.trim() !== 'null' && link.trim() !== 'undefined' && link.trim() !== '—' && link.trim() !== 'N/A' && link.trim().length > 3) {
+          return link.trim();
+        }
+      }
+
+      // 2. Check operations drive links
+      const op = (operations || []).find((o: any) => o.order_id === orderId);
+      if (op) {
+        const opLinks = [
+          op.consolidated_drive_link,
+          op.Consolidated_Drive_Link,
+          op.raw_footage_drive_link,
+          op.Raw_Footage_Drive_Link,
+          op['Raw_Footage_Drive Link']
+        ];
+        for (const l of opLinks) {
+          if (l && typeof l === 'string' && l.trim() && l.trim() !== 'null' && l.trim() !== 'undefined' && l.trim() !== '—' && l.trim() !== 'N/A' && l.trim().length > 3) {
+            return l.trim();
+          }
+        }
+      }
+
+      // 3. Check staff assignments for this order
+      const matchedSA = (staffAssignments || []).filter((s: any) => s.order_id === orderId || (leadId && s.lead_id === leadId));
+      matchedSA.sort((a: any, b: any) => {
+        const tA = new Date(a.updated_at || a.created_at || 0).getTime();
+        const tB = new Date(b.updated_at || b.created_at || 0).getTime();
+        return tB - tA;
+      });
+      for (const s of matchedSA) {
+        if (s.raw_footage_link && typeof s.raw_footage_link === 'string' && s.raw_footage_link.trim() && s.raw_footage_link.trim() !== 'null' && s.raw_footage_link.trim().length > 3) {
+          return s.raw_footage_link.trim();
+        }
+        if (s.proofs) {
+          try {
+            const parsed = typeof s.proofs === 'string' ? JSON.parse(s.proofs) : s.proofs;
+            if (parsed?.raw_footage_link && typeof parsed.raw_footage_link === 'string' && parsed.raw_footage_link.trim() && parsed.raw_footage_link.trim() !== 'null' && parsed.raw_footage_link.trim().length > 3) {
+              return parsed.raw_footage_link.trim();
+            }
+          } catch (_) {}
+        }
+      }
+
+      return null;
     };
 
     const opsEventEndList: any[] = [];
-    const processedEventKeys = new Set<string>();
+    const processedOrderIds = new Set<string>();
 
-    // 1. From staffAssignments (where staff marked task_status as Event Ended/End)
-    (staffAssignments || []).forEach((sa: any) => {
-      if (!isEventEndStatus(sa.task_status)) return;
+    (orders || []).forEach((ord: any) => {
+      if (!ord || !ord.order_id) return;
+      if (processedOrderIds.has(ord.order_id)) return;
 
-      const ord = (orders || []).find((o: any) => o.order_id === sa.order_id);
-      const ld = (leads || []).find((l: any) => l.lead_id === (sa.lead_id || ord?.lead_id));
-      const op = (operations || []).find((o: any) => o.order_id === sa.order_id);
-      const rf = (rawFootage || []).find((f: any) => (sa.assignment_id && f.assignment_id === sa.assignment_id) || (sa.order_id && f.order_id === sa.order_id));
+      const stageLower = (ord.current_stage || ord.order_status || '').toLowerCase().trim();
+      if (stageLower.includes('cancel') || stageLower.includes('lost')) return;
 
-      let parsedProofs: any = {};
-      if (sa.proofs) {
-        try {
-          parsedProofs = typeof sa.proofs === 'string' ? JSON.parse(sa.proofs) : sa.proofs;
-        } catch (_) {}
-      }
+      const ld = (leads || []).find((l: any) => l.lead_id === ord.lead_id);
+      const op = (operations || []).find((o: any) => o.order_id === ord.order_id);
+      const saList = (staffAssignments || []).filter((s: any) => s.order_id === ord.order_id);
 
-      let footageLink = 
-        sa.raw_footage_link || 
-        parsedProofs?.raw_footage_link || 
-        rf?.server_path || 
-        op?.raw_footage_drive_link || 
-        op?.Raw_Footage_Drive_Link || 
-        op?.consolidated_drive_link || 
-        op?.Consolidated_Drive_Link || 
-        null;
+      let eventDate = ord.event_date || op?.event_date || ld?.event_date || null;
+      let eventEndDate = ld?.Event_End_Date || ld?.event_end_date || ord?.Event_End_Date || ord?.event_end_date || eventDate;
 
-      if (footageLink && (footageLink === 'null' || footageLink === 'undefined' || !String(footageLink).trim())) {
-        footageLink = null;
-      }
-
-      let eventDate = sa.event_date || ord?.event_date || ld?.event_date || null;
-      let eventName = sa.event_name || ord?.custom_event_name || ord?.event_type || ld?.custom_event_name || ld?.event_type || 'Event';
       if (ld?.events) {
         try {
           const leadEvents = deserializeLeadEvents(ld.events);
-          const matchedEv = leadEvents.find((e: any) => e.id === sa.event_id || (e.event_name && sa.event_name && e.event_name.trim().toLowerCase() === sa.event_name.trim().toLowerCase()));
-          if (matchedEv) {
-            if (matchedEv.event_date) eventDate = matchedEv.event_date;
-            if (matchedEv.event_name) eventName = matchedEv.event_name;
+          if (leadEvents && leadEvents.length > 0) {
+            const matchedEv = leadEvents.find((e: any) => e.event_name && ord.custom_event_name && e.event_name.trim().toLowerCase() === ord.custom_event_name.trim().toLowerCase()) || leadEvents[0];
+            if (matchedEv) {
+              if (matchedEv.event_date) eventDate = matchedEv.event_date;
+              if (matchedEv.Event_End_Date || (matchedEv as any).event_end_date) {
+                eventEndDate = matchedEv.Event_End_Date || (matchedEv as any).event_end_date;
+              }
+            }
           }
         } catch (_) {}
       }
 
-      const customerName = ord?.customer_name || ld?.customer_name || 'Client';
-      const key = sa.assignment_id || `${sa.order_id}_${eventName}_${sa.staff_name}`;
-      processedEventKeys.add(key);
+      const datePassed = isPastDate(eventEndDate) || isPastDate(eventDate);
+      const statusEnded = isEventEndOrPostStatus(ord.current_stage) || 
+        isEventEndOrPostStatus(ord.order_status) || 
+        isEventEndOrPostStatus(op?.event_status) ||
+        saList.some((s: any) => isEventEndOrPostStatus(s.task_status) || isEventEndOrPostStatus(s.assignment_status));
+
+      // Condition 1 & 2: Include all orders whose event end date has already passed,
+      // as well as orders whose status indicates the event has ended/completed.
+      if (!datePassed && !statusEnded) return;
+
+      processedOrderIds.add(ord.order_id);
+
+      const footageLink = getLatestFootageLink(ord.order_id, ord.lead_id);
+
+      // Collect real assigned crew names, avoiding "Unassigned" pollution
+      const rawCrew = [
+        ...saList.map((s: any) => s.staff_name),
+        op?.photographer_assigned,
+        op?.videographer_assigned,
+        op?.drone_operator_assigned,
+        op?.assistant_assigned
+      ].filter((n: any) => n && typeof n === 'string' && n.trim() && n.trim().toLowerCase() !== 'unassigned');
+
+      const uniqueCrew = Array.from(new Set(rawCrew.map((n: string) => n.trim())));
+      const staffName = uniqueCrew.length > 0 
+        ? uniqueCrew.join(', ') 
+        : (saList[0]?.staff_name || ord.sales_person || 'Unassigned');
+
+      // Event End Status: Show actual current status so user sees if it's ongoing or not completed
+      const saTaskStatus = saList.find((s: any) => s.task_status && s.task_status !== 'Assigned')?.task_status;
+      const eventEndStatus = saTaskStatus || op?.event_status || ord.current_stage || ord.order_status || 'Event Ended';
+
+      const eventName = ord.custom_event_name || ord.event_type || ld?.custom_event_name || ld?.event_type || 'Event';
+      const customerName = ord.customer_name || ld?.customer_name || 'Client';
 
       opsEventEndList.push({
-        id: key,
-        assignment_id: sa.assignment_id,
-        order_id: sa.order_id,
-        lead_id: sa.lead_id || ord?.lead_id,
+        id: `event_end_${ord.order_id}`,
+        order_id: ord.order_id,
+        lead_id: ord.lead_id,
         customer_name: customerName,
         event_name: eventName,
         event_date: eventDate,
-        event_end_status: sa.task_status || 'Event Ended',
-        staff_name: sa.staff_name || 'Unassigned',
-        footage_link: footageLink,
-        rawOrder: ord,
-        rawLead: ld,
-        rawOps: op,
-        rawSA: sa
-      });
-    });
-
-    // 2. From orders or operations where current_stage / event_status is Event Ended (fallback if not already covered)
-    (orders || []).forEach((ord: any) => {
-      const op = (operations || []).find((o: any) => o.order_id === ord.order_id);
-      const isOrdEnd = isEventEndStatus(ord.current_stage) || isEventEndStatus(ord.order_status);
-      const isOpEnd = isEventEndStatus(op?.event_status);
-
-      if (!isOrdEnd && !isOpEnd) return;
-
-      const eventName = ord.custom_event_name || ord.event_type || 'Event';
-      const key = `order_${ord.order_id}_${eventName}`;
-      if (Array.from(processedEventKeys).some(k => k.includes(ord.order_id))) return;
-      processedEventKeys.add(key);
-
-      const ld = (leads || []).find((l: any) => l.lead_id === ord.lead_id);
-      const rf = (rawFootage || []).find((f: any) => f.order_id === ord.order_id);
-      let footageLink = rf?.server_path || op?.raw_footage_drive_link || op?.Raw_Footage_Drive_Link || op?.consolidated_drive_link || op?.Consolidated_Drive_Link || null;
-      if (footageLink && (footageLink === 'null' || footageLink === 'undefined' || !String(footageLink).trim())) {
-        footageLink = null;
-      }
-
-      const crewList = [op?.photographer_assigned, op?.videographer_assigned, op?.drone_operator_assigned, op?.assistant_assigned].filter(Boolean);
-      const staffName = crewList.length > 0 ? crewList.join(', ') : (ord.sales_person || 'Assigned Crew');
-
-      opsEventEndList.push({
-        id: key,
-        order_id: ord.order_id,
-        lead_id: ord.lead_id,
-        customer_name: ord.customer_name || ld?.customer_name || 'Client',
-        event_name: eventName,
-        event_date: ord.event_date || ld?.event_date || null,
-        event_end_status: ord.current_stage || op?.event_status || 'Event Ended',
+        event_end_status: eventEndStatus,
         staff_name: staffName,
         footage_link: footageLink,
         rawOrder: ord,
         rawLead: ld,
-        rawOps: op
+        rawOps: op,
+        rawSAs: saList
       });
+    });
+
+    // Sort most recent ended events first
+    opsEventEndList.sort((a, b) => {
+      const tA = new Date(a.event_date || 0).getTime();
+      const tB = new Date(b.event_date || 0).getTime();
+      return tB - tA;
     });
 
     // PRODUCTION - STRICTLY PRODUCTION-ONLY DATA & EVENT-LEVEL ISOLATED
@@ -1650,7 +1723,8 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
               </span>
             );
           } 
-        }
+        },
+        actionCol
       ];
     }
 
@@ -1679,7 +1753,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       case 'ops_completed': return { title: 'Total Completed Shoot Projects', totalLabel: 'Completed Count', totalValue: `${modalData.length}`, accentColor: 'emerald' as const, filterDescription: 'Shoot assignments successfully completed on location.' };
       case 'ops_upcoming': return { title: 'Total Upcoming Shoots', totalLabel: 'Upcoming Count', totalValue: `${modalData.length}`, accentColor: 'blue' as const, filterDescription: 'Scheduled shoots with future event dates.' };
       case 'ops_scheduled': return { title: 'Total Scheduled Shoots', totalLabel: 'Scheduled Count', totalValue: `${modalData.length}`, accentColor: 'blue' as const, filterDescription: 'Events where crew, equipment, and shoot timing have been scheduled.' };
-      case 'ops_event_end': return { title: 'Event End Details', totalLabel: 'Total Events Reached Event End', totalValue: `${modalData.length}`, accentColor: 'purple' as const, filterDescription: 'Detailed view of events that have reached the Event End stage/status in Operations.' };
+      case 'ops_event_end': return { title: 'Event End Details', totalLabel: 'Total Events Reached Event End / Passed', totalValue: `${modalData.length}`, accentColor: 'purple' as const, filterDescription: 'Detailed view of events whose event end date has passed or have reached the Event End stage/status in Operations.' };
       case 'overview_ops': return { title: 'Operations Pipeline Breakdown', totalLabel: 'Total Operations Count', totalValue: `${modalData.length}`, accentColor: 'blue' as const, filterDescription: 'Comprehensive overview of all operations tasks and event shoots.' };
 
       case 'prod_total': return { title: 'Total Production Projects', totalLabel: 'Total Projects Count', totalValue: `${modalData.length}`, accentColor: 'purple' as const, filterDescription: 'All post-production projects across all editing workflows.' };
