@@ -1141,6 +1141,7 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const lastFetchTimeRef = useRef<number>(0);
   const activeFetchPromiseRef = useRef<Promise<void> | null>(null);
   const isCheckingRemindersRef = useRef<boolean>(false);
+  const inFlightPaymentActionsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     currentUserRef.current = currentUser;
@@ -3252,6 +3253,15 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
   const fetchFromDb = async (showLoader = false) => {
     if (!supabaseClient) return;
 
+    // Throttle non-forced background fetches to prevent flooding and triggering rate limits
+    const now = Date.now();
+    if (!showLoader && isFetchingRef.current) {
+      return activeFetchPromiseRef.current || Promise.resolve();
+    }
+    if (!showLoader && now - lastFetchTimeRef.current < 8000) {
+      return activeFetchPromiseRef.current || Promise.resolve();
+    }
+
     if (showLoader) setIsDataLoading(true);
 
     if (activeFetchPromiseRef.current) {
@@ -4201,17 +4211,17 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Background polling fallback every 4 seconds to guarantee immediate synchronization with external DB updates
+    // Background polling fallback every 60 seconds as a safety net (Realtime subscriptions stream updates immediately)
     const pollingInterval = setInterval(() => {
       if (document.visibilityState !== 'visible') {
         return; // Skip polling if tab is hidden
       }
       const now = Date.now();
-      if (now - lastFetchTimeRef.current < 4000) {
+      if (now - lastFetchTimeRef.current < 45000) {
         return; // Skip polling if we fetched recently
       }
       fetchFromDb(false).catch(e => console.warn('fetchFromDb polling failed:', e?.message || e));
-    }, 4000);
+    }, 60000);
 
     // Realtime subscriptions handle granular updates. No global sync needed.
     return () => {
@@ -7751,320 +7761,369 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
   };
 
   const approvePayment = async (historyId: string, orderId: string) => {
-    let targetHistory = paymentHistory.find(h => 
-      h.id === historyId || 
-      h.payment_history_id === historyId || 
-      String(h.id) === String(historyId) ||
-      (h.transaction_id && String(h.transaction_id) === String(historyId))
-    );
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(historyId);
-    if (!targetHistory && supabaseClient && isUuid) {
-      const { data } = await supabaseClient.from('payment_history').select('*').eq('id', historyId).maybeSingle();
-      if (data) targetHistory = data;
+    if (!historyId) return;
+    if (inFlightPaymentActionsRef.current.has(historyId)) {
+      console.log(`[approvePayment] historyId ${historyId} is already being processed.`);
+      return;
     }
+    inFlightPaymentActionsRef.current.add(historyId);
 
-    const resolvedOrderId = orderId || targetHistory?.order_id || '';
-    const allResolvedIds = new Set(getAllMatchingOrderIds(resolvedOrderId, targetHistory?.order_id, orders, leads));
-
-    const rawNotes = (targetHistory?.notes || '')
-      .replace(/ - Waiting for Approval/g, '')
-      .replace(/Waiting for Approval/g, '')
-      .replace(/ - Approved/g, '')
-      .replace(/Approved by Business Owner/g, '')
-      .replace(/ - Rejected/g, '')
-      .replace(/Rejected by Business Owner/g, '')
-      .trim();
-
-    const cleanNotes = rawNotes ? `${rawNotes} - Approved` : 'Approved by Business Owner';
-
-    const updatePayload = { 
-      order_id: resolvedOrderId || targetHistory?.order_id,
-      transaction_id: targetHistory?.transaction_id || undefined,
-      approval_status: 'Approved',
-      notes: cleanNotes
-    };
-
-    // 1. Direct Supabase update if client available
-    if (supabaseClient && isUuid) {
-      const { error: sbErr } = await supabaseClient
-        .from('payment_history')
-        .update(updatePayload)
-        .eq('id', historyId);
-      if (sbErr) {
-        console.warn("[Direct Supabase Approval Update Warning]:", sbErr.message);
-      }
-    }
-
-    // 2. Server API pushUpdate for persistence, self-healing & Google Sheets backup
-    const res = await pushUpdate('payment_history', 'id', historyId, updatePayload);
-    if (!res?.success && res?.error) {
-      console.error("Failed to update approval in DB:", res.error);
-      throw new Error(`Failed to approve payment: ${res.error}`);
-    }
-
-    // 3. Verify the updated row from database
-    if (supabaseClient && isUuid) {
-      try {
-        const { data: verifiedData } = await supabaseClient
-          .from('payment_history')
-          .select('*')
-          .eq('id', historyId)
-          .maybeSingle();
-        if (verifiedData) {
-          targetHistory = { ...targetHistory, ...verifiedData };
-        }
-      } catch (_) {}
-    }
-
-    // 4. Update React payment history state
-    setPaymentHistory(prev => prev.map(h => (h.id === historyId || h.payment_history_id === historyId || String(h.id) === String(historyId)) ? { ...h, approval_status: 'Approved', notes: cleanNotes } : h));
-
-    // 5. Update local storage caches
     try {
-      const saved = localStorage.getItem('pending_payment_approvals');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        const filtered = (Array.isArray(parsed) ? parsed : []).filter((p: any) => 
-          String(p.id) !== String(historyId) && String(p.payment_history_id) !== String(historyId)
-        );
-        localStorage.setItem('pending_payment_approvals', JSON.stringify(filtered));
+      let targetHistory = paymentHistory.find(h => 
+        h.id === historyId || 
+        h.payment_history_id === historyId || 
+        String(h.id) === String(historyId) ||
+        (h.transaction_id && String(h.transaction_id) === String(historyId))
+      );
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(historyId);
+      if (!targetHistory && supabaseClient && isUuid) {
+        const { data } = await supabaseClient.from('payment_history').select('*').eq('id', historyId).maybeSingle();
+        if (data) targetHistory = data;
       }
 
-      const rejectedSaved = localStorage.getItem('rejected_payment_history_ids');
-      if (rejectedSaved) {
-        const rejectedSet = new Set(JSON.parse(rejectedSaved));
-        rejectedSet.delete(historyId);
-        if (targetHistory?.payment_history_id) rejectedSet.delete(targetHistory.payment_history_id);
-        if (targetHistory?.id) rejectedSet.delete(targetHistory.id);
-        localStorage.setItem('rejected_payment_history_ids', JSON.stringify(Array.from(rejectedSet)));
+      // Check if already approved
+      if (targetHistory && targetHistory.approval_status === 'Approved') {
+        console.log(`[approvePayment] Payment ${historyId} is already approved.`);
+        return;
       }
 
-      const approvedSaved = localStorage.getItem('approved_payment_history_ids');
-      const approvedSet = new Set(approvedSaved ? JSON.parse(approvedSaved) : []);
-      approvedSet.add(historyId);
-      if (targetHistory?.payment_history_id) approvedSet.add(targetHistory.payment_history_id);
-      if (targetHistory?.id) approvedSet.add(targetHistory.id);
-      localStorage.setItem('approved_payment_history_ids', JSON.stringify(Array.from(approvedSet)));
-    } catch (_) {}
+      const resolvedOrderId = orderId || targetHistory?.order_id || '';
+      const allResolvedIds = new Set(getAllMatchingOrderIds(resolvedOrderId, targetHistory?.order_id, orders, leads));
 
-    // 6. Recalculate parent order and payment status
-    const amountToApply = Number(targetHistory?.amount) || 0;
-    const targetPayment = augmentedPayments.find(p => allResolvedIds.has(p.order_id) || (p.lead_id && allResolvedIds.has(p.lead_id))) || payments.find(p => allResolvedIds.has(p.order_id) || (p.lead_id && allResolvedIds.has(p.lead_id)));
-    const targetOrder = augmentedOrders.find(o => allResolvedIds.has(o.order_id) || (o.lead_id && allResolvedIds.has(o.lead_id))) || orders.find(o => allResolvedIds.has(o.order_id) || (o.lead_id && allResolvedIds.has(o.lead_id)));
+      const rawNotes = (targetHistory?.notes || '')
+        .replace(/ - Waiting for Approval/g, '')
+        .replace(/Waiting for Approval/g, '')
+        .replace(/ - Approved/g, '')
+        .replace(/Approved by Business Owner/g, '')
+        .replace(/ - Rejected/g, '')
+        .replace(/Rejected by Business Owner/g, '')
+        .trim();
 
-    const updatedHistoryList = paymentHistory.map(h => 
-      (h.id === historyId || h.payment_history_id === historyId || String(h.id) === String(historyId)) 
-        ? { ...h, approval_status: 'Approved', notes: cleanNotes } 
-        : h
-    );
+      const cleanNotes = rawNotes ? `${rawNotes} - Approved` : 'Approved by Business Owner';
 
-    const remainingPending = updatedHistoryList.some(h => 
-      allResolvedIds.has(String(h.order_id || '').trim()) && 
-      (String(h.id) !== String(historyId) && String(h.payment_history_id) !== String(historyId)) && 
-      h.approval_status !== 'Rejected' &&
-      (h.approval_status === 'Waiting for Approval' || (h.notes && h.notes.includes('Waiting for Approval')))
-    );
-
-    const approvedHistories = updatedHistoryList.filter(h => 
-      allResolvedIds.has(String(h.order_id || '').trim()) && 
-      h.approval_status !== 'Rejected' && 
-      (h.approval_status === 'Approved' || (!h.notes || (!h.notes.includes('Waiting for Approval') && !h.notes.includes('Rejected'))))
-    );
-
-    const totalApprovedReceived = approvedHistories.reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
-    const quotationAmt = targetPayment?.quotation_amount || targetOrder?.quotation_amount || 0;
-    const outstanding = Math.max(0, quotationAmt - totalApprovedReceived);
-    const isFullyPaid = outstanding === 0 && quotationAmt > 0;
-
-    const newPaymentStatus: PaymentStatus = remainingPending 
-      ? 'Waiting for Approval' 
-      : (isFullyPaid ? 'Fully Paid' : (totalApprovedReceived > 0 ? 'Partially Paid' : 'Pending'));
-
-    if (targetPayment) {
-      const isAdvance = targetHistory?.payment_type === 'Advance Payment' || (targetPayment.advance_received || 0) === 0;
-      let newAdvance = Number(targetPayment.advance_received) || 0;
-      let newFinal = Number(targetPayment.final_payment_received) || 0;
-
-      if (isAdvance && newAdvance === 0) {
-        newAdvance = Math.min(quotationAmt, totalApprovedReceived);
-      } else {
-        newFinal = Math.max(0, totalApprovedReceived - newAdvance);
-      }
-
-      if (newAdvance + newFinal !== totalApprovedReceived) {
-        if (newAdvance === 0) newAdvance = Math.min(quotationAmt, totalApprovedReceived);
-        else newFinal = Math.max(0, totalApprovedReceived - newAdvance);
-      }
-
-      const paymentUpdates = {
-        advance_received: newAdvance,
-        final_payment_received: newFinal,
-        balance_due: outstanding,
-        payment_status: newPaymentStatus
+      const updatePayload = { 
+        order_id: resolvedOrderId || targetHistory?.order_id,
+        transaction_id: targetHistory?.transaction_id || undefined,
+        approval_status: 'Approved',
+        notes: cleanNotes
       };
 
-      await pushUpdate('payments', 'payment_id', targetPayment.payment_id, paymentUpdates);
-      setPayments(prev => prev.map(p => p.payment_id === targetPayment.payment_id ? { ...p, ...paymentUpdates } : p));
-    }
+      // 1. Direct Supabase update with select confirmation if client available
+      let dbConfirmed = false;
+      if (supabaseClient && isUuid) {
+        const { data: updatedRows, error: sbErr } = await supabaseClient
+          .from('payment_history')
+          .update(updatePayload)
+          .eq('id', historyId)
+          .select();
+        if (!sbErr && updatedRows && updatedRows.length > 0) {
+          dbConfirmed = true;
+          targetHistory = { ...targetHistory, ...updatedRows[0] };
+          // Background sheet backup without blocking approval
+          pushUpdate('payment_history', 'id', historyId, updatePayload).catch(e => console.warn('[pushUpdate background warning]:', e));
+        } else if (sbErr) {
+          console.warn("[Direct Supabase Approval Update Warning]:", sbErr.message);
+        }
+      }
 
-    if (targetOrder) {
-      await pushUpdate('orders', 'order_id', targetOrder.order_id, {
-        balance_amount: outstanding,
-        advance_received: totalApprovedReceived,
-        updated_by: currentUserName,
-        updated_at: new Date().toISOString()
-      });
-      setOrders(prev => prev.map(o => o.order_id === targetOrder.order_id ? { ...o, balance_amount: outstanding, advance_received: totalApprovedReceived } : o));
-    }
+      // 2. Server API pushUpdate fallback if not directly confirmed
+      if (!dbConfirmed) {
+        const res = await pushUpdate('payment_history', 'id', historyId, updatePayload);
+        if (!res?.success && res?.error) {
+          console.error("Failed to update approval in DB:", res.error);
+          throw new Error(`Failed to approve payment: ${res.error}`);
+        }
+      }
 
-    logActivity(`Approved payment of ₹${amountToApply} for Order ${resolvedOrderId}. Status: ${newPaymentStatus}`, 'Finance', resolvedOrderId);
+      // 3. Update React payment history state immediately
+      setPaymentHistory(prev => prev.map(h => (h.id === historyId || h.payment_history_id === historyId || String(h.id) === String(historyId)) ? { ...h, approval_status: 'Approved', notes: cleanNotes } : h));
 
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('payment-updated', { detail: { orderId: resolvedOrderId } }));
-      window.dispatchEvent(new CustomEvent('refresh-pending-payments', { detail: { orderId: resolvedOrderId } }));
+      // 4. Update local storage caches
+      try {
+        const saved = localStorage.getItem('pending_payment_approvals');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          const filtered = (Array.isArray(parsed) ? parsed : []).filter((p: any) => 
+            String(p.id) !== String(historyId) && String(p.payment_history_id) !== String(historyId)
+          );
+          localStorage.setItem('pending_payment_approvals', JSON.stringify(filtered));
+        }
+
+        const rejectedSaved = localStorage.getItem('rejected_payment_history_ids');
+        if (rejectedSaved) {
+          const rejectedSet = new Set(JSON.parse(rejectedSaved));
+          rejectedSet.delete(historyId);
+          if (targetHistory?.payment_history_id) rejectedSet.delete(targetHistory.payment_history_id);
+          if (targetHistory?.id) rejectedSet.delete(targetHistory.id);
+          localStorage.setItem('rejected_payment_history_ids', JSON.stringify(Array.from(rejectedSet)));
+        }
+
+        const approvedSaved = localStorage.getItem('approved_payment_history_ids');
+        const approvedSet = new Set(approvedSaved ? JSON.parse(approvedSaved) : []);
+        approvedSet.add(historyId);
+        if (targetHistory?.payment_history_id) approvedSet.add(targetHistory.payment_history_id);
+        if (targetHistory?.id) approvedSet.add(targetHistory.id);
+        localStorage.setItem('approved_payment_history_ids', JSON.stringify(Array.from(approvedSet)));
+      } catch (_) {}
+
+      // 5. Recalculate parent order and payment status
+      const amountToApply = Number(targetHistory?.amount) || 0;
+      const targetPayment = augmentedPayments.find(p => allResolvedIds.has(p.order_id) || (p.lead_id && allResolvedIds.has(p.lead_id))) || payments.find(p => allResolvedIds.has(p.order_id) || (p.lead_id && allResolvedIds.has(p.lead_id)));
+      const targetOrder = augmentedOrders.find(o => allResolvedIds.has(o.order_id) || (o.lead_id && allResolvedIds.has(o.lead_id))) || orders.find(o => allResolvedIds.has(o.order_id) || (o.lead_id && allResolvedIds.has(o.lead_id)));
+
+      const updatedHistoryList = paymentHistory.map(h => 
+        (h.id === historyId || h.payment_history_id === historyId || String(h.id) === String(historyId)) 
+          ? { ...h, approval_status: 'Approved', notes: cleanNotes } 
+          : h
+      );
+
+      const remainingPending = updatedHistoryList.some(h => 
+        allResolvedIds.has(String(h.order_id || '').trim()) && 
+        (String(h.id) !== String(historyId) && String(h.payment_history_id) !== String(historyId)) && 
+        h.approval_status !== 'Rejected' &&
+        (h.approval_status === 'Waiting for Approval' || (h.notes && h.notes.includes('Waiting for Approval')))
+      );
+
+      const approvedHistories = updatedHistoryList.filter(h => 
+        allResolvedIds.has(String(h.order_id || '').trim()) && 
+        h.approval_status !== 'Rejected' && 
+        (h.approval_status === 'Approved' || (!h.notes || (!h.notes.includes('Waiting for Approval') && !h.notes.includes('Rejected'))))
+      );
+
+      const totalApprovedReceived = approvedHistories.reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
+      const quotationAmt = targetPayment?.quotation_amount || targetOrder?.quotation_amount || 0;
+      const outstanding = Math.max(0, quotationAmt - totalApprovedReceived);
+      const isFullyPaid = outstanding === 0 && quotationAmt > 0;
+
+      const newPaymentStatus: PaymentStatus = remainingPending 
+        ? 'Waiting for Approval' 
+        : (isFullyPaid ? 'Fully Paid' : (totalApprovedReceived > 0 ? 'Partially Paid' : 'Pending'));
+
+      const parallelTasks: Promise<any>[] = [];
+
+      if (targetPayment) {
+        const isAdvance = targetHistory?.payment_type === 'Advance Payment' || (targetPayment.advance_received || 0) === 0;
+        let newAdvance = Number(targetPayment.advance_received) || 0;
+        let newFinal = Number(targetPayment.final_payment_received) || 0;
+
+        if (isAdvance && newAdvance === 0) {
+          newAdvance = Math.min(quotationAmt, totalApprovedReceived);
+        } else {
+          newFinal = Math.max(0, totalApprovedReceived - newAdvance);
+        }
+
+        if (newAdvance + newFinal !== totalApprovedReceived) {
+          if (newAdvance === 0) newAdvance = Math.min(quotationAmt, totalApprovedReceived);
+          else newFinal = Math.max(0, totalApprovedReceived - newAdvance);
+        }
+
+        const paymentUpdates = {
+          advance_received: newAdvance,
+          final_payment_received: newFinal,
+          balance_due: outstanding,
+          payment_status: newPaymentStatus
+        };
+
+        parallelTasks.push(pushUpdate('payments', 'payment_id', targetPayment.payment_id, paymentUpdates));
+        setPayments(prev => prev.map(p => p.payment_id === targetPayment.payment_id ? { ...p, ...paymentUpdates } : p));
+      }
+
+      if (targetOrder) {
+        parallelTasks.push(pushUpdate('orders', 'order_id', targetOrder.order_id, {
+          balance_amount: outstanding,
+          advance_received: totalApprovedReceived,
+          updated_by: currentUserName,
+          updated_at: new Date().toISOString()
+        }));
+        setOrders(prev => prev.map(o => o.order_id === targetOrder.order_id ? { ...o, balance_amount: outstanding, advance_received: totalApprovedReceived } : o));
+      }
+
+      if (parallelTasks.length > 0) {
+        await Promise.all(parallelTasks);
+      }
+
+      logActivity(`Approved payment of ₹${amountToApply} for Order ${resolvedOrderId}. Status: ${newPaymentStatus}`, 'Finance', resolvedOrderId);
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('payment-updated', { detail: { orderId: resolvedOrderId } }));
+        window.dispatchEvent(new CustomEvent('refresh-pending-payments', { detail: { orderId: resolvedOrderId } }));
+      }
+    } finally {
+      inFlightPaymentActionsRef.current.delete(historyId);
     }
   };
 
   const rejectPayment = async (historyId: string, orderId: string) => {
-    let targetHistory = paymentHistory.find(h => 
-      h.id === historyId || 
-      h.payment_history_id === historyId || 
-      String(h.id) === String(historyId) ||
-      (h.transaction_id && String(h.transaction_id) === String(historyId))
-    );
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(historyId);
-    if (!targetHistory && supabaseClient && isUuid) {
-      const { data } = await supabaseClient.from('payment_history').select('*').eq('id', historyId).maybeSingle();
-      if (data) targetHistory = data;
+    if (!historyId) return;
+    if (inFlightPaymentActionsRef.current.has(historyId)) {
+      console.log(`[rejectPayment] historyId ${historyId} is already being processed.`);
+      return;
     }
+    inFlightPaymentActionsRef.current.add(historyId);
 
-    const resolvedOrderId = orderId || targetHistory?.order_id || '';
-    const allResolvedIds = new Set(getAllMatchingOrderIds(resolvedOrderId, targetHistory?.order_id, orders, leads));
-
-    // Strip previous status tags and append - Rejected
-    const rawNotes = (targetHistory?.notes || '')
-      .replace(/ - Waiting for Approval/g, '')
-      .replace(/Waiting for Approval/g, '')
-      .replace(/ - Approved/g, '')
-      .replace(/Approved by Business Owner/g, '')
-      .replace(/ - Rejected/g, '')
-      .replace(/Rejected by Business Owner/g, '')
-      .trim();
-
-    const cleanNotes = rawNotes ? `${rawNotes} - Rejected` : 'Rejected by Business Owner';
-
-    const updatePayload = { 
-      order_id: resolvedOrderId || targetHistory?.order_id,
-      approval_status: 'Rejected',
-      notes: cleanNotes
-    };
-
-    // 1. Direct Supabase update if client available
-    if (supabaseClient && isUuid) {
-      const { error: sbErr } = await supabaseClient
-        .from('payment_history')
-        .update(updatePayload)
-        .eq('id', historyId);
-      if (sbErr) {
-        console.warn("[Direct Supabase Rejection Update Warning]:", sbErr.message);
-      }
-    }
-
-    // 2. Server API pushUpdate for persistence, self-healing & Google Sheets backup
-    const res = await pushUpdate('payment_history', 'id', historyId, updatePayload);
-    if (!res?.success && res?.error) {
-      console.error("Failed to update rejection in DB:", res.error);
-      throw new Error(`Failed to reject payment: ${res.error}`);
-    }
-
-    // 3. Update React payment history state
-    setPaymentHistory(prev => prev.map(h => (h.id === historyId || h.payment_history_id === historyId || String(h.id) === String(historyId)) ? { ...h, approval_status: 'Rejected', notes: cleanNotes } : h));
-
-    // 4. Update local storage caches
     try {
-      const saved = localStorage.getItem('pending_payment_approvals');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        const filtered = parsed.filter((p: any) => p.id !== historyId && p.payment_history_id !== historyId);
-        localStorage.setItem('pending_payment_approvals', JSON.stringify(filtered));
+      let targetHistory = paymentHistory.find(h => 
+        h.id === historyId || 
+        h.payment_history_id === historyId || 
+        String(h.id) === String(historyId) ||
+        (h.transaction_id && String(h.transaction_id) === String(historyId))
+      );
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(historyId);
+      if (!targetHistory && supabaseClient && isUuid) {
+        const { data } = await supabaseClient.from('payment_history').select('*').eq('id', historyId).maybeSingle();
+        if (data) targetHistory = data;
       }
 
-      const rejectedSaved = localStorage.getItem('rejected_payment_history_ids');
-      const rejectedSet = new Set(rejectedSaved ? JSON.parse(rejectedSaved) : []);
-      rejectedSet.add(historyId);
-      if (targetHistory?.payment_history_id) rejectedSet.add(targetHistory.payment_history_id);
-      if (targetHistory?.id) rejectedSet.add(targetHistory.id);
-      localStorage.setItem('rejected_payment_history_ids', JSON.stringify(Array.from(rejectedSet)));
-
-      const approvedSaved = localStorage.getItem('approved_payment_history_ids');
-      if (approvedSaved) {
-        const approvedSet = new Set(JSON.parse(approvedSaved));
-        approvedSet.delete(historyId);
-        if (targetHistory?.payment_history_id) approvedSet.delete(targetHistory.payment_history_id);
-        if (targetHistory?.id) approvedSet.delete(targetHistory.id);
-        localStorage.setItem('approved_payment_history_ids', JSON.stringify(Array.from(approvedSet)));
+      // Check if already rejected
+      if (targetHistory && targetHistory.approval_status === 'Rejected') {
+        console.log(`[rejectPayment] Payment ${historyId} is already rejected.`);
+        return;
       }
-    } catch (_) {}
 
-    // 5. Recalculate parent order and payment status
-    const updatedHistoryList = paymentHistory.map(h => 
-      (h.id === historyId || h.payment_history_id === historyId || String(h.id) === String(historyId)) 
-        ? { ...h, approval_status: 'Rejected', notes: cleanNotes } 
-        : h
-    );
+      const resolvedOrderId = orderId || targetHistory?.order_id || '';
+      const allResolvedIds = new Set(getAllMatchingOrderIds(resolvedOrderId, targetHistory?.order_id, orders, leads));
 
-    const targetPayment = augmentedPayments.find(p => allResolvedIds.has(p.order_id) || (p.lead_id && allResolvedIds.has(p.lead_id))) || payments.find(p => allResolvedIds.has(p.order_id) || (p.lead_id && allResolvedIds.has(p.lead_id)));
-    const targetOrder = augmentedOrders.find(o => allResolvedIds.has(o.order_id) || (o.lead_id && allResolvedIds.has(o.lead_id))) || orders.find(o => allResolvedIds.has(o.order_id) || (o.lead_id && allResolvedIds.has(o.lead_id)));
+      // Strip previous status tags and append - Rejected
+      const rawNotes = (targetHistory?.notes || '')
+        .replace(/ - Waiting for Approval/g, '')
+        .replace(/Waiting for Approval/g, '')
+        .replace(/ - Approved/g, '')
+        .replace(/Approved by Business Owner/g, '')
+        .replace(/ - Rejected/g, '')
+        .replace(/Rejected by Business Owner/g, '')
+        .trim();
 
-    const remainingPending = updatedHistoryList.some(h => 
-      allResolvedIds.has(String(h.order_id || '').trim()) && 
-      (h.id !== historyId && h.payment_history_id !== historyId && String(h.id) !== String(historyId)) && 
-      h.approval_status !== 'Rejected' &&
-      (h.approval_status === 'Waiting for Approval' || (h.notes && h.notes.includes('Waiting for Approval')))
-    );
+      const cleanNotes = rawNotes ? `${rawNotes} - Rejected` : 'Rejected by Business Owner';
 
-    const approvedHistories = updatedHistoryList.filter(h => 
-      allResolvedIds.has(String(h.order_id || '').trim()) && 
-      h.approval_status !== 'Rejected' && 
-      (h.approval_status === 'Approved' || (!h.notes || (!h.notes.includes('Waiting for Approval') && !h.notes.includes('Rejected'))))
-    );
-
-    const totalApprovedReceived = approvedHistories.reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
-    const quotationAmt = targetPayment?.quotation_amount || targetOrder?.quotation_amount || 0;
-    const outstanding = Math.max(0, quotationAmt - totalApprovedReceived);
-    const isFullyPaid = outstanding === 0 && quotationAmt > 0;
-
-    const newPaymentStatus: PaymentStatus = remainingPending 
-      ? 'Waiting for Approval' 
-      : (isFullyPaid ? 'Fully Paid' : (totalApprovedReceived > 0 ? 'Partially Paid' : 'Pending'));
-
-    if (targetPayment) {
-      const paymentUpdates = {
-        advance_received: Math.min(quotationAmt, totalApprovedReceived),
-        final_payment_received: Math.max(0, totalApprovedReceived - Math.min(quotationAmt, totalApprovedReceived)),
-        balance_due: outstanding,
-        payment_status: newPaymentStatus
+      const updatePayload = { 
+        order_id: resolvedOrderId || targetHistory?.order_id,
+        approval_status: 'Rejected',
+        notes: cleanNotes
       };
 
-      await pushUpdate('payments', 'payment_id', targetPayment.payment_id, paymentUpdates);
-      setPayments(prev => prev.map(p => p.payment_id === targetPayment.payment_id ? { ...p, ...paymentUpdates } : p));
-    }
+      // 1. Direct Supabase update if client available
+      let dbConfirmed = false;
+      if (supabaseClient && isUuid) {
+        const { data: updatedRows, error: sbErr } = await supabaseClient
+          .from('payment_history')
+          .update(updatePayload)
+          .eq('id', historyId)
+          .select();
+        if (!sbErr && updatedRows && updatedRows.length > 0) {
+          dbConfirmed = true;
+          targetHistory = { ...targetHistory, ...updatedRows[0] };
+          pushUpdate('payment_history', 'id', historyId, updatePayload).catch(e => console.warn('[pushUpdate background warning]:', e));
+        } else if (sbErr) {
+          console.warn("[Direct Supabase Rejection Update Warning]:", sbErr.message);
+        }
+      }
 
-    if (targetOrder) {
-      await pushUpdate('orders', 'order_id', targetOrder.order_id, {
-        balance_amount: outstanding,
-        advance_received: totalApprovedReceived,
-        updated_by: currentUserName,
-        updated_at: new Date().toISOString()
-      });
-      setOrders(prev => prev.map(o => o.order_id === targetOrder.order_id ? { ...o, balance_amount: outstanding, advance_received: totalApprovedReceived } : o));
-    }
-    
-    logActivity(`Rejected payment of ₹${Number(targetHistory?.amount || 0)} for Order ${resolvedOrderId}`, 'Finance', resolvedOrderId);
+      // 2. Server API pushUpdate fallback
+      if (!dbConfirmed) {
+        const res = await pushUpdate('payment_history', 'id', historyId, updatePayload);
+        if (!res?.success && res?.error) {
+          console.error("Failed to update rejection in DB:", res.error);
+          throw new Error(`Failed to reject payment: ${res.error}`);
+        }
+      }
 
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('payment-updated', { detail: { orderId: resolvedOrderId } }));
-      window.dispatchEvent(new CustomEvent('refresh-pending-payments', { detail: { orderId: resolvedOrderId } }));
+      // 3. Update React payment history state immediately
+      setPaymentHistory(prev => prev.map(h => (h.id === historyId || h.payment_history_id === historyId || String(h.id) === String(historyId)) ? { ...h, approval_status: 'Rejected', notes: cleanNotes } : h));
+
+      // 4. Update local storage caches
+      try {
+        const saved = localStorage.getItem('pending_payment_approvals');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          const filtered = parsed.filter((p: any) => p.id !== historyId && p.payment_history_id !== historyId);
+          localStorage.setItem('pending_payment_approvals', JSON.stringify(filtered));
+        }
+
+        const rejectedSaved = localStorage.getItem('rejected_payment_history_ids');
+        const rejectedSet = new Set(rejectedSaved ? JSON.parse(rejectedSaved) : []);
+        rejectedSet.add(historyId);
+        if (targetHistory?.payment_history_id) rejectedSet.add(targetHistory.payment_history_id);
+        if (targetHistory?.id) rejectedSet.add(targetHistory.id);
+        localStorage.setItem('rejected_payment_history_ids', JSON.stringify(Array.from(rejectedSet)));
+
+        const approvedSaved = localStorage.getItem('approved_payment_history_ids');
+        if (approvedSaved) {
+          const approvedSet = new Set(JSON.parse(approvedSaved));
+          approvedSet.delete(historyId);
+          if (targetHistory?.payment_history_id) approvedSet.delete(targetHistory.payment_history_id);
+          if (targetHistory?.id) approvedSet.delete(targetHistory.id);
+          localStorage.setItem('approved_payment_history_ids', JSON.stringify(Array.from(approvedSet)));
+        }
+      } catch (_) {}
+
+      // 5. Recalculate parent order and payment status
+      const updatedHistoryList = paymentHistory.map(h => 
+        (h.id === historyId || h.payment_history_id === historyId || String(h.id) === String(historyId)) 
+          ? { ...h, approval_status: 'Rejected', notes: cleanNotes } 
+          : h
+      );
+
+      const targetPayment = augmentedPayments.find(p => allResolvedIds.has(p.order_id) || (p.lead_id && allResolvedIds.has(p.lead_id))) || payments.find(p => allResolvedIds.has(p.order_id) || (p.lead_id && allResolvedIds.has(p.lead_id)));
+      const targetOrder = augmentedOrders.find(o => allResolvedIds.has(o.order_id) || (o.lead_id && allResolvedIds.has(o.lead_id))) || orders.find(o => allResolvedIds.has(o.order_id) || (o.lead_id && allResolvedIds.has(o.lead_id)));
+
+      const remainingPending = updatedHistoryList.some(h => 
+        allResolvedIds.has(String(h.order_id || '').trim()) && 
+        (h.id !== historyId && h.payment_history_id !== historyId && String(h.id) !== String(historyId)) && 
+        h.approval_status !== 'Rejected' &&
+        (h.approval_status === 'Waiting for Approval' || (h.notes && h.notes.includes('Waiting for Approval')))
+      );
+
+      const approvedHistories = updatedHistoryList.filter(h => 
+        allResolvedIds.has(String(h.order_id || '').trim()) && 
+        h.approval_status !== 'Rejected' && 
+        (h.approval_status === 'Approved' || (!h.notes || (!h.notes.includes('Waiting for Approval') && !h.notes.includes('Rejected'))))
+      );
+
+      const totalApprovedReceived = approvedHistories.reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
+      const quotationAmt = targetPayment?.quotation_amount || targetOrder?.quotation_amount || 0;
+      const outstanding = Math.max(0, quotationAmt - totalApprovedReceived);
+      const isFullyPaid = outstanding === 0 && quotationAmt > 0;
+
+      const newPaymentStatus: PaymentStatus = remainingPending 
+        ? 'Waiting for Approval' 
+        : (isFullyPaid ? 'Fully Paid' : (totalApprovedReceived > 0 ? 'Partially Paid' : 'Pending'));
+
+      const parallelTasks: Promise<any>[] = [];
+
+      if (targetPayment) {
+        const paymentUpdates = {
+          advance_received: Math.min(quotationAmt, totalApprovedReceived),
+          final_payment_received: Math.max(0, totalApprovedReceived - Math.min(quotationAmt, totalApprovedReceived)),
+          balance_due: outstanding,
+          payment_status: newPaymentStatus
+        };
+
+        parallelTasks.push(pushUpdate('payments', 'payment_id', targetPayment.payment_id, paymentUpdates));
+        setPayments(prev => prev.map(p => p.payment_id === targetPayment.payment_id ? { ...p, ...paymentUpdates } : p));
+      }
+
+      if (targetOrder) {
+        parallelTasks.push(pushUpdate('orders', 'order_id', targetOrder.order_id, {
+          balance_amount: outstanding,
+          advance_received: totalApprovedReceived,
+          updated_by: currentUserName,
+          updated_at: new Date().toISOString()
+        }));
+        setOrders(prev => prev.map(o => o.order_id === targetOrder.order_id ? { ...o, balance_amount: outstanding, advance_received: totalApprovedReceived } : o));
+      }
+
+      if (parallelTasks.length > 0) {
+        await Promise.all(parallelTasks);
+      }
+      
+      logActivity(`Rejected payment of ₹${Number(targetHistory?.amount || 0)} for Order ${resolvedOrderId}`, 'Finance', resolvedOrderId);
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('payment-updated', { detail: { orderId: resolvedOrderId } }));
+        window.dispatchEvent(new CustomEvent('refresh-pending-payments', { detail: { orderId: resolvedOrderId } }));
+      }
+    } finally {
+      inFlightPaymentActionsRef.current.delete(historyId);
     }
   };
 

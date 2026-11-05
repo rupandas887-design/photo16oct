@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { Calendar, Clock, X, Layers } from 'lucide-react';
 import { Lead } from '../types';
+import { broadcastDropdownOpen } from './ui/useDropdownCoordinator';
 
 export interface EventCellProps {
   lead: Lead;
@@ -275,12 +276,29 @@ export const EventCell: React.FC<EventCellProps> = ({ lead, orders, filterEventD
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!isOpen) {
+      broadcastDropdownOpen(instanceId);
       updatePosition();
       setIsOpen(true);
     } else {
       setIsOpen(false);
     }
   };
+
+  // Close when another dropdown opens anywhere in the app
+  useEffect(() => {
+    const handleCloseOthers = (e: Event) => {
+      const customEv = e as CustomEvent<{ id: string }>;
+      if (customEv.detail?.id && customEv.detail.id !== instanceId) {
+        setIsOpen(false);
+      }
+    };
+    window.addEventListener('app:dropdown-open', handleCloseOthers);
+    window.addEventListener('close-all-event-dropdowns', handleCloseOthers);
+    return () => {
+      window.removeEventListener('app:dropdown-open', handleCloseOthers);
+      window.removeEventListener('close-all-event-dropdowns', handleCloseOthers);
+    };
+  }, [instanceId]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -289,7 +307,7 @@ export const EventCell: React.FC<EventCellProps> = ({ lead, orders, filterEventD
       updatePosition();
     };
 
-    const handleOutsideClick = (e: MouseEvent) => {
+    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
       const target = e.target;
       if (!target || !(target instanceof Node)) return;
       if (
@@ -301,19 +319,24 @@ export const EventCell: React.FC<EventCellProps> = ({ lead, orders, filterEventD
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsOpen(false);
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.stopPropagation();
+        setIsOpen(false);
+      }
     };
 
     window.addEventListener('scroll', handleScrollOrResize, true);
     window.addEventListener('resize', handleScrollOrResize);
     document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('touchstart', handleOutsideClick, { passive: true, capture: true });
+    window.addEventListener('keydown', handleKeyDown, true);
 
     return () => {
       window.removeEventListener('scroll', handleScrollOrResize, true);
       window.removeEventListener('resize', handleScrollOrResize);
       document.removeEventListener('mousedown', handleOutsideClick);
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('touchstart', handleOutsideClick);
+      window.removeEventListener('keydown', handleKeyDown, true);
     };
   }, [isOpen]);
 

@@ -23,6 +23,7 @@ import { AddressAutocomplete } from '../AddressAutocomplete';
 import { jsPDF } from 'jspdf';
 import { SHOOT_TYPES, LocalEditableInput, parseQtyAndText, combineQtyAndText, formatListToStructuredObjects, buildStep3EventPayloads, parseTeamMembersJsonToRecord, parseDeliverablesJsonToRecord, CompactQtyItemRowProps, CompactQtyItemRow, validateAndFormatTime, getLogoBase64FromUrl, generateQuotationPdfFileName, generateQuotationPDF, highlightText, LEAD_SOURCES, SalesModuleProps, checkIsLeadCrmLocked, getStep3FinalQuotationAmount } from '../SalesUtils';
 import { AddNoteModal } from '../AddNoteModal';
+import { broadcastDropdownOpen } from '../ui/useDropdownCoordinator';
 
 export interface SalesLeadsTableProps {
   [key: string]: any;
@@ -526,18 +527,40 @@ export const SalesLeadsTable: React.FC<SalesLeadsTableProps> = (props) => {
     window.addEventListener('scroll', handleScroll, true);
     window.addEventListener('resize', handleScroll);
 
-    const handleOutsideClick = (e: MouseEvent) => {
+    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
       const target = e.target as HTMLElement;
       if (!target.closest('.actions-dropdown-menu') && !target.closest('.actions-dropdown-btn')) {
         setOpenDropdownLeadId(null);
       }
     };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpenDropdownLeadId(null);
+      }
+    };
+
+    const handleOtherDropdownOpen = (e: Event) => {
+      const customEvent = e as CustomEvent<{ sourceId?: string }>;
+      if (customEvent.detail?.sourceId !== `sales-lead-${openDropdownLeadId}`) {
+        setOpenDropdownLeadId(null);
+      }
+    };
+
     document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('touchstart', handleOutsideClick);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('app:dropdown-open', handleOtherDropdownOpen);
+    window.addEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
 
     return () => {
       window.removeEventListener('scroll', handleScroll, true);
       window.removeEventListener('resize', handleScroll);
       document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('touchstart', handleOutsideClick);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('app:dropdown-open', handleOtherDropdownOpen);
+      window.removeEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
     };
   }, [openDropdownLeadId, updateDropdownPos, setOpenDropdownLeadId]);
 
@@ -1008,6 +1031,7 @@ export const SalesLeadsTable: React.FC<SalesLeadsTableProps> = (props) => {
                                           setOpenDropdownLeadId(null);
                                         } else {
                                           setOpenDropdownLeadId(lead.lead_id);
+                                          broadcastDropdownOpen(`sales-lead-${lead.lead_id}`);
                                         }
                                       }}
                                       className="actions-dropdown-btn w-36 h-8 text-[11px] font-bold rounded-xl border transition-all cursor-pointer inline-flex items-center justify-between px-2.5 shadow shrink-0 bg-zinc-950 hover:bg-zinc-900 text-amber-400 hover:text-white border-zinc-850"

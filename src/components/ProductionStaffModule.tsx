@@ -134,7 +134,7 @@ const ActionMenuDropdown: React.FC<ActionMenuDropdownProps> = ({
         updatePosition();
       };
 
-      const handleClickOutside = (e: MouseEvent) => {
+      const handleClickOutside = (e: MouseEvent | TouchEvent) => {
         const target = e.target;
         if (!target || !(target instanceof Node)) return;
         if (
@@ -145,14 +145,35 @@ const ActionMenuDropdown: React.FC<ActionMenuDropdownProps> = ({
         }
       };
 
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          onClose();
+        }
+      };
+
+      const handleOtherDropdownOpen = (e: Event) => {
+        const customEvent = e as CustomEvent<{ sourceId?: string }>;
+        if (customEvent.detail?.sourceId !== 'prod-staff-portal-dropdown') {
+          onClose();
+        }
+      };
+
       window.addEventListener('scroll', handleScrollOrResize, true);
       window.addEventListener('resize', handleScrollOrResize);
       document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('touchstart', handleClickOutside);
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('app:dropdown-open', handleOtherDropdownOpen);
+      window.addEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
 
       return () => {
         window.removeEventListener('scroll', handleScrollOrResize, true);
         window.removeEventListener('resize', handleScrollOrResize);
         document.removeEventListener('mousedown', handleClickOutside);
+        document.removeEventListener('touchstart', handleClickOutside);
+        window.removeEventListener('keydown', handleKeyDown);
+        window.removeEventListener('app:dropdown-open', handleOtherDropdownOpen);
+        window.removeEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
       };
     }
   }, [isOpen, coords, updatePosition, onClose]);

@@ -39,7 +39,7 @@ export const OperationsStaffManagement: React.FC = () => {
 
   // Close skills dropdown on outside click or Escape
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && !target.closest('.skills-dropdown-container')) {
         setOpenSkillsStaffId(null);
@@ -52,11 +52,25 @@ export const OperationsStaffManagement: React.FC = () => {
       }
     };
 
+    const handleOtherDropdownOpen = (e: Event) => {
+      const customEvent = e as CustomEvent<{ sourceId?: string }>;
+      if (customEvent.detail?.sourceId && !customEvent.detail.sourceId.startsWith('ops-skills-')) {
+        setOpenSkillsStaffId(null);
+      }
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
     document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('app:dropdown-open', handleOtherDropdownOpen);
+    window.addEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
+
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
       document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('app:dropdown-open', handleOtherDropdownOpen);
+      window.removeEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
     };
   }, []);
 

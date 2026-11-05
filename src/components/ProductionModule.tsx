@@ -34,6 +34,7 @@ import { ProductionRoleSpecialitiesModule } from './ProductionRoleSpecialitiesMo
 import { ListSortFilter, SortOrder, compareRecordsByDate, compareAlphanumeric } from './ui/ListSortFilter';
 import { isEditorAssignmentStarted } from '../services/operationsAssignmentService';
 import { DateFilterInput } from './ui/DateFilterInput';
+import { broadcastDropdownOpen } from './ui/useDropdownCoordinator';
 
 function getIndividualDeliverables(description: string): string[] {
   if (!description) return [];
@@ -298,18 +299,52 @@ const StaffSelectDropdown = React.memo(({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { isDataLoading, refreshData, production } = useRole();
 
+  const [openUpward, setOpenUpward] = useState(false);
+
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    if (!isOpen) return;
+
+    if (dropdownRef.current) {
+      const rect = dropdownRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const spaceAbove = rect.top;
+      setOpenUpward(spaceBelow < 250 && spaceAbove > spaceBelow);
+    }
+
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
       const target = event.target;
       if (target instanceof Node && dropdownRef.current && !dropdownRef.current.contains(target)) {
         setIsOpen(false);
       }
     };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
+
+    const handleOtherDropdownOpen = (event: Event) => {
+      const customEvent = event as CustomEvent<{ sourceId?: string }>;
+      if (customEvent.detail?.sourceId !== `staff-select-${rowId}`) {
+        setIsOpen(false);
+      }
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('app:dropdown-open', handleOtherDropdownOpen);
+    window.addEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
+
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('app:dropdown-open', handleOtherDropdownOpen);
+      window.removeEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
     };
-  }, []);
+  }, [isOpen, rowId]);
 
   const filteredStaff = useMemo(() => {
     const map = new Map<string, any>();
@@ -366,7 +401,15 @@ const StaffSelectDropdown = React.memo(({
       <button
         type="button"
         disabled={disabled}
-        onClick={() => !disabled && setIsOpen(!isOpen)}
+        onClick={() => {
+          if (!disabled) {
+            const next = !isOpen;
+            setIsOpen(next);
+            if (next) {
+              broadcastDropdownOpen(`staff-select-${rowId}`);
+            }
+          }
+        }}
         className={`w-full border text-xs rounded-xl px-2.5 py-1.5 font-sans focus:outline-none min-h-[34px] flex items-center justify-between gap-1.5 ${
           disabled
             ? 'bg-zinc-900/70 border-amber-900/40 text-amber-200/90 cursor-not-allowed opacity-90'
@@ -411,7 +454,9 @@ const StaffSelectDropdown = React.memo(({
       )}
 
       {isOpen && (
-        <div className="absolute left-0 right-0 mt-1 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl z-[100] max-h-60 overflow-y-auto divide-y divide-zinc-900">
+        <div className={`absolute left-0 right-0 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl z-[100] max-h-[min(240px,calc(100vh-80px))] overflow-y-auto divide-y divide-zinc-900 ${
+          openUpward ? 'bottom-full mb-1' : 'top-full mt-1'
+        }`}>
           <div
             onClick={() => {
               onSelect('');
@@ -2214,14 +2259,33 @@ ${coordinatorName}`;
       setIsDeliveryStatusMenuOpen(false);
     };
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsDeliveryStatusMenuOpen(false);
+      }
+    };
+
+    const handleOtherDropdownOpen = (e: Event) => {
+      const customEvent = e as CustomEvent<{ sourceId?: string }>;
+      if (customEvent.detail?.sourceId !== 'prod-delivery-status') {
+        setIsDeliveryStatusMenuOpen(false);
+      }
+    };
+
     document.addEventListener('mousedown', handleOutsideClick);
     document.addEventListener('touchstart', handleOutsideClick);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('app:dropdown-open', handleOtherDropdownOpen);
+    window.addEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
     window.addEventListener('scroll', handleScrollOrResize, true);
     window.addEventListener('resize', handleScrollOrResize);
 
     return () => {
       document.removeEventListener('mousedown', handleOutsideClick);
       document.removeEventListener('touchstart', handleOutsideClick);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('app:dropdown-open', handleOtherDropdownOpen);
+      window.removeEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
       window.removeEventListener('scroll', handleScrollOrResize, true);
       window.removeEventListener('resize', handleScrollOrResize);
     };
@@ -4001,13 +4065,38 @@ _Please acknowledge receipt of this task assignment._`;
   }, [addStaffError]);
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (openSkillsStaffId && !(e.target as HTMLElement).closest('.skills-dropdown-container')) {
+    if (!openSkillsStaffId) return;
+
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (!(e.target as HTMLElement)?.closest?.('.skills-dropdown-container')) {
         setOpenSkillsStaffId(null);
       }
     };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpenSkillsStaffId(null);
+      }
+    };
+    const handleOtherDropdownOpen = (e: Event) => {
+      const customEvent = e as CustomEvent<{ sourceId?: string }>;
+      if (customEvent.detail?.sourceId !== `prod-skills-${openSkillsStaffId}`) {
+        setOpenSkillsStaffId(null);
+      }
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('app:dropdown-open', handleOtherDropdownOpen);
+    window.addEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('app:dropdown-open', handleOtherDropdownOpen);
+      window.removeEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
+    };
   }, [openSkillsStaffId]);
 
   // Editing timeline dates inside detailed modal
@@ -5142,7 +5231,11 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setIsDeliveryStatusMenuOpen(!isDeliveryStatusMenuOpen);
+                            const next = !isDeliveryStatusMenuOpen;
+                            setIsDeliveryStatusMenuOpen(next);
+                            if (next) {
+                              broadcastDropdownOpen('prod-delivery-status');
+                            }
                           }}
                           className={`p-1 rounded-md transition-colors cursor-pointer select-none inline-flex items-center gap-0.5 ${
                             isDeliveryStatusMenuOpen
@@ -7967,7 +8060,11 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                                         type="button"
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          setOpenSkillsStaffId(isOpen ? null : member.staff_id);
+                                          const next = !isOpen;
+                                          setOpenSkillsStaffId(next ? member.staff_id : null);
+                                          if (next) {
+                                            broadcastDropdownOpen(`prod-skills-${member.staff_id}`);
+                                          }
                                         }}
                                         className={`inline-flex items-center justify-between gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-mono font-bold transition-all cursor-pointer whitespace-nowrap min-w-[105px] max-w-[130px] ${
                                           isOpen

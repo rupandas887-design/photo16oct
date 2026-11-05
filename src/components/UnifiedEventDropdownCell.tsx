@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { Calendar } from 'lucide-react';
 import { formatDateDDMMYY, formatTime12Hour, extractEventsList } from '../utils';
+import { broadcastDropdownOpen } from './ui/useDropdownCoordinator';
 
 interface UnifiedEventDropdownCellProps {
   lead: any;
@@ -106,17 +107,19 @@ export const UnifiedEventDropdownCell: React.FC<UnifiedEventDropdownCellProps> =
   useEffect(() => {
     const handleCloseOthers = (e: Event) => {
       const customEv = e as CustomEvent<{ id: string }>;
-      if (customEv.detail?.id !== instanceId) {
+      if (customEv.detail?.id && customEv.detail.id !== instanceId) {
         setIsOpen(false);
       }
     };
+    window.addEventListener('app:dropdown-open', handleCloseOthers);
     window.addEventListener('close-all-event-dropdowns', handleCloseOthers);
     return () => {
+      window.removeEventListener('app:dropdown-open', handleCloseOthers);
       window.removeEventListener('close-all-event-dropdowns', handleCloseOthers);
     };
   }, [instanceId]);
 
-  // Handle outside clicks, resize, scroll repositioning
+  // Handle outside clicks, Escape key, resize, scroll repositioning
   useEffect(() => {
     if (!isOpen) return;
 
@@ -128,6 +131,13 @@ export const UnifiedEventDropdownCell: React.FC<UnifiedEventDropdownCellProps> =
       if (buttonRef.current?.contains(target)) return;
       if (menuRef.current?.contains(target)) return;
       setIsOpen(false);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.stopPropagation();
+        setIsOpen(false);
+      }
     };
 
     const handleScrollOrResize = () => {
@@ -142,13 +152,15 @@ export const UnifiedEventDropdownCell: React.FC<UnifiedEventDropdownCellProps> =
     };
 
     document.addEventListener('mousedown', handleOutsideClick, true);
-    document.addEventListener('touchstart', handleOutsideClick, true);
+    document.addEventListener('touchstart', handleOutsideClick, { passive: true, capture: true });
+    window.addEventListener('keydown', handleKeyDown, true);
     window.addEventListener('resize', handleScrollOrResize, { passive: true });
     window.addEventListener('scroll', handleScrollOrResize, { passive: true, capture: true });
 
     return () => {
       document.removeEventListener('mousedown', handleOutsideClick, true);
       document.removeEventListener('touchstart', handleOutsideClick, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
       window.removeEventListener('resize', handleScrollOrResize);
       window.removeEventListener('scroll', handleScrollOrResize, true);
     };
@@ -157,7 +169,7 @@ export const UnifiedEventDropdownCell: React.FC<UnifiedEventDropdownCellProps> =
   const toggleDropdown = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!isOpen) {
-      window.dispatchEvent(new CustomEvent('close-all-event-dropdowns', { detail: { id: instanceId } }));
+      broadcastDropdownOpen(instanceId);
       updatePosition();
       setIsOpen(true);
     } else {

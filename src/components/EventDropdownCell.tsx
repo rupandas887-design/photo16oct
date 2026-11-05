@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { formatTime12Hour, formatDateDDMMYY } from '../utils';
+import { broadcastDropdownOpen } from './ui/useDropdownCoordinator';
 
 interface EventDropdownCellProps {
   type: 'name' | 'date' | 'time';
@@ -60,12 +61,14 @@ export const EventDropdownCell: React.FC<EventDropdownCellProps> = ({ type, item
   useEffect(() => {
     const handleCloseOthers = (e: Event) => {
       const customEv = e as CustomEvent<{ id: string }>;
-      if (customEv.detail?.id !== instanceId) {
+      if (customEv.detail?.id && customEv.detail.id !== instanceId) {
         setIsOpen(false);
       }
     };
+    window.addEventListener('app:dropdown-open', handleCloseOthers);
     window.addEventListener('close-all-event-dropdowns', handleCloseOthers);
     return () => {
+      window.removeEventListener('app:dropdown-open', handleCloseOthers);
       window.removeEventListener('close-all-event-dropdowns', handleCloseOthers);
     };
   }, [instanceId]);
@@ -83,6 +86,13 @@ export const EventDropdownCell: React.FC<EventDropdownCellProps> = ({ type, item
       setIsOpen(false);
     };
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.stopPropagation();
+        setIsOpen(false);
+      }
+    };
+
     const handleScrollOrResize = () => {
       if (buttonRef.current) {
         const rect = buttonRef.current.getBoundingClientRect();
@@ -95,13 +105,15 @@ export const EventDropdownCell: React.FC<EventDropdownCellProps> = ({ type, item
     };
 
     document.addEventListener('mousedown', handleClickOutside, true);
-    document.addEventListener('touchstart', handleClickOutside, true);
+    document.addEventListener('touchstart', handleClickOutside, { passive: true, capture: true });
+    window.addEventListener('keydown', handleKeyDown, true);
     window.addEventListener('resize', handleScrollOrResize, { passive: true });
     window.addEventListener('scroll', handleScrollOrResize, { passive: true, capture: true });
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside, true);
       document.removeEventListener('touchstart', handleClickOutside, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
       window.removeEventListener('resize', handleScrollOrResize);
       window.removeEventListener('scroll', handleScrollOrResize, true);
     };
@@ -145,7 +157,7 @@ export const EventDropdownCell: React.FC<EventDropdownCellProps> = ({ type, item
           onClick={(e) => {
             e.stopPropagation();
             if (!isOpen) {
-              window.dispatchEvent(new CustomEvent('close-all-event-dropdowns', { detail: { id: instanceId } }));
+              broadcastDropdownOpen(instanceId);
               updatePosition();
               setIsOpen(true);
             } else {

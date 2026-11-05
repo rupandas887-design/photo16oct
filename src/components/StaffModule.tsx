@@ -109,14 +109,33 @@ const StaffActionDropdown: React.FC<{
       setIsOpen(false);
     };
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
+
+    const handleOtherDropdownOpen = (e: Event) => {
+      const customEvent = e as CustomEvent<{ sourceId?: string }>;
+      if (customEvent.detail?.sourceId !== `staff-action-${booking.orderId || booking.key}`) {
+        setIsOpen(false);
+      }
+    };
+
     document.addEventListener('mousedown', handleOutside);
     document.addEventListener('touchstart', handleOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('app:dropdown-open', handleOtherDropdownOpen);
+    window.addEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
     window.addEventListener('scroll', handleScrollOrResize, { capture: true, passive: true });
     window.addEventListener('resize', handleScrollOrResize);
 
     return () => {
       document.removeEventListener('mousedown', handleOutside);
       document.removeEventListener('touchstart', handleOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('app:dropdown-open', handleOtherDropdownOpen);
+      window.removeEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
       window.removeEventListener('scroll', handleScrollOrResize, { capture: true });
       window.removeEventListener('resize', handleScrollOrResize);
     };
@@ -580,13 +599,32 @@ const StaffEquipmentDetailsCell = ({ b, proofStatus }: { b: any, proofStatus: an
       }
       setIsOpen(false);
     };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
+
+    const handleOtherDropdownOpen = (e: Event) => {
+      const customEvent = e as CustomEvent<{ sourceId?: string }>;
+      if (customEvent.detail?.sourceId !== `staff-equipment-${b.orderId || b.key}`) {
+        setIsOpen(false);
+      }
+    };
+
     document.addEventListener('mousedown', handleOutside);
     document.addEventListener('touchstart', handleOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('app:dropdown-open', handleOtherDropdownOpen);
+    window.addEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
     window.addEventListener('scroll', handleScrollOrResize, { capture: true, passive: true });
     window.addEventListener('resize', handleScrollOrResize);
     return () => {
       document.removeEventListener('mousedown', handleOutside);
       document.removeEventListener('touchstart', handleOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('app:dropdown-open', handleOtherDropdownOpen);
+      window.removeEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
       window.removeEventListener('scroll', handleScrollOrResize, { capture: true });
       window.removeEventListener('resize', handleScrollOrResize);
     };

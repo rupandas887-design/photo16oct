@@ -1514,6 +1514,20 @@ async function startServer() {
         }
       }
 
+      // Idempotent protection for payment_history approvals
+      if (table === 'payment_history' && updates?.approval_status === 'Approved') {
+        const db = getServerSupabase();
+        const { data: existingPayment } = await db
+          .from('payment_history')
+          .select('approval_status')
+          .eq(matchColumn, matchValue)
+          .maybeSingle();
+
+        if (existingPayment && existingPayment.approval_status === 'Approved') {
+          return res.json({ success: true, alreadyApproved: true, message: 'Payment is already approved.' });
+        }
+      }
+
       const result = await executeWithSelfHealing(table, 'update', updates, matchColumn, matchValue);
       if (!result.success) {
         return res.status(400).json({ success: false, error: result.error });

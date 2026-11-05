@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Filter, Check, ChevronDown, ArrowUpDown } from 'lucide-react';
+import { useDropdownAutoClose } from './useDropdownCoordinator';
 
 export type SortOrder = 'latest' | 'oldest';
 
@@ -232,35 +233,29 @@ export const ListSortFilter: React.FC<ListSortFilterProps> = ({
     });
   }, [align]);
 
+  useDropdownAutoClose({
+    isOpen,
+    setIsOpen,
+    triggerRef: buttonRef,
+    menuRef: dropdownRef,
+    instanceId: id,
+    closeOnEscape: true,
+    closeOnOutsideClick: true,
+    closeOnOtherDropdownOpen: true,
+  });
+
   useEffect(() => {
     if (!isOpen) return;
     updatePosition();
-
-    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
-      const target = e.target;
-      if (!target || !(target instanceof Node)) return;
-      if (
-        buttonRef.current &&
-        !buttonRef.current.contains(target) &&
-        dropdownRef.current &&
-        !dropdownRef.current.contains(target)
-      ) {
-        setIsOpen(false);
-      }
-    };
 
     const handleScrollOrResize = () => {
       setIsOpen(false);
     };
 
-    document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('touchstart', handleOutsideClick);
     window.addEventListener('scroll', handleScrollOrResize, true);
     window.addEventListener('resize', handleScrollOrResize);
 
     return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-      document.removeEventListener('touchstart', handleOutsideClick);
       window.removeEventListener('scroll', handleScrollOrResize, true);
       window.removeEventListener('resize', handleScrollOrResize);
     };

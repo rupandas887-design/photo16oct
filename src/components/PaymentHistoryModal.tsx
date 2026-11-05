@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { FileText, X, CheckCircle, Clock, AlertTriangle } from 'lucide-react';
+import { FileText, X, CheckCircle, Clock, AlertTriangle, RefreshCw, AlertCircle } from 'lucide-react';
 import { formatINR, formatDateDDMMYY, formatTime12Hour, formatDateTime, triggerAutoScrollAndFocus } from '../utils';
 import { Order, Payment, Lead } from '../types';
 import { supabaseClient } from '../supabaseClient';
@@ -28,6 +28,8 @@ export const PaymentHistoryModal: React.FC<PaymentHistoryModalProps> = ({
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isApprovingId, setIsApprovingId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const inFlightApprovalRef = useRef<Set<string>>(new Set());
 
   const orderId = order?.orderId || order?.order_id || '';
   const leadId = order?.leadId || order?.lead_id || (order?.lead && order.lead.lead_id) || '';
@@ -220,34 +222,98 @@ export const PaymentHistoryModal: React.FC<PaymentHistoryModalProps> = ({
 
   const handleReject = async (histId: string) => {
     if (!histId) return;
+    if (inFlightApprovalRef.current.has(histId)) return;
+    inFlightApprovalRef.current.add(histId);
     setIsApprovingId(histId);
+    setFeedback(null);
+
     try {
       await rejectPayment(histId, primaryOrderId);
+
+      // Immediately update local history list so the badge reflects Rejected instantly
+      setHistoryList(prev => prev.map(h => {
+        const matches = String(h.id || h.payment_history_id || '') === String(histId) ||
+                        (h.transaction_id && String(h.transaction_id) === String(histId));
+        if (matches) {
+          const cleanNotes = (h.notes || '')
+            .replace(/ - Waiting for Approval/g, '')
+            .replace(/Waiting for Approval/g, '')
+            .trim();
+          return {
+            ...h,
+            approval_status: 'Rejected',
+            notes: cleanNotes ? `${cleanNotes} - Rejected` : 'Rejected by Business Owner'
+          };
+        }
+        return h;
+      }));
+
+      setFeedback({
+        type: 'success',
+        message: 'Payment has been successfully rejected.'
+      });
+
+      // Background refresh without blocking UI
       if (typeof refreshData === 'function') {
-        try { await refreshData(); } catch (_) {}
+        refreshData().catch(e => console.warn('Background refreshData error:', e));
       }
-      await refreshHistory();
     } catch (err: any) {
       console.error("Error rejecting payment:", err);
-      alert(`Failed to reject payment: ${err.message || 'Please check your connection and try again.'}`);
+      setFeedback({
+        type: 'error',
+        message: `Failed to reject payment: ${err.message || 'Please check your connection and try again.'}`
+      });
     } finally {
+      inFlightApprovalRef.current.delete(histId);
       setIsApprovingId(null);
     }
   };
 
   const handleApprove = async (histId: string) => {
     if (!histId) return;
+    if (inFlightApprovalRef.current.has(histId)) return;
+    inFlightApprovalRef.current.add(histId);
     setIsApprovingId(histId);
+    setFeedback(null);
+
     try {
       await approvePayment(histId, primaryOrderId);
+
+      // Immediately update local history list so the badge reflects Approved instantly
+      setHistoryList(prev => prev.map(h => {
+        const matches = String(h.id || h.payment_history_id || '') === String(histId) ||
+                        (h.transaction_id && String(h.transaction_id) === String(histId));
+        if (matches) {
+          const cleanNotes = (h.notes || '')
+            .replace(/ - Waiting for Approval/g, '')
+            .replace(/Waiting for Approval/g, '')
+            .trim();
+          return {
+            ...h,
+            approval_status: 'Approved',
+            notes: cleanNotes ? `${cleanNotes} - Approved` : 'Approved by Business Owner'
+          };
+        }
+        return h;
+      }));
+
+      setFeedback({
+        type: 'success',
+        message: 'Payment has been successfully approved.'
+      });
+
+      // Background refresh without blocking UI
       if (typeof refreshData === 'function') {
-        try { await refreshData(); } catch (_) {}
+        refreshData().catch(e => console.warn('Background refreshData error:', e));
       }
-      await refreshHistory();
     } catch (err: any) {
       console.error("Error approving payment:", err);
-      alert(`Failed to approve payment: ${err.message || 'Please check your connection and try again.'}`);
+      setFeedback({
+        type: 'error',
+        message: `Failed to approve payment: ${err.message || 'Please check your connection and try again.'}`
+      });
     } finally {
+      inFlightApprovalRef.current.delete(histId);
       setIsApprovingId(null);
     }
   };
@@ -275,6 +341,23 @@ export const PaymentHistoryModal: React.FC<PaymentHistoryModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Feedback Alert Banner */}
+        {feedback && (
+          <div className={`mx-4 sm:mx-6 mt-4 p-3 rounded-xl border text-xs font-mono font-bold flex items-center justify-between gap-2 animate-in fade-in ${
+            feedback.type === 'success'
+              ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+              : 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+          }`}>
+            <div className="flex items-center gap-2">
+              {feedback.type === 'success' ? <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
+              <span>{feedback.message}</span>
+            </div>
+            <button type="button" onClick={() => setFeedback(null)} className="p-1 hover:bg-white/10 rounded cursor-pointer">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Modal Content */}
         <div className="p-4 sm:p-6 space-y-6 overflow-y-auto max-h-[75vh]">
@@ -436,23 +519,41 @@ export const PaymentHistoryModal: React.FC<PaymentHistoryModalProps> = ({
                                 <div className="flex items-center justify-center gap-1.5">
                                   <button
                                     type="button"
-                                    disabled={isRowApproving}
+                                    disabled={isRowApproving || isApprovingId !== null}
                                     onClick={() => handleApprove(histId)}
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black font-bold text-[10px] tracking-wide cursor-pointer transition-all shadow-sm font-mono disabled:opacity-50"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black font-bold text-[10px] tracking-wide cursor-pointer transition-all shadow-sm font-mono disabled:opacity-50 disabled:cursor-not-allowed"
                                     title="Approve this payment"
                                   >
-                                    <CheckCircle className="w-3 h-3" />
-                                    <span>{isRowApproving ? '...' : 'Approve'}</span>
+                                    {isRowApproving ? (
+                                      <>
+                                        <RefreshCw className="w-3 h-3 animate-spin text-black" />
+                                        <span>Approving...</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <CheckCircle className="w-3 h-3" />
+                                        <span>Approve</span>
+                                      </>
+                                    )}
                                   </button>
                                   <button
                                     type="button"
-                                    disabled={isRowApproving}
+                                    disabled={isRowApproving || isApprovingId !== null}
                                     onClick={() => handleReject(histId)}
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500 hover:bg-rose-400 active:scale-95 text-white font-bold text-[10px] tracking-wide cursor-pointer transition-all shadow-sm font-mono disabled:opacity-50"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 active:scale-95 text-white font-bold text-[10px] tracking-wide cursor-pointer transition-all shadow-sm font-mono disabled:opacity-50 disabled:cursor-not-allowed"
                                     title="Reject this payment"
                                   >
-                                    <X className="w-3 h-3" />
-                                    <span>{isRowApproving ? '...' : 'Reject'}</span>
+                                    {isRowApproving ? (
+                                      <>
+                                        <RefreshCw className="w-3 h-3 animate-spin text-white" />
+                                        <span>Rejecting...</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <X className="w-3 h-3" />
+                                        <span>Reject</span>
+                                      </>
+                                    )}
                                   </button>
                                 </div>
                               ) : (

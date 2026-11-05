@@ -377,18 +377,41 @@ export const ProductionStaffReport: React.FC<ProductionStaffReportProps> = ({ on
   const [appliedDateRange, setAppliedDateRange] = useState<{ start: string; end: string } | null>(null);
   const filterRef = useRef<HTMLDivElement>(null);
 
-  // Close filter dropdown on click outside
+  // Close filter dropdown on click outside, Escape, or when another dropdown opens
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    if (!isFilterOpen) return;
+
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
       if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
         setIsFilterOpen(false);
       }
     };
-    if (isFilterOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsFilterOpen(false);
+      }
+    };
+
+    const handleOtherDropdownOpen = (e: Event) => {
+      const customEvent = e as CustomEvent<{ sourceId?: string }>;
+      if (customEvent.detail?.sourceId !== 'prod-staff-report-filter') {
+        setIsFilterOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('app:dropdown-open', handleOtherDropdownOpen);
+    window.addEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
+
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('app:dropdown-open', handleOtherDropdownOpen);
+      window.removeEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
     };
   }, [isFilterOpen]);
 

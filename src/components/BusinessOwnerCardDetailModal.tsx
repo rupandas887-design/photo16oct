@@ -5,6 +5,7 @@ import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { formatINR, formatDateDDMMYY } from '../utils';
 import { compareRecordsByDate } from './ui/ListSortFilter';
+import { formatReportDate } from './BusinessOwnerDashboard';
 
 interface ColumnDefinition {
   key: string;
@@ -60,6 +61,21 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
     return [...list].sort((a, b) => compareRecordsByDate(a, b, 'latest'));
   }, [data, searchTerm]);
 
+  // Helper to detect date column or value
+  const isDateColumnOrValue = (key: string, label: string, val: any): boolean => {
+    if (val === null || val === undefined || val === '' || val === '-') return false;
+    const k = key.toLowerCase();
+    const l = label.toLowerCase();
+    if (k.includes('date') || k.includes('_at') || l.includes('date')) return true;
+    if (val instanceof Date) return true;
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (/^\d{4}[-/.]\d{1,3}[-/.]\d{1,2}/.test(trimmed)) return true;
+      if (/^\d{1,2}[-/.]\d{1,3}[-/.]\d{4}/.test(trimmed)) return true;
+    }
+    return false;
+  };
+
   // Download handlers for the displayed/filtered records
   const handleDownloadPDF = () => {
     if (onDownloadPDF) {
@@ -70,7 +86,7 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
     doc.setFontSize(16);
     doc.text(`${title || 'Detail Report'}`, 14, 15);
     doc.setFontSize(10);
-    doc.text(`Generated on: ${formatDateDDMMYY(new Date())} | Period: ${subtitle || 'All'} | Displayed Records: ${filteredData.length}`, 14, 22);
+    doc.text(`Generated on: ${formatReportDate(new Date())} | Period: ${subtitle || 'All'} | Displayed Records: ${filteredData.length}`, 14, 22);
 
     if (totalLabel && totalValue) {
       doc.setFontSize(11);
@@ -102,7 +118,9 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
       x = 14;
       printableCols.forEach((c) => {
         let val = row[c.key];
-        if (typeof val === 'number' && (c.key.toLowerCase().includes('revenue') || c.key.toLowerCase().includes('received') || c.key.toLowerCase().includes('outstanding') || c.key.toLowerCase().includes('amount') || c.key.toLowerCase().includes('balance'))) {
+        if (isDateColumnOrValue(c.key, c.label, val)) {
+          val = formatReportDate(val);
+        } else if (typeof val === 'number' && (c.key.toLowerCase().includes('revenue') || c.key.toLowerCase().includes('received') || c.key.toLowerCase().includes('outstanding') || c.key.toLowerCase().includes('amount') || c.key.toLowerCase().includes('balance'))) {
           val = `Rs.${val.toLocaleString('en-IN')}`;
         } else if (val === null || val === undefined) {
           val = '-';
@@ -127,7 +145,11 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
       const formattedRow: Record<string, any> = {};
       printableCols.forEach(c => {
         let val = row[c.key];
-        if (val === null || val === undefined) val = '';
+        if (isDateColumnOrValue(c.key, c.label, val)) {
+          val = formatReportDate(val);
+        } else if (val === null || val === undefined) {
+          val = '';
+        }
         formattedRow[c.label] = val;
       });
       return formattedRow;
@@ -150,20 +172,26 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
     const rows = filteredData.map(row => {
       return printableCols.map(c => {
         let val = row[c.key];
-        if (val === null || val === undefined) val = '';
+        if (isDateColumnOrValue(c.key, c.label, val)) {
+          val = formatReportDate(val);
+        } else if (val === null || val === undefined) {
+          val = '';
+        }
         return `"${String(val).replace(/"/g, '""')}"`;
       }).join(',');
     });
 
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = "\uFEFF" + [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     const cleanTitle = (title || 'Report').replace(/[^a-zA-Z0-9_-]/g, '_');
     link.setAttribute("download", `${cleanTitle}_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   useEffect(() => {

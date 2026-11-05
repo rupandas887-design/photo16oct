@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Search, X, ChevronDown, Check, Package as PackageIcon } from 'lucide-react';
 import { Package } from '../../types';
 
+import { useDropdownAutoClose } from '../ui/useDropdownCoordinator';
+
 export interface SearchablePackageSelectProps {
   id?: string;
   value: string;
@@ -27,36 +29,66 @@ export const SearchablePackageSelect: React.FC<SearchablePackageSelectProps> = (
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [openUpward, setOpenUpward] = useState(false);
+  const [maxMenuHeight, setMaxMenuHeight] = useState(300);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target;
-      if (target instanceof Node && containerRef.current && !containerRef.current.contains(target)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+  // Position calculation to prevent going outside screen boundaries
+  const updatePosition = useCallback(() => {
+    if (!containerRef.current || typeof window === 'undefined') return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const vh = window.innerHeight;
+
+    const spaceBelow = vh - rect.bottom - 12;
+    const spaceAbove = rect.top - 12;
+
+    const shouldOpenUpward = spaceBelow < 240 && spaceAbove > spaceBelow;
+    setOpenUpward(shouldOpenUpward);
+
+    const availableSpace = shouldOpenUpward ? spaceAbove : spaceBelow;
+    setMaxMenuHeight(Math.max(160, Math.min(320, availableSpace - 10)));
   }, []);
 
-  // Auto-focus search input when dropdown opens
+  // Coordinated auto-close on outside click/tap, Escape key, and other dropdown opens
+  useDropdownAutoClose({
+    isOpen,
+    setIsOpen,
+    triggerRef: containerRef,
+    instanceId: id,
+    closeOnEscape: true,
+    closeOnOutsideClick: true,
+    closeOnOtherDropdownOpen: true,
+    onClose: () => setSearchTerm(''),
+  });
+
+  // Calculate position and auto-focus search input when dropdown opens
   useEffect(() => {
     if (isOpen) {
-      // Small timeout ensures element is mounted and visible
+      updatePosition();
       const timer = setTimeout(() => {
-        if (searchInputRef.current) {
-          searchInputRef.current.focus();
-        }
+        searchInputRef.current?.focus();
       }, 50);
       return () => clearTimeout(timer);
     } else {
-      // Reset search term when closed
       setSearchTerm('');
     }
-  }, [isOpen]);
+  }, [isOpen, updatePosition]);
+
+  // Recalculate on scroll or resize
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleScrollOrResize = () => {
+      updatePosition();
+    };
+    window.addEventListener('resize', handleScrollOrResize, { passive: true });
+    window.addEventListener('scroll', handleScrollOrResize, { passive: true, capture: true });
+    return () => {
+      window.removeEventListener('resize', handleScrollOrResize);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+    };
+  }, [isOpen, updatePosition]);
 
   // Filter active packages (excluding 'Custom Package', 'legacy', ₹0 placeholders)
   const activePkgs = useMemo(() => {
@@ -195,7 +227,10 @@ export const SearchablePackageSelect: React.FC<SearchablePackageSelectProps> = (
       {isOpen && (
         <div
           data-testid="package_dropdown_menu"
-          className="absolute left-0 right-0 top-full mt-1 z-50 bg-slate-900 border border-slate-750 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 font-sans"
+          style={{ maxHeight: `${maxMenuHeight}px` }}
+          className={`absolute left-0 right-0 ${
+            openUpward ? 'bottom-full mb-1' : 'top-full mt-1'
+          } z-50 bg-slate-900 border border-slate-750 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 font-sans flex flex-col`}
         >
           {/* Search Input Box */}
           <div className="p-2 border-b border-slate-800 bg-slate-950/80 sticky top-0 z-10">

@@ -58,6 +58,112 @@ import { OwnerPasswordResetModule } from './OwnerPasswordResetModule';
 import { compareRecordsByDate, compareAlphanumeric } from './ui/ListSortFilter';
 import { getAllMatchingOrderIds } from './SalesUtils';
 import { DateFilterInput } from './ui/DateFilterInput';
+import { broadcastDropdownOpen } from './ui/useDropdownCoordinator';
+
+const REPORT_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * Strict D MMM YYYY Date Formatter for Downloaded Reports (PDF & CSV)
+ * Converts any Date, ISO string, or timestamp into 'D MMM YYYY' format without timezone shifts.
+ * Examples:
+ *  - 2026/11/11 -> 11 Nov 2026
+ *  - 2026-11-01 -> 1 Nov 2026
+ *  - 2026-01-05 -> 5 Jan 2026
+ */
+export const formatReportDate = (dateInput?: string | null | Date | number): string => {
+  if (!dateInput && (dateInput as any) !== 0) return '-';
+
+  if (dateInput instanceof Date) {
+    if (isNaN(dateInput.getTime())) return '-';
+    const day = dateInput.getDate();
+    const month = REPORT_MONTH_NAMES[dateInput.getMonth()];
+    const year = dateInput.getFullYear();
+    return `${day} ${month} ${year}`;
+  }
+
+  let s = String(dateInput).trim();
+  if (!s || s === '—' || s === '-' || s === 'N/A' || s === 'null' || s === 'undefined' || s === 'TBD') return '-';
+
+  // 0. Remove time component if present (e.g. "2026-11-11T00:00:00.000Z" or "2026/11/11 10:30:00")
+  const dateOnlyPart = s.split(/[T\s]/)[0].trim();
+
+  // 1. Check for YYYY[-/. ]MM[-/. ]DD (e.g. 2026/11/11, 2026-11-01, 2026/011/11, 2026-01-05)
+  // Handles month with 1 to 3 digits (sanitizes '011' -> 11 -> Nov)
+  const ymdMatch = dateOnlyPart.match(/^(\d{4})[-/.](\d{1,3})[-/.](\d{1,2})$/);
+  if (ymdMatch) {
+    const year = ymdMatch[1];
+    let mNum = parseInt(ymdMatch[2], 10);
+    if (mNum > 12 && ymdMatch[2].startsWith('0')) {
+      mNum = parseInt(ymdMatch[2].replace(/^0+/, ''), 10);
+    }
+    const day = parseInt(ymdMatch[3], 10);
+    if (mNum >= 1 && mNum <= 12 && day >= 1 && day <= 31) {
+      return `${day} ${REPORT_MONTH_NAMES[mNum - 1]} ${year}`;
+    }
+  }
+
+  // 2. Check for DD[-/. ]MM[-/. ]YYYY (e.g. 11/11/2026, 01-11-2026, 05/01/2026)
+  const dmyMatch = dateOnlyPart.match(/^(\d{1,2})[-/.](\d{1,3})[-/.](\d{4})$/);
+  if (dmyMatch) {
+    const day = parseInt(dmyMatch[1], 10);
+    let mNum = parseInt(dmyMatch[2], 10);
+    if (mNum > 12 && dmyMatch[2].startsWith('0')) {
+      mNum = parseInt(dmyMatch[2].replace(/^0+/, ''), 10);
+    }
+    const year = dmyMatch[3];
+    if (mNum >= 1 && mNum <= 12 && day >= 1 && day <= 31) {
+      return `${day} ${REPORT_MONTH_NAMES[mNum - 1]} ${year}`;
+    }
+  }
+
+  // 3. If already formatted like '11 Nov 2026', '01 Nov 2026', '5 Jan 2026', '1 Nov 2026'
+  const alreadyFormattedMatch = s.match(/^(\d{1,2})\s+([a-zA-Z]{3,9})\s+(\d{4})/);
+  if (alreadyFormattedMatch) {
+    const day = parseInt(alreadyFormattedMatch[1], 10);
+    const mStr = alreadyFormattedMatch[2];
+    const mCapitalized = mStr.charAt(0).toUpperCase() + mStr.slice(1, 3).toLowerCase();
+    const year = alreadyFormattedMatch[3];
+    return `${day} ${mCapitalized} ${year}`;
+  }
+
+  // 4. Text month first like "Nov 11, 2026" or "November 11, 2026"
+  const textMonthFirst = s.match(/^([a-zA-Z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})/);
+  if (textMonthFirst) {
+    const mStr = textMonthFirst[1];
+    const mCapitalized = mStr.charAt(0).toUpperCase() + mStr.slice(1, 3).toLowerCase();
+    const day = parseInt(textMonthFirst[2], 10);
+    const year = textMonthFirst[3];
+    return `${day} ${mCapitalized} ${year}`;
+  }
+
+  // 5. Fallback Date parse (with clean local calendar components)
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    const day = d.getDate();
+    const month = REPORT_MONTH_NAMES[d.getMonth()];
+    const year = d.getFullYear();
+    return `${day} ${month} ${year}`;
+  }
+
+  // 6. Loose regex fallback for any string containing YYYY followed by digits
+  const looseMatch = s.match(/(\d{4})[^\d]+(\d{1,3})[^\d]+(\d{1,2})/);
+  if (looseMatch) {
+    const year = looseMatch[1];
+    let mNum = parseInt(looseMatch[2], 10);
+    if (mNum > 12 && looseMatch[2].startsWith('0')) {
+      mNum = parseInt(looseMatch[2].replace(/^0+/, ''), 10);
+    }
+    const day = parseInt(looseMatch[3], 10);
+    if (mNum >= 1 && mNum <= 12 && day >= 1 && day <= 31) {
+      return `${day} ${REPORT_MONTH_NAMES[mNum - 1]} ${year}`;
+    }
+  }
+
+  return s;
+};
+
+// Backwards-compatible alias for report download handlers and external imports
+export const formatToDDMMYYYY = formatReportDate;
 
 export function getOrderRemainingPendingAmount(
   order: any, 
@@ -223,6 +329,8 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     currentRole,
     currentUser,
     staff = [],
+    staffAssignments = [],
+    rawFootage = [],
     users = [],
     updateOrderStage, 
     updateProduction, 
@@ -1070,6 +1178,120 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     const opsUpcoming = opsAll.filter(i => i.event_date && new Date(i.event_date) >= new Date() && !(i.ops_status || '').toLowerCase().includes('complete'));
     const opsScheduled = opsAll.filter(i => (i.ops_status || '').toLowerCase().includes('scheduled') || i.assigned_crew !== 'Unassigned');
 
+    // OPERATIONS - Event End (events whose current status is Event End)
+    const isEventEndStatus = (st?: string | null) => {
+      if (!st || typeof st !== 'string') return false;
+      const s = st.trim().toLowerCase();
+      return s === 'event ended' || s === 'event end' || s === 'event completed' || s === 'event complete';
+    };
+
+    const opsEventEndList: any[] = [];
+    const processedEventKeys = new Set<string>();
+
+    // 1. From staffAssignments (where staff marked task_status as Event Ended/End)
+    (staffAssignments || []).forEach((sa: any) => {
+      if (!isEventEndStatus(sa.task_status)) return;
+
+      const ord = (orders || []).find((o: any) => o.order_id === sa.order_id);
+      const ld = (leads || []).find((l: any) => l.lead_id === (sa.lead_id || ord?.lead_id));
+      const op = (operations || []).find((o: any) => o.order_id === sa.order_id);
+      const rf = (rawFootage || []).find((f: any) => (sa.assignment_id && f.assignment_id === sa.assignment_id) || (sa.order_id && f.order_id === sa.order_id));
+
+      let parsedProofs: any = {};
+      if (sa.proofs) {
+        try {
+          parsedProofs = typeof sa.proofs === 'string' ? JSON.parse(sa.proofs) : sa.proofs;
+        } catch (_) {}
+      }
+
+      let footageLink = 
+        sa.raw_footage_link || 
+        parsedProofs?.raw_footage_link || 
+        rf?.server_path || 
+        op?.raw_footage_drive_link || 
+        op?.Raw_Footage_Drive_Link || 
+        op?.consolidated_drive_link || 
+        op?.Consolidated_Drive_Link || 
+        null;
+
+      if (footageLink && (footageLink === 'null' || footageLink === 'undefined' || !String(footageLink).trim())) {
+        footageLink = null;
+      }
+
+      let eventDate = sa.event_date || ord?.event_date || ld?.event_date || null;
+      let eventName = sa.event_name || ord?.custom_event_name || ord?.event_type || ld?.custom_event_name || ld?.event_type || 'Event';
+      if (ld?.events) {
+        try {
+          const leadEvents = deserializeLeadEvents(ld.events);
+          const matchedEv = leadEvents.find((e: any) => e.id === sa.event_id || (e.event_name && sa.event_name && e.event_name.trim().toLowerCase() === sa.event_name.trim().toLowerCase()));
+          if (matchedEv) {
+            if (matchedEv.event_date) eventDate = matchedEv.event_date;
+            if (matchedEv.event_name) eventName = matchedEv.event_name;
+          }
+        } catch (_) {}
+      }
+
+      const customerName = ord?.customer_name || ld?.customer_name || 'Client';
+      const key = sa.assignment_id || `${sa.order_id}_${eventName}_${sa.staff_name}`;
+      processedEventKeys.add(key);
+
+      opsEventEndList.push({
+        id: key,
+        assignment_id: sa.assignment_id,
+        order_id: sa.order_id,
+        lead_id: sa.lead_id || ord?.lead_id,
+        customer_name: customerName,
+        event_name: eventName,
+        event_date: eventDate,
+        event_end_status: sa.task_status || 'Event Ended',
+        staff_name: sa.staff_name || 'Unassigned',
+        footage_link: footageLink,
+        rawOrder: ord,
+        rawLead: ld,
+        rawOps: op,
+        rawSA: sa
+      });
+    });
+
+    // 2. From orders or operations where current_stage / event_status is Event Ended (fallback if not already covered)
+    (orders || []).forEach((ord: any) => {
+      const op = (operations || []).find((o: any) => o.order_id === ord.order_id);
+      const isOrdEnd = isEventEndStatus(ord.current_stage) || isEventEndStatus(ord.order_status);
+      const isOpEnd = isEventEndStatus(op?.event_status);
+
+      if (!isOrdEnd && !isOpEnd) return;
+
+      const eventName = ord.custom_event_name || ord.event_type || 'Event';
+      const key = `order_${ord.order_id}_${eventName}`;
+      if (Array.from(processedEventKeys).some(k => k.includes(ord.order_id))) return;
+      processedEventKeys.add(key);
+
+      const ld = (leads || []).find((l: any) => l.lead_id === ord.lead_id);
+      const rf = (rawFootage || []).find((f: any) => f.order_id === ord.order_id);
+      let footageLink = rf?.server_path || op?.raw_footage_drive_link || op?.Raw_Footage_Drive_Link || op?.consolidated_drive_link || op?.Consolidated_Drive_Link || null;
+      if (footageLink && (footageLink === 'null' || footageLink === 'undefined' || !String(footageLink).trim())) {
+        footageLink = null;
+      }
+
+      const crewList = [op?.photographer_assigned, op?.videographer_assigned, op?.drone_operator_assigned, op?.assistant_assigned].filter(Boolean);
+      const staffName = crewList.length > 0 ? crewList.join(', ') : (ord.sales_person || 'Assigned Crew');
+
+      opsEventEndList.push({
+        id: key,
+        order_id: ord.order_id,
+        lead_id: ord.lead_id,
+        customer_name: ord.customer_name || ld?.customer_name || 'Client',
+        event_name: eventName,
+        event_date: ord.event_date || ld?.event_date || null,
+        event_end_status: ord.current_stage || op?.event_status || 'Event Ended',
+        staff_name: staffName,
+        footage_link: footageLink,
+        rawOrder: ord,
+        rawLead: ld,
+        rawOps: op
+      });
+    });
+
     // PRODUCTION - STRICTLY PRODUCTION-ONLY DATA & EVENT-LEVEL ISOLATED
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -1128,6 +1350,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     return {
       salesTotalLeads, salesConverted, salesLost, salesFollowup,
       opsNew, opsCompleted, opsUpcoming, opsScheduled, opsAll,
+      opsEventEnd: opsEventEndList,
       // Production - 5 standardized production-only metrics
       prodTotal, prodPending, prodInProgress, prodCompleted, prodOverdue,
       // Aliases for backwards compatibility
@@ -1136,7 +1359,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       prodClientAcceptance: prodCompleted,
       prodAll: prodTotal
     };
-  }, [unifiedPipeline, productionProjects]);
+  }, [unifiedPipeline, productionProjects, orders, leads, operations, staffAssignments, rawFootage]);
 
   // Unified pending payment records matching Sales Dashboard Payment Pending exactly
   const allPendingRecords = useMemo(() => {
@@ -1188,6 +1411,9 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     }
 
     // OPERATIONS CARDS
+    if (selectedCard === 'ops_event_end') {
+      return boCardsData.opsEventEnd;
+    }
     if (selectedCard === 'ops_new' || selectedCard === 'ops_completed' || selectedCard === 'ops_upcoming' || selectedCard === 'ops_scheduled' || selectedCard === 'overview_ops') {
       return selectedCard === 'ops_new' ? boCardsData.opsNew
         : selectedCard === 'ops_completed' ? boCardsData.opsCompleted
@@ -1353,6 +1579,81 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     if (selectedCard === 'overview_approval') return [...baseOrderCols, { key: 'current_stage', label: 'Status', render: (item: any) => <span className="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold font-mono text-[10px]">{item.current_stage || 'Awaiting Approval'}</span> }, actionCol];
     if (selectedCard === 'overview_outstanding') return [...baseOrderCols, { key: 'totalRevenue', label: 'Total Revenue', render: (item: any) => <span className="font-mono text-zinc-400">{formatINR(item.totalRevenue || 0)}</span> }, { key: 'paymentReceived', label: 'Received', render: (item: any) => <span className="font-mono text-emerald-400">{formatINR(item.paymentReceived || 0)}</span> }, { key: 'outstandingAmount', label: 'Outstanding Balance', render: (item: any) => <span className="font-mono text-rose-400 font-bold">{formatINR(item.outstandingAmount || 0)}</span> }, actionCol];
 
+    if (selectedCard === 'ops_event_end') {
+      return [
+        { 
+          key: 'customer_name', 
+          label: 'Customer Name', 
+          render: (item: any) => (
+            <div>
+              <span className="font-bold text-white block">{item.customer_name || 'Client'}</span>
+              {item.order_id && <span className="text-[10px] text-zinc-400 font-mono">{item.order_id}</span>}
+            </div>
+          ) 
+        },
+        { 
+          key: 'event_name', 
+          label: 'Event Name', 
+          render: (item: any) => (
+            <span className="text-zinc-200 font-medium">{item.event_name || 'Event'}</span>
+          ) 
+        },
+        { 
+          key: 'event_date', 
+          label: 'Event Date', 
+          render: (item: any) => (
+            <span className="font-mono text-zinc-300 text-xs">
+              {item.event_date ? formatDateDDMMYY(item.event_date) : 'N/A'}
+            </span>
+          ) 
+        },
+        { 
+          key: 'event_end_status', 
+          label: 'Event End Status', 
+          render: (item: any) => (
+            <span className="px-2.5 py-1 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20 font-bold font-mono text-xs">
+              {item.event_end_status || 'Event Ended'}
+            </span>
+          ) 
+        },
+        { 
+          key: 'staff_name', 
+          label: 'Staff Name', 
+          render: (item: any) => (
+            <span className="font-mono text-zinc-200 font-semibold">{item.staff_name || 'Unassigned'}</span>
+          ) 
+        },
+        { 
+          key: 'footage_link', 
+          label: 'Footage Link', 
+          render: (item: any) => {
+            if (item.footage_link && typeof item.footage_link === 'string' && item.footage_link.trim()) {
+              const url = item.footage_link.trim().startsWith('http') 
+                ? item.footage_link.trim() 
+                : `https://${item.footage_link.trim()}`;
+              return (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold font-mono text-xs transition-colors"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Uploaded</span>
+                </a>
+              );
+            }
+            return (
+              <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-500 font-mono text-xs">
+                Not Uploaded
+              </span>
+            );
+          } 
+        }
+      ];
+    }
+
     if (selectedCard && (selectedCard.startsWith('sales_') || selectedCard === 'overview_sales')) return [...baseLeadCols, actionCol];
     if (selectedCard && (selectedCard.startsWith('ops_') || selectedCard === 'overview_ops')) return [...baseOpsCols, actionCol];
     if (selectedCard && (selectedCard.startsWith('prod_') || selectedCard === 'overview_prod' || selectedCard === 'overview_acceptance')) return [...baseProdCols, actionCol];
@@ -1378,6 +1679,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       case 'ops_completed': return { title: 'Total Completed Shoot Projects', totalLabel: 'Completed Count', totalValue: `${modalData.length}`, accentColor: 'emerald' as const, filterDescription: 'Shoot assignments successfully completed on location.' };
       case 'ops_upcoming': return { title: 'Total Upcoming Shoots', totalLabel: 'Upcoming Count', totalValue: `${modalData.length}`, accentColor: 'blue' as const, filterDescription: 'Scheduled shoots with future event dates.' };
       case 'ops_scheduled': return { title: 'Total Scheduled Shoots', totalLabel: 'Scheduled Count', totalValue: `${modalData.length}`, accentColor: 'blue' as const, filterDescription: 'Events where crew, equipment, and shoot timing have been scheduled.' };
+      case 'ops_event_end': return { title: 'Event End Details', totalLabel: 'Total Events Reached Event End', totalValue: `${modalData.length}`, accentColor: 'purple' as const, filterDescription: 'Detailed view of events that have reached the Event End stage/status in Operations.' };
       case 'overview_ops': return { title: 'Operations Pipeline Breakdown', totalLabel: 'Total Operations Count', totalValue: `${modalData.length}`, accentColor: 'blue' as const, filterDescription: 'Comprehensive overview of all operations tasks and event shoots.' };
 
       case 'prod_total': return { title: 'Total Production Projects', totalLabel: 'Total Projects Count', totalValue: `${modalData.length}`, accentColor: 'purple' as const, filterDescription: 'All post-production projects across all editing workflows.' };
@@ -1406,7 +1708,15 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
   // Quotation Unlock Request Modal State
   const [unlockRequestModal, setUnlockRequestModal] = useState<any | null>(null);
   
+  const inFlightClosingOrderRef = useRef<Set<string>>(new Set());
+  const inFlightUnlockRef = useRef<Set<string>>(new Set());
+
   const handleApproveUnlock = async (request: any) => {
+    if (!request) return;
+    const reqKey = request.request_id || request.order_id || request.lead_id || 'unlock';
+    if (inFlightUnlockRef.current.has(reqKey)) return;
+    inFlightUnlockRef.current.add(reqKey);
+
     try {
       console.log("[DEBUG handleApproveUnlock] Step 1: Read unlock request:", request);
       if (!request) {
@@ -1534,14 +1844,21 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       // 6. Refresh UI
       console.log("[DEBUG handleApproveUnlock] Step 6: Refresh UI");
       setUnlockRequests(prev => Array.isArray(prev) ? prev.filter(r => r.request_id !== request.request_id && r.order_id !== effectiveOrderId && r.lead_id !== effectiveLeadId) : []);
+      if (effectiveLeadId && setLeads) {
+        setLeads(prev => prev.map(l => l.lead_id === effectiveLeadId ? { ...l, quotation_locked: false } : l));
+      }
       setUnlockRequestModal(null);
-      alert("Quotation has been successfully unlocked.");
+      setApprovalFeedback(`Quotation for ${request.customer_name || 'lead'} has been successfully unlocked.`);
+      setTimeout(() => setApprovalFeedback(null), 5000);
     } catch (err: any) {
       console.error("[DEBUG handleApproveUnlock ERROR]:", err);
       if (err && err.stack) {
         console.error("Stack trace:", err.stack);
       }
       alert(err.message || String(err) || "Failed to approve unlock");
+    } finally {
+      const reqKey = request?.request_id || request?.order_id || request?.lead_id || 'unlock';
+      inFlightUnlockRef.current.delete(reqKey);
     }
   };
 
@@ -1615,6 +1932,12 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       alert("Only the Business Owner role can close orders.");
       return;
     }
+    if (!order || !order.order_id) return;
+    if (inFlightClosingOrderRef.current.has(order.order_id)) {
+      console.log(`[handleApproveAndCloseOrder] Order ${order.order_id} is already being closed.`);
+      return;
+    }
+    inFlightClosingOrderRef.current.add(order.order_id);
 
     try {
       const lead = leads.find(l => l.lead_id === order.lead_id || l.lead_id === order.order_id);
@@ -1689,17 +2012,28 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         );
       }
 
-      if (refreshData) {
-        await refreshData();
-      }
+      // Optimistically update local states immediately for zero delay
+      setOrders(prev => prev.map(o => o.order_id === order.order_id ? { ...o, current_stage: 'Order Closed' } : o));
+      setProduction(prev => prev.map(p => 
+        (p.order_id === order.order_id || p.tracking_id === order.lead_id || p.production_id === targetProdId)
+          ? { ...p, editing_status: 'Order Closed', production_status: 'Order Closed', current_status: 'Order Closed' }
+          : p
+      ));
 
       setApprovalFeedback(`Order ${order.order_id} (${order.customer_name}) has been successfully approved and closed.`);
       setReviewModalOrder(null);
       setCalendarEventModal(null);
       setTimeout(() => setApprovalFeedback(null), 5000);
+
+      // Trigger background sync without keeping modal or button waiting
+      if (refreshData) {
+        refreshData().catch(e => console.warn('[handleApproveAndCloseOrder] Background refresh error:', e));
+      }
     } catch (err: any) {
       console.error("[handleApproveAndCloseOrder] Error approving order:", err);
       throw err;
+    } finally {
+      inFlightClosingOrderRef.current.delete(order.order_id);
     }
   };
 
@@ -1915,7 +2249,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
             {/* OPERATIONS PERFORMANCE */}
             <div className="space-y-3">
               <h3 className="text-xs font-black font-mono tracking-wider text-blue-400 uppercase">Operations Performance</h3>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
                 <CameraLensStatsCard
                   label="Total New Projects"
                   val={boCardsData.opsNew.length}
@@ -1951,6 +2285,15 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
                   lensLabel="ZOOM 24-70"
                   chartPoints={[10, 14, 12, 18, 16, 22, 21]}
                   onClick={() => setSelectedCard('ops_scheduled')}
+                />
+                <CameraLensStatsCard
+                  label="Event End"
+                  val={boCardsData.opsEventEnd.length}
+                  theme="purple"
+                  trendText="Shoots Ended"
+                  lensLabel="APO 85mm"
+                  chartPoints={[12, 16, 14, 20, 18, 24, boCardsData.opsEventEnd.length || 22]}
+                  onClick={() => setSelectedCard('ops_event_end')}
                 />
               </div>
             </div>
@@ -2342,7 +2685,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         isOpen={selectedCard !== null}
         onClose={() => setSelectedCard(null)}
         title={modalTitleAndMeta.title}
-        subtitle={startDate && endDate ? `${formatDateDDMMYY(startDate)} – ${formatDateDDMMYY(endDate)}` : ''}
+        subtitle={startDate && endDate ? `${formatReportDate(startDate)} – ${formatReportDate(endDate)}` : ''}
         accentColor={modalTitleAndMeta.accentColor}
         data={modalData}
         columns={modalColumns}
@@ -2960,6 +3303,49 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
   const [selectedLeadEventType, setSelectedLeadEventType] = useState<string>('all');
   const [leadSearchTerm, setLeadSearchTerm] = useState('');
   const [showStageFilterDropdown, setShowStageFilterDropdown] = useState(false);
+  const stageFilterDropdownRef = useRef<HTMLDivElement>(null);
+  const stageFilterBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Auto-close stage filter dropdown on outside click, Escape, or another dropdown opening
+  useEffect(() => {
+    if (!showStageFilterDropdown) return;
+
+    const handleCloseOthers = (e: Event) => {
+      const customEv = e as CustomEvent<{ id: string }>;
+      if (customEv.detail?.id && customEv.detail.id !== 'bo-stage-filter') {
+        setShowStageFilterDropdown(false);
+      }
+    };
+
+    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
+      const target = e.target;
+      if (!target || !(target instanceof Node)) return;
+      if (stageFilterBtnRef.current?.contains(target)) return;
+      if (stageFilterDropdownRef.current?.contains(target)) return;
+      setShowStageFilterDropdown(false);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.stopPropagation();
+        setShowStageFilterDropdown(false);
+      }
+    };
+
+    window.addEventListener('app:dropdown-open', handleCloseOthers);
+    window.addEventListener('close-all-event-dropdowns', handleCloseOthers);
+    document.addEventListener('mousedown', handleOutsideClick, true);
+    document.addEventListener('touchstart', handleOutsideClick, { passive: true, capture: true });
+    window.addEventListener('keydown', handleKeyDown, true);
+
+    return () => {
+      window.removeEventListener('app:dropdown-open', handleCloseOthers);
+      window.removeEventListener('close-all-event-dropdowns', handleCloseOthers);
+      document.removeEventListener('mousedown', handleOutsideClick, true);
+      document.removeEventListener('touchstart', handleOutsideClick, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [showStageFilterDropdown]);
 
   const allLeadStages = useMemo(() => {
     const s = new Set<string>();
@@ -3012,7 +3398,171 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
     }).sort((a, b) => compareRecordsByDate(a, b, 'latest'));
   }, [leads, leadsStartDate, leadsEndDate, selectedLeadStages, selectedLeadEventType, leadSearchTerm]);
 
+  const handleDownloadCSV = () => {
+    if (filteredLeadsReport.length === 0) {
+      alert("No leads data available to export.");
+      return;
+    }
+
+    const headers = [
+      'Lead ID',
+      'Created Date',
+      'Customer Name',
+      'Mobile',
+      'Email',
+      'WhatsApp',
+      'Status',
+      'Event Type',
+      'Event Date',
+      'Event Location',
+      'Assigned Staff'
+    ];
+
+    const rows = filteredLeadsReport.map(l => {
+      const createdDate = formatToDDMMYYYY(l.created_date || l.created_at);
+      const eventDate = formatToDDMMYYYY(l.event_date);
+      const stage = l.status || l.current_status || 'New';
+      const staffName = l.sales_person || l.sales_staff_name || '-';
+
+      return [
+        `"${String(l.lead_id || '-').replace(/"/g, '""')}"`,
+        `"${String(createdDate).replace(/"/g, '""')}"`,
+        `"${String(l.customer_name || '-').replace(/"/g, '""')}"`,
+        `"${String(l.mobile || '-').replace(/"/g, '""')}"`,
+        `"${String(l.email || '-').replace(/"/g, '""')}"`,
+        `"${String(l.whatsapp_number || '-').replace(/"/g, '""')}"`,
+        `"${String(stage).replace(/"/g, '""')}"`,
+        `"${String(l.event_type || '-').replace(/"/g, '""')}"`,
+        `"${String(eventDate).replace(/"/g, '""')}"`,
+        `"${String(l.event_location || '-').replace(/"/g, '""')}"`,
+        `"${String(staffName).replace(/"/g, '""')}"`
+      ];
+    });
+
+    const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Leads_Report_${leadsStartDate ? formatToDDMMYYYY(leadsStartDate) : 'all'}_to_${leadsEndDate ? formatToDDMMYYYY(leadsEndDate) : 'all'}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadPDF = () => {
+    if (filteredLeadsReport.length === 0) {
+      alert("No leads data available to export.");
+      return;
+    }
+
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    const printHeader = (pageNum: number) => {
+      // Header Banner
+      doc.setFillColor(24, 24, 27);
+      doc.rect(10, 8, pageWidth - 20, 24, 'F');
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text("COMPREHENSIVE LEADS REPORT", 14, 18);
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(161, 161, 170);
+      const dateRangeStr = `Date Range: ${leadsStartDate ? formatToDDMMYYYY(leadsStartDate) : 'All'} to ${leadsEndDate ? formatToDDMMYYYY(leadsEndDate) : 'All'}`;
+      const generatedStr = `Generated: ${formatToDDMMYYYY(new Date())}`;
+      const countStr = `Total Records: ${filteredLeadsReport.length}`;
+      doc.text(`${dateRangeStr}  |  ${generatedStr}  |  ${countStr}`, 14, 26);
+
+      // Table Header
+      const yHeader = 38;
+      doc.setFillColor(39, 39, 42);
+      doc.rect(10, yHeader - 5, pageWidth - 20, 8, 'F');
+
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(228, 228, 231);
+
+      doc.text('LEAD ID', 14, yHeader);
+      doc.text('CREATED', 40, yHeader);
+      doc.text('CUSTOMER NAME', 64, yHeader);
+      doc.text('CONTACT', 114, yHeader);
+      doc.text('STATUS', 154, yHeader);
+      doc.text('EVENT TYPE', 188, yHeader);
+      doc.text('EVENT DATE', 222, yHeader);
+      doc.text('ASSIGNED STAFF', 250, yHeader);
+
+      doc.setDrawColor(63, 63, 70);
+      doc.setLineWidth(0.3);
+      doc.line(10, yHeader + 3, pageWidth - 10, yHeader + 3);
+    };
+
+    printHeader(1);
+
+    let y = 46;
+    const rowHeight = 7;
+    const maxY = pageHeight - 16;
+
+    filteredLeadsReport.forEach((l, index) => {
+      if (y > maxY) {
+        doc.addPage();
+        printHeader(doc.internal.getNumberOfPages());
+        y = 46;
+      }
+
+      if (index % 2 === 1) {
+        doc.setFillColor(244, 244, 245);
+        doc.rect(10, y - 4.5, pageWidth - 20, rowHeight, 'F');
+      }
+
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(39, 39, 42);
+
+      const createdDate = formatToDDMMYYYY(l.created_date || l.created_at);
+      const eventDate = formatToDDMMYYYY(l.event_date);
+      const stage = l.status || l.current_status || 'New';
+      const staffName = l.sales_person || l.sales_staff_name || '-';
+      const contactStr = l.mobile ? (l.whatsapp_number && l.whatsapp_number !== l.mobile ? `${l.mobile} / WA:${l.whatsapp_number}` : l.mobile) : '-';
+
+      doc.setFont('helvetica', 'bold');
+      doc.text(String(l.lead_id || '-').substring(0, 14), 14, y);
+
+      doc.setFont('helvetica', 'normal');
+      doc.text(String(createdDate), 40, y);
+      doc.text(String(l.customer_name || 'Unnamed').substring(0, 26), 64, y);
+      doc.text(String(contactStr).substring(0, 22), 114, y);
+      doc.text(String(stage).substring(0, 18), 154, y);
+      doc.text(String(l.event_type || 'General').substring(0, 18), 188, y);
+      doc.text(String(eventDate), 222, y);
+      doc.text(String(staffName).substring(0, 22), 250, y);
+
+      y += rowHeight;
+    });
+
+    const totalPages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7.5);
+      doc.setTextColor(113, 113, 122);
+      doc.text(`Page ${i} of ${totalPages}`, pageWidth - 25, pageHeight - 6);
+      doc.text("Business Owner Dashboard — Leads Report", 14, pageHeight - 6);
+    }
+
+    doc.save(`Leads_Report_${leadsStartDate ? formatToDDMMYYYY(leadsStartDate) : 'all'}_to_${leadsEndDate ? formatToDDMMYYYY(leadsEndDate) : 'all'}.pdf`);
+  };
+
   const handleDownloadLeadsReport = () => {
+    if (filteredLeadsReport.length === 0) {
+      alert("No leads data available to export.");
+      return;
+    }
+
     const excelData = filteredLeadsReport.map(l => ({
       'Lead ID': l.lead_id || '-',
       'Customer Name': l.customer_name || '-',
@@ -3021,16 +3571,16 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
       'WhatsApp': l.whatsapp_number || '-',
       'Lead Stage': l.status || l.current_status || 'New',
       'Event Type': l.event_type || '-',
-      'Event Date': l.event_date || '-',
+      'Event Date': formatToDDMMYYYY(l.event_date),
       'Event Location': l.event_location || '-',
       'Salesperson': l.sales_person || l.sales_staff_name || '-',
-      'Created Date': (l.created_date || l.created_at || '').split('T')[0] || '-'
+      'Created Date': formatToDDMMYYYY(l.created_date || l.created_at)
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(excelData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Leads Report');
-    XLSX.writeFile(workbook, `Leads_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.writeFile(workbook, `Leads_Report_${leadsStartDate ? formatToDDMMYYYY(leadsStartDate) : 'all'}_to_${leadsEndDate ? formatToDDMMYYYY(leadsEndDate) : 'all'}.xlsx`);
   };
 
   return (
@@ -3049,13 +3599,37 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
             </p>
           </div>
 
-          <button
-            onClick={handleDownloadLeadsReport}
-            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold text-xs hover:from-cyan-400 hover:to-blue-500 transition-all flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20 cursor-pointer"
-          >
-            <Download className="w-4 h-4" />
-            <span>Download Filtered Report ({filteredLeadsReport.length})</span>
-          </button>
+          {/* Download Options */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-wider mr-1">Download:</span>
+            <button
+              type="button"
+              onClick={handleDownloadPDF}
+              className="px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-700 hover:border-rose-500/50 text-white font-bold text-xs hover:bg-zinc-850 transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+              title="Download PDF Report"
+            >
+              <Download className="w-3.5 h-3.5 text-rose-400" />
+              <span>Download PDF</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadCSV}
+              className="px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-700 hover:border-cyan-500/50 text-white font-bold text-xs hover:bg-zinc-850 transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+              title="Download CSV Report"
+            >
+              <Download className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Download CSV</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadLeadsReport}
+              className="px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-700 hover:border-emerald-500/50 text-white font-bold text-xs hover:bg-zinc-850 transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+              title="Download Excel (.xlsx) Report"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Excel (.xlsx)</span>
+            </button>
+          </div>
         </div>
 
         {/* Filters Row */}
@@ -3100,9 +3674,16 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
           <div className="space-y-1 relative">
             <label className="text-[10px] font-mono font-bold uppercase text-zinc-400">Lead Stages ({selectedLeadStages.length} / {allLeadStages.length})</label>
             <button
+              ref={stageFilterBtnRef}
               type="button"
-              onClick={() => setShowStageFilterDropdown(!showStageFilterDropdown)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-200 flex items-center justify-between hover:border-cyan-500 transition-colors cursor-pointer text-left"
+              onClick={() => {
+                setShowStageFilterDropdown((prev) => {
+                  const next = !prev;
+                  if (next) broadcastDropdownOpen('bo-stage-filter');
+                  return next;
+                });
+              }}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-200 flex items-center justify-between hover:border-cyan-500 transition-colors cursor-pointer text-left select-none"
             >
               <span className="truncate">
                 {selectedLeadStages.length === allLeadStages.length
@@ -3111,47 +3692,61 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
                   ? 'No Stages Selected'
                   : `${selectedLeadStages.length} Stages Selected`}
               </span>
-              <ChevronDown className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0 ml-1" />
+              <ChevronDown className={`w-3.5 h-3.5 text-zinc-400 flex-shrink-0 ml-1 transition-transform ${showStageFilterDropdown ? 'rotate-180 text-cyan-400' : ''}`} />
             </button>
 
             {showStageFilterDropdown && (
-              <div className="absolute top-full left-0 right-0 mt-1 bg-zinc-950 border border-zinc-800 rounded-xl p-3 shadow-2xl z-50 space-y-2 max-h-64 overflow-y-auto">
+              <div
+                ref={stageFilterDropdownRef}
+                className="absolute top-full left-0 right-0 mt-1 bg-zinc-950 border border-zinc-800 rounded-xl p-3 shadow-2xl z-50 space-y-2 max-h-64 overflow-y-auto flex flex-col font-sans"
+              >
                 <div className="flex items-center justify-between pb-2 border-b border-zinc-800 text-[10px] font-mono">
                   <button
                     type="button"
                     onClick={() => setSelectedLeadStages(allLeadStages)}
-                    className="text-cyan-400 hover:underline"
+                    className="text-cyan-400 hover:underline cursor-pointer"
                   >
                     Select All
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectedLeadStages([])}
-                    className="text-zinc-400 hover:underline"
+                    className="text-zinc-400 hover:underline cursor-pointer"
                   >
                     Clear All
                   </button>
                 </div>
-                {allLeadStages.map(stage => {
-                  const isChecked = selectedLeadStages.includes(stage);
-                  return (
-                    <label key={stage} className="flex items-center gap-2 text-xs text-zinc-300 hover:text-white cursor-pointer py-1">
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedLeadStages([...selectedLeadStages, stage]);
-                          } else {
-                            setSelectedLeadStages(selectedLeadStages.filter(s => s !== stage));
-                          }
-                        }}
-                        className="rounded border-zinc-700 bg-zinc-900 text-cyan-500 focus:ring-0 cursor-pointer"
-                      />
-                      <span className="truncate">{stage}</span>
-                    </label>
-                  );
-                })}
+                <div className="space-y-1 overflow-y-auto flex-1">
+                  {allLeadStages.map(stage => {
+                    const isChecked = selectedLeadStages.includes(stage);
+                    return (
+                      <label key={stage} className="flex items-center gap-2 text-xs text-zinc-300 hover:text-white cursor-pointer py-1 select-none">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedLeadStages([...selectedLeadStages, stage]);
+                            } else {
+                              setSelectedLeadStages(selectedLeadStages.filter(s => s !== stage));
+                            }
+                          }}
+                          className="rounded border-zinc-700 bg-zinc-900 text-cyan-500 focus:ring-0 cursor-pointer"
+                        />
+                        <span className="truncate">{stage}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="pt-2 border-t border-zinc-800 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowStageFilterDropdown(false)}
+                    className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded-lg font-bold transition-colors cursor-pointer"
+                  >
+                    Done
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -3945,32 +4540,34 @@ const RevenuePaymentSummarySection: React.FC<RevenuePaymentSummarySectionProps> 
     const rows = dataToExport.map(r => {
       const displayEvName = (r.matchingEvents && r.matchingEvents.length > 0)
         ? r.matchingEvents.map(e => e.event_name || e.event_type || 'Event').join(' | ')
-        : (r.eventName || '');
+        : (r.eventName || '-');
       const displayEvDate = (r.matchingEvents && r.matchingEvents.length > 0)
-        ? r.matchingEvents.map(e => formatDateDDMMYY(e.event_date || e.event_start_date)).join(' | ')
-        : (r.eventDate ? formatDateDDMMYY(r.eventDate) : '');
+        ? r.matchingEvents.map(e => formatToDDMMYYYY(e.event_date || e.event_start_date)).join(' | ')
+        : (r.eventDate ? formatToDDMMYYYY(r.eventDate) : '-');
 
       return [
-        `"${String(r.orderId || '').replace(/"/g, '""')}"`,
-        `"${String(r.customerName || '').replace(/"/g, '""')}"`,
+        `"${String(r.orderId || '-').replace(/"/g, '""')}"`,
+        `"${String(r.customerName || '-').replace(/"/g, '""')}"`,
         `"${String(displayEvName).replace(/"/g, '""')}"`,
         `"${String(displayEvDate).replace(/"/g, '""')}"`,
         r.totalRevenue || 0,
         r.paymentReceived || 0,
         r.outstanding || 0,
-        `"${String(r.paymentStatus || '').replace(/"/g, '""')}"`,
-        `"${String(r.currentStage || '').replace(/"/g, '""')}"`
+        `"${String(r.paymentStatus || '-').replace(/"/g, '""')}"`,
+        `"${String(r.currentStage || '-').replace(/"/g, '""')}"`
       ];
     });
 
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(e => e.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `${cardTitle}_Report_${startDate || 'all'}_to_${endDate || 'all'}.csv`);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `${cardTitle}_Report_${startDate ? formatToDDMMYYYY(startDate) : 'all'}_to_${endDate ? formatToDDMMYYYY(endDate) : 'all'}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // Export Excel (.xlsx)
@@ -3990,28 +4587,28 @@ const RevenuePaymentSummarySection: React.FC<RevenuePaymentSummarySectionProps> 
     const excelData = dataToExport.map(r => {
       const displayEvName = (r.matchingEvents && r.matchingEvents.length > 0)
         ? r.matchingEvents.map(e => e.event_name || e.event_type || 'Event').join(' | ')
-        : (r.eventName || '');
+        : (r.eventName || '-');
       const displayEvDate = (r.matchingEvents && r.matchingEvents.length > 0)
-        ? r.matchingEvents.map(e => formatDateDDMMYY(e.event_date || e.event_start_date)).join(' | ')
-        : (r.eventDate ? formatDateDDMMYY(r.eventDate) : '');
+        ? r.matchingEvents.map(e => formatToDDMMYYYY(e.event_date || e.event_start_date)).join(' | ')
+        : (r.eventDate ? formatToDDMMYYYY(r.eventDate) : '-');
 
       return {
-        'Order ID': r.orderId || '',
-        'Customer Name': r.customerName || '',
+        'Order ID': r.orderId || '-',
+        'Customer Name': r.customerName || '-',
         'Event Name': displayEvName,
         'Event Date': displayEvDate,
         'Total Revenue (₹)': r.totalRevenue || 0,
         'Payment Received (₹)': r.paymentReceived || 0,
         'Outstanding Balance (₹)': r.outstanding || 0,
-        'Payment Status': r.paymentStatus || '',
-        'Current Status': r.currentStage || ''
+        'Payment Status': r.paymentStatus || '-',
+        'Current Status': r.currentStage || '-'
       };
     });
 
     const worksheet = XLSX.utils.json_to_sheet(excelData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Report');
-    XLSX.writeFile(workbook, `${cardTitle}_Report_${startDate || 'all'}_to_${endDate || 'all'}.xlsx`);
+    XLSX.writeFile(workbook, `${cardTitle}_Report_${startDate ? formatToDDMMYYYY(startDate) : 'all'}_to_${endDate ? formatToDDMMYYYY(endDate) : 'all'}.xlsx`);
   };
 
   // Export PDF
@@ -4035,54 +4632,95 @@ const RevenuePaymentSummarySection: React.FC<RevenuePaymentSummarySectionProps> 
       : selectedCard === 'summary_closed' ? 'Closed_Orders'
       : 'Revenue_Summary';
 
-    const doc = new jsPDF({ orientation: 'landscape' });
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
 
-    doc.setFontSize(16);
+    doc.setFontSize(15);
+    doc.setFont('helvetica', 'bold');
     doc.text(`${cardLabel} Report`, 14, 15);
-    doc.setFontSize(10);
-    doc.text(`Generated on: ${formatDateDDMMYY(new Date())} | Date Range: ${startDate ? formatDateDDMMYY(startDate) : 'All'} to ${endDate ? formatDateDDMMYY(endDate) : 'All'} | Total Records: ${dataToExport.length}`, 14, 22);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 100, 100);
+    doc.text(`Generated on: ${formatToDDMMYYYY(new Date())} | Date Range: ${startDate ? formatToDDMMYYYY(startDate) : 'All'} to ${endDate ? formatToDDMMYYYY(endDate) : 'All'} | Total Records: ${dataToExport.length}`, 14, 22);
 
     const subTotalRev = dataToExport.reduce((s, r) => s + (r.totalRevenue || 0), 0);
     const subTotalRec = dataToExport.reduce((s, r) => s + (r.paymentReceived || 0), 0);
     const subTotalOut = dataToExport.reduce((s, r) => s + (r.outstanding || 0), 0);
 
-    doc.setFontSize(11);
-    doc.text(`Total Revenue: Rs.${subTotalRev.toLocaleString('en-IN')} | Received: Rs.${subTotalRec.toLocaleString('en-IN')} | Outstanding: Rs.${subTotalOut.toLocaleString('en-IN')}`, 14, 30);
+    doc.setFontSize(9.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(24, 24, 27);
+    doc.text(`Total Revenue: Rs.${subTotalRev.toLocaleString('en-IN')} | Received: Rs.${subTotalRec.toLocaleString('en-IN')} | Outstanding: Rs.${subTotalOut.toLocaleString('en-IN')}`, 14, 29);
 
-    let y = 40;
-    doc.setFontSize(9);
-    doc.text('Order ID', 14, y);
-    doc.text('Customer Name', 45, y);
-    doc.text('Event Name', 90, y);
-    doc.text('Revenue', 140, y);
-    doc.text('Received', 170, y);
-    doc.text('Balance', 200, y);
-    doc.text('Status', 230, y);
+    const printHeaderRow = (yPos: number) => {
+      doc.setFillColor(39, 39, 42);
+      doc.rect(10, yPos - 4.5, pageWidth - 20, 7.5, 'F');
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text('Order ID', 14, yPos);
+      doc.text('Customer Name', 42, yPos);
+      doc.text('Event Name', 84, yPos);
+      doc.text('Event Date', 130, yPos);
+      doc.text('Revenue (INR)', 160, yPos);
+      doc.text('Received (INR)', 192, yPos);
+      doc.text('Balance (INR)', 224, yPos);
+      doc.text('Status', 256, yPos);
+      doc.setDrawColor(63, 63, 70);
+      doc.setLineWidth(0.3);
+      doc.line(10, yPos + 3, pageWidth - 10, yPos + 3);
+    };
 
-    y += 4;
-    doc.line(14, y, 280, y);
-    y += 6;
+    let y = 39;
+    printHeaderRow(y);
+    y += 7;
 
-    dataToExport.forEach(r => {
-      if (y > 180) {
+    dataToExport.forEach((r, idx) => {
+      if (y > pageHeight - 16) {
         doc.addPage();
-        y = 20;
+        y = 18;
+        printHeaderRow(y);
+        y += 7;
       }
+
+      if (idx % 2 === 1) {
+        doc.setFillColor(244, 244, 245);
+        doc.rect(10, y - 4, pageWidth - 20, 6.5, 'F');
+      }
+
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(39, 39, 42);
+
       const displayEvName = (r.matchingEvents && r.matchingEvents.length > 0)
         ? r.matchingEvents.map(e => e.event_name || e.event_type || 'Event').join(' | ')
-        : (r.eventName || '');
+        : (r.eventName || '-');
+      const displayEvDate = (r.matchingEvents && r.matchingEvents.length > 0)
+        ? r.matchingEvents.map(e => formatToDDMMYYYY(e.event_date || e.event_start_date)).join(' | ')
+        : (r.eventDate ? formatToDDMMYYYY(r.eventDate) : '-');
 
-      doc.text(String(r.orderId || ''), 14, y);
-      doc.text(String(r.customerName || '').substring(0, 20), 45, y);
-      doc.text(String(displayEvName).substring(0, 22), 90, y);
-      doc.text(`Rs.${r.totalRevenue || 0}`, 140, y);
-      doc.text(`Rs.${r.paymentReceived || 0}`, 170, y);
-      doc.text(`Rs.${r.outstanding || 0}`, 200, y);
-      doc.text(String(r.currentStage || '').substring(0, 18), 230, y);
-      y += 6;
+      doc.text(String(r.orderId || '-').substring(0, 14), 14, y);
+      doc.text(String(r.customerName || '-').substring(0, 20), 42, y);
+      doc.text(String(displayEvName).substring(0, 22), 84, y);
+      doc.text(String(displayEvDate).substring(0, 16), 130, y);
+      doc.text(`Rs.${(r.totalRevenue || 0).toLocaleString('en-IN')}`, 160, y);
+      doc.text(`Rs.${(r.paymentReceived || 0).toLocaleString('en-IN')}`, 192, y);
+      doc.text(`Rs.${(r.outstanding || 0).toLocaleString('en-IN')}`, 224, y);
+      doc.text(String(r.currentStage || r.paymentStatus || '-').substring(0, 16), 256, y);
+      y += 6.5;
     });
 
-    doc.save(`${cardTitle}_Report_${startDate || 'all'}_to_${endDate || 'all'}.pdf`);
+    const totalPages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7.5);
+      doc.setTextColor(113, 113, 122);
+      doc.text(`Page ${i} of ${totalPages}`, pageWidth - 25, pageHeight - 6);
+      doc.text("Business Owner Dashboard — Financial Report", 14, pageHeight - 6);
+    }
+
+    doc.save(`${cardTitle}_Report_${startDate ? formatToDDMMYYYY(startDate) : 'all'}_to_${endDate ? formatToDDMMYYYY(endDate) : 'all'}.pdf`);
   };
 
   return (
@@ -4511,7 +5149,7 @@ const RevenuePaymentSummarySection: React.FC<RevenuePaymentSummarySectionProps> 
         isOpen={selectedCard !== null && selectedCard.startsWith('summary_')}
         onClose={() => setSelectedCard(null)}
         title={modalTitleAndMeta.title}
-        subtitle={startDate && endDate ? `${formatDateDDMMYY(startDate)} – ${formatDateDDMMYY(endDate)}` : ''}
+        subtitle={startDate && endDate ? `${formatReportDate(startDate)} – ${formatReportDate(endDate)}` : ''}
         accentColor={modalTitleAndMeta.accentColor}
         data={modalData}
         columns={modalColumns}
@@ -4595,11 +5233,13 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
   onReject
 }) => {
   const { editorAssignments = [], quotations = [] } = useRole();
+  const isApprovingRef = useRef(false);
   const [isApproving, setIsApproving] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
 
   const handleApproveSubmit = async () => {
-    if (isApproving) return;
+    if (isApprovingRef.current || isApproving) return;
+    isApprovingRef.current = true;
     setIsApproving(true);
     setApproveError(null);
     try {
@@ -4608,6 +5248,7 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
     } catch (err: any) {
       setApproveError(err.message || "Database update failed");
       setIsApproving(false);
+      isApprovingRef.current = false;
     }
   };
 
@@ -4647,7 +5288,7 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
       const combined = rawLeadEvents.length > 0 ? rawLeadEvents : (deserialized.length > 0 ? deserialized : []);
 
       if (combined && combined.length > 0) {
-        return combined.map((ev: any, idx: number) => {
+        const eventsList = combined.map((ev: any, idx: number) => {
           if (!ev) return {
             id: `ev_${idx + 1}`,
             eventName: `Event ${idx + 1}`,
@@ -4708,9 +5349,22 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
             eventLocation: eLocation,
             googleMapsLink: eMapsLink,
             deliverables: deliverablesList,
-            assignments: matchedAssignments
+            assignments: matchedAssignments,
+            createdAt: new Date(ev?.created_at || ev?.createdAt || 0).getTime() || 0
           };
         });
+
+        eventsList.sort((a, b) => {
+          const tA = a.eventDate && a.eventDate !== 'N/A' ? new Date(a.eventDate).getTime() : 0;
+          const tB = b.eventDate && b.eventDate !== 'N/A' ? new Date(b.eventDate).getTime() : 0;
+          if (tA && tB && tA !== tB) return tB - tA;
+          if (tA && !tB) return -1;
+          if (!tA && tB) return 1;
+          if (a.createdAt && b.createdAt && a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
+          return String(b.id || '').localeCompare(String(a.id || ''));
+        });
+
+        return eventsList;
       }
 
       // Fallback single event if no event array exists
@@ -4975,8 +5629,8 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
 interface UnlockRequestReviewModalProps {
   unlockRequestModal: any;
   onClose: () => void;
-  onReject: (item: any) => void;
-  onApprove: (item: any) => void;
+  onReject: (item: any) => Promise<void> | void;
+  onApprove: (item: any) => Promise<void> | void;
 }
 
 const UnlockRequestReviewModal: React.FC<UnlockRequestReviewModalProps> = ({
@@ -4985,6 +5639,11 @@ const UnlockRequestReviewModal: React.FC<UnlockRequestReviewModalProps> = ({
   onReject,
   onApprove
 }) => {
+  const [isApproving, setIsApproving] = useState(false);
+  const [isRejecting, setIsRejecting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const isBusyRef = useRef(false);
+
   useEffect(() => {
     document.body.style.overflow = 'hidden';
     document.documentElement.style.overflow = 'hidden';
@@ -5002,13 +5661,43 @@ const UnlockRequestReviewModal: React.FC<UnlockRequestReviewModalProps> = ({
     };
   }, []);
 
+  const handleApproveClick = async () => {
+    if (isBusyRef.current || isApproving || isRejecting) return;
+    isBusyRef.current = true;
+    setIsApproving(true);
+    setErrorMsg(null);
+    try {
+      await onApprove(unlockRequestModal);
+    } catch (err: any) {
+      console.error("[UnlockRequestReviewModal] Error approving unlock:", err);
+      setErrorMsg(err.message || 'Failed to approve unlock request. Please try again.');
+      setIsApproving(false);
+      isBusyRef.current = false;
+    }
+  };
+
+  const handleRejectClick = async () => {
+    if (isBusyRef.current || isApproving || isRejecting) return;
+    isBusyRef.current = true;
+    setIsRejecting(true);
+    setErrorMsg(null);
+    try {
+      await onReject(unlockRequestModal);
+    } catch (err: any) {
+      console.error("[UnlockRequestReviewModal] Error rejecting unlock:", err);
+      setErrorMsg(err.message || 'Failed to reject unlock request. Please try again.');
+      setIsRejecting(false);
+      isBusyRef.current = false;
+    }
+  };
+
   if (typeof document === 'undefined') return null;
 
   return createPortal(
     <div 
       className="fixed inset-0 bg-black/85 z-[200] flex items-center justify-center p-4 backdrop-blur-md"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !isApproving && !isRejecting) onClose();
       }}
     >
       <div 
@@ -5021,12 +5710,20 @@ const UnlockRequestReviewModal: React.FC<UnlockRequestReviewModalProps> = ({
           </h4>
           <button 
             onClick={onClose}
-            className="text-slate-500 hover:text-slate-350 cursor-pointer animate-none border-0"
+            disabled={isApproving || isRejecting}
+            className="text-slate-500 hover:text-slate-350 cursor-pointer animate-none border-0 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
         
+        {errorMsg && (
+          <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-3 rounded-lg text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
             <div>
@@ -5068,21 +5765,38 @@ const UnlockRequestReviewModal: React.FC<UnlockRequestReviewModalProps> = ({
         <div className="flex justify-end gap-2 border-t border-slate-800 pt-4">
           <button
             onClick={onClose}
-            className="px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl cursor-pointer text-xs font-bold transition-colors border-0"
+            disabled={isApproving || isRejecting}
+            className="px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl cursor-pointer text-xs font-bold transition-colors border-0 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>
           <button
-            onClick={() => onReject(unlockRequestModal)}
-            className="px-3 py-2 bg-rose-950 hover:bg-rose-900 text-rose-400 border border-rose-900/50 rounded-xl cursor-pointer text-xs font-bold transition-colors"
+            onClick={handleRejectClick}
+            disabled={isApproving || isRejecting}
+            className="px-3 py-2 bg-rose-950 hover:bg-rose-900 text-rose-400 border border-rose-900/50 rounded-xl cursor-pointer text-xs font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
-            Reject
+            {isRejecting ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span>Rejecting...</span>
+              </>
+            ) : (
+              <span>Reject</span>
+            )}
           </button>
           <button
-            onClick={() => onApprove(unlockRequestModal)}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl cursor-pointer text-xs font-bold shadow-lg transition-colors border-0"
+            onClick={handleApproveClick}
+            disabled={isApproving || isRejecting}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl cursor-pointer text-xs font-bold shadow-lg transition-colors border-0 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
-            Approve Unlock
+            {isApproving ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span>Approving...</span>
+              </>
+            ) : (
+              <span>Approve Unlock</span>
+            )}
           </button>
         </div>
       </div>

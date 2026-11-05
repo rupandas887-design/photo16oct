@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, X, Check, ChevronDown, AlertCircle, Wrench, Layers, RefreshCw } from 'lucide-react';
 import { Equipment } from '../../types';
 import { supabaseClient } from '../../supabaseClient';
+import { broadcastDropdownOpen } from '../ui/useDropdownCoordinator';
 
 interface OtherStaffEquipment {
   staffName?: string;
@@ -150,34 +151,52 @@ const EquipmentSelectorDropdownComponent: React.FC<EquipmentSelectorDropdownProp
     }
   }, []);
 
+  const instanceId = useId();
   // Orientation state: open upward if not enough space below
   const [openUpward, setOpenUpward] = useState(false);
+  const [maxMenuHeight, setMaxMenuHeight] = useState(380);
 
   const checkOrientation = useCallback(() => {
-    if (!triggerRef.current) return;
+    if (!triggerRef.current || typeof window === 'undefined') return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const spaceAbove = rect.top;
-    setOpenUpward(spaceBelow < 280 && spaceAbove > spaceBelow);
+    const vh = window.innerHeight;
+    const spaceBelow = vh - rect.bottom - 12;
+    const spaceAbove = rect.top - 12;
+    const shouldOpenUpward = spaceBelow < 280 && spaceAbove > spaceBelow;
+    setOpenUpward(shouldOpenUpward);
+    const availableSpace = shouldOpenUpward ? spaceAbove : spaceBelow;
+    setMaxMenuHeight(Math.max(160, Math.min(380, availableSpace - 10)));
   }, []);
 
-  // Click outside to close (handles clicks outside trigger and popover portal)
+  // Listen to close-all dropdowns across the application
+  useEffect(() => {
+    const handleCloseOthers = (e: Event) => {
+      const customEv = e as CustomEvent<{ id: string }>;
+      if (customEv.detail?.id && customEv.detail.id !== instanceId) {
+        setIsOpen(false);
+      }
+    };
+    window.addEventListener('app:dropdown-open', handleCloseOthers);
+    window.addEventListener('close-all-event-dropdowns', handleCloseOthers);
+    return () => {
+      window.removeEventListener('app:dropdown-open', handleCloseOthers);
+      window.removeEventListener('close-all-event-dropdowns', handleCloseOthers);
+    };
+  }, [instanceId]);
+
+  // Click outside and Escape key to close
   useEffect(() => {
     if (!isOpen) return;
+
+    checkOrientation();
 
     const handleClickOutside = (event: MouseEvent | TouchEvent) => {
       const target = event.target;
       if (!target || !(target instanceof Node)) return;
-      if (
-        triggerRef.current &&
-        triggerRef.current.contains(target)
-      ) {
+      if (triggerRef.current && triggerRef.current.contains(target)) {
         return;
       }
-      if (
-        popoverRef.current &&
-        popoverRef.current.contains(target)
-      ) {
+      if (popoverRef.current && popoverRef.current.contains(target)) {
         return;
       }
       const conflictModal = document.getElementById('equipment-conflict-modal-overlay');
@@ -187,17 +206,34 @@ const EquipmentSelectorDropdownComponent: React.FC<EquipmentSelectorDropdownProp
       setIsOpen(false);
     };
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.stopPropagation();
+        setIsOpen(false);
+      }
+    };
+
+    const handleScrollOrResize = () => {
+      checkOrientation();
+    };
+
     const timer = setTimeout(() => {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('touchstart', handleClickOutside);
+      document.addEventListener('mousedown', handleClickOutside, true);
+      document.addEventListener('touchstart', handleClickOutside, { passive: true, capture: true });
     }, 10);
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('resize', handleScrollOrResize, { passive: true });
+    window.addEventListener('scroll', handleScrollOrResize, { passive: true, capture: true });
 
     return () => {
       clearTimeout(timer);
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('touchstart', handleClickOutside);
+      document.removeEventListener('mousedown', handleClickOutside, true);
+      document.removeEventListener('touchstart', handleClickOutside, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('resize', handleScrollOrResize);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
     };
-  }, [isOpen]);
+  }, [isOpen, checkOrientation]);
 
   // Focus search input when dropdown opens
   useEffect(() => {
@@ -503,7 +539,11 @@ const EquipmentSelectorDropdownComponent: React.FC<EquipmentSelectorDropdownProp
           e.stopPropagation();
           if (!disabled) {
             checkOrientation();
-            setIsOpen((prev) => !prev);
+            setIsOpen((prev) => {
+              const next = !prev;
+              if (next) broadcastDropdownOpen(instanceId);
+              return next;
+            });
           }
         }}
         className={`w-full flex items-center justify-between gap-2 px-3 py-2 bg-zinc-900/90 hover:bg-zinc-850/90 border rounded-xl cursor-pointer transition-all duration-150 select-none shadow-sm text-left ${
@@ -539,7 +579,7 @@ const EquipmentSelectorDropdownComponent: React.FC<EquipmentSelectorDropdownProp
           className={`absolute left-0 right-0 ${
             openUpward ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
           } z-[500] bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl overflow-hidden flex flex-col ring-2 ring-black/80 backdrop-blur-md`}
-          style={{ maxHeight: '380px' }}
+          style={{ maxHeight: `${maxMenuHeight}px` }}
         >
             {/* Header with Search Box & Refresh */}
             <div className="p-2.5 sm:p-3 border-b border-zinc-800 bg-zinc-950/95 space-y-2 shrink-0">

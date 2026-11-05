@@ -14,6 +14,7 @@ import { ViewDetailsModal } from './ViewDetailsModal';
 import { EquipmentSelectorDropdown, getCachedOrFetchEquipment } from './EquipmentSelectorDropdown';
 import { ListSortFilter, SortOrder, compareRecordsByDate, parseDateTimeToTimestamp, compareAlphanumeric } from '../ui/ListSortFilter';
 import { DateFilterInput } from '../ui/DateFilterInput';
+import { broadcastDropdownOpen } from '../ui/useDropdownCoordinator';
 
 import { CameraLensStatsCard, CameraLensTheme } from '../CameraLensStatsCard';
 import { 
@@ -772,6 +773,49 @@ export const OperationsLeads: React.FC = () => {
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [showReportingDateFilterDropdown, setShowReportingDateFilterDropdown] = useState(false);
+  const reportingDateDropdownRef = useRef<HTMLDivElement>(null);
+  const reportingDateBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Auto-close reporting date filter on outside click, Escape, or other dropdown open
+  useEffect(() => {
+    if (!showReportingDateFilterDropdown) return;
+
+    const handleCloseOthers = (e: Event) => {
+      const customEv = e as CustomEvent<{ id: string }>;
+      if (customEv.detail?.id && customEv.detail.id !== 'ops-reporting-date-filter') {
+        setShowReportingDateFilterDropdown(false);
+      }
+    };
+
+    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
+      const target = e.target;
+      if (!target || !(target instanceof Node)) return;
+      if (reportingDateBtnRef.current?.contains(target)) return;
+      if (reportingDateDropdownRef.current?.contains(target)) return;
+      setShowReportingDateFilterDropdown(false);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.stopPropagation();
+        setShowReportingDateFilterDropdown(false);
+      }
+    };
+
+    window.addEventListener('app:dropdown-open', handleCloseOthers);
+    window.addEventListener('close-all-event-dropdowns', handleCloseOthers);
+    document.addEventListener('mousedown', handleOutsideClick, true);
+    document.addEventListener('touchstart', handleOutsideClick, { passive: true, capture: true });
+    window.addEventListener('keydown', handleKeyDown, true);
+
+    return () => {
+      window.removeEventListener('app:dropdown-open', handleCloseOthers);
+      window.removeEventListener('close-all-event-dropdowns', handleCloseOthers);
+      document.removeEventListener('mousedown', handleOutsideClick, true);
+      document.removeEventListener('touchstart', handleOutsideClick, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [showReportingDateFilterDropdown]);
 
   // Track which order's action dropdown is open
   const [activeMenuOrderId, setActiveMenuOrderId] = useState<string | null>(null);
@@ -840,12 +884,28 @@ export const OperationsLeads: React.FC = () => {
 
   useEffect(() => {
     if (!activeMenuOrderId) return;
-    const handleOutsideClick = (e: MouseEvent) => {
+
+    const handleCloseOthers = (e: Event) => {
+      const customEv = e as CustomEvent<{ id: string }>;
+      if (customEv.detail?.id && customEv.detail.id !== `action-menu-${activeMenuOrderId}`) {
+        setActiveMenuOrderId(null);
+      }
+    };
+
+    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
       const target = e.target as HTMLElement;
       if (!target.closest('.actions-menu-container') && !target.closest('.action-button-trigger')) {
         setActiveMenuOrderId(null);
       }
     };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        e.stopPropagation();
+        setActiveMenuOrderId(null);
+      }
+    };
+
     const handleScroll = (e: Event) => {
       const target = e.target as HTMLElement;
       if (target && target.closest && target.closest('.actions-menu-container')) {
@@ -853,12 +913,22 @@ export const OperationsLeads: React.FC = () => {
       }
       setActiveMenuOrderId(null);
     };
+
+    window.addEventListener('app:dropdown-open', handleCloseOthers);
+    window.addEventListener('close-all-event-dropdowns', handleCloseOthers);
     document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('touchstart', handleOutsideClick, { passive: true, capture: true });
+    window.addEventListener('keydown', handleKeyDown, true);
     window.addEventListener('scroll', handleScroll, { capture: true, passive: true });
     window.addEventListener('wheel', handleScroll, { passive: true, capture: true });
     window.addEventListener('touchmove', handleScroll, { passive: true, capture: true });
+
     return () => {
+      window.removeEventListener('app:dropdown-open', handleCloseOthers);
+      window.removeEventListener('close-all-event-dropdowns', handleCloseOthers);
       document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('touchstart', handleOutsideClick);
+      window.removeEventListener('keydown', handleKeyDown, true);
       window.removeEventListener('scroll', handleScroll, { capture: true });
       window.removeEventListener('wheel', handleScroll, { capture: true });
       window.removeEventListener('touchmove', handleScroll, { capture: true });
@@ -3657,20 +3727,28 @@ export const OperationsLeads: React.FC = () => {
                     )}
                   </button>
                   <button
+                    ref={reportingDateBtnRef}
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowReportingDateFilterDropdown(!showReportingDateFilterDropdown);
+                      setShowReportingDateFilterDropdown((prev) => {
+                        const next = !prev;
+                        if (next) broadcastDropdownOpen('ops-reporting-date-filter');
+                        return next;
+                      });
                     }}
                     className={`p-1 rounded hover:bg-zinc-800 transition-colors cursor-pointer ${dateFilter !== 'All' ? 'text-amber-400 bg-zinc-800/80' : 'text-zinc-400 hover:text-white'}`}
                     title="Filter by Reporting Date"
                   >
-                    <ChevronDown className="w-3.5 h-3.5" />
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showReportingDateFilterDropdown ? 'rotate-180 text-amber-400' : ''}`} />
                   </button>
                 </div>
 
                 {showReportingDateFilterDropdown && (
-                  <div className="absolute left-4 top-14 z-50 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl p-2.5 min-w-[180px] text-xs font-sans">
+                  <div
+                    ref={reportingDateDropdownRef}
+                    className="absolute left-4 top-14 z-50 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl p-2.5 min-w-[180px] text-xs font-sans animate-in fade-in zoom-in-95 duration-100"
+                  >
                     <div className="text-[10px] uppercase font-mono text-zinc-400 px-2 py-1 mb-1 border-b border-zinc-850">
                       Filter Reporting Date
                     </div>

@@ -1,16 +1,19 @@
 import React, { useState, useMemo } from 'react';
 import { useRole } from '../../RoleContext';
+import { jsPDF } from 'jspdf';
 import { 
   Users, Award, Briefcase, Activity, Filter, CheckCircle2, AlertCircle, 
   Search, ChevronLeft, ChevronRight, ArrowUpDown, Calendar, X, TrendingUp, 
   DollarSign, FileText, PhoneCall, UserCheck, BarChart3, PieChart as PieChartIcon, 
-  Layers, Clock, Sparkles, Trophy, Target, CheckSquare, ArrowRight, ChevronDown, Eye, Check
+  Layers, Clock, Sparkles, Trophy, Target, CheckSquare, ArrowRight, ChevronDown, Eye, Check,
+  Download
 } from 'lucide-react';
 import { 
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, 
   Cell, CartesianGrid, PieChart, Pie 
 } from 'recharts';
 import { DateFilterInput } from '../../ui/DateFilterInput';
+import { formatToDDMMYYYY } from '../../BusinessOwnerDashboard';
 
 export const OwnerStaffPerformanceDetailed: React.FC = () => {
   const { 
@@ -923,6 +926,222 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
     </th>
   );
 
+  // Export CSV for current active tab (all filtered rows, not just paginated rows)
+  const handleDownloadCSV = () => {
+    if (currentActiveTabRows.length === 0) {
+      alert("No staff records available to export.");
+      return;
+    }
+
+    const tabName = activeTab === 'sales' ? 'Sales_Staff_Performance'
+      : activeTab === 'operations' ? 'Operations_Staff_Performance'
+      : 'Production_Staff_Performance';
+
+    let headers: string[] = [];
+    let rows: string[][] = [];
+
+    if (activeTab === 'sales') {
+      headers = ['S.NO', 'Sales Staff', 'Leads', 'Follow-ups', 'Quotations', 'Orders Confirmed', 'Lost', 'Revenue (INR)', 'Conversion Rate (%)'];
+      rows = currentActiveTabRows.map((r, i) => [
+        String(i + 1),
+        `"${String(r.salesStaff || '-').replace(/"/g, '""')}"`,
+        String(r.leads || 0),
+        String(r.followUps || 0),
+        String(r.quotations || 0),
+        String(r.ordersConfirmed || 0),
+        String(r.lost || 0),
+        String(r.revenue || 0),
+        `"${String(r.conversionRate || 0)}%"`
+      ]);
+    } else if (activeTab === 'operations') {
+      headers = ['S.NO', 'Operations Staff', 'Staff Type', 'Assigned Events', 'Completed', 'In Progress', 'Pending', 'Completion Rate (%)'];
+      rows = currentActiveTabRows.map((r, i) => [
+        String(i + 1),
+        `"${String(r.operationsStaff || '-').replace(/"/g, '""')}"`,
+        `"${String(r.staffType || '-').replace(/"/g, '""')}"`,
+        String(r.assignedEvents || 0),
+        String(r.completed || 0),
+        String(r.inProgress || 0),
+        String(r.pending || 0),
+        `"${String(r.completionRate || 0)}%"`
+      ]);
+    } else {
+      headers = ['S.NO', 'Production Staff', 'Deliverables Assigned', 'Completed', 'In Progress', 'Pending', 'Completion Rate (%)', 'Avg Turnaround'];
+      rows = currentActiveTabRows.map((r, i) => [
+        String(i + 1),
+        `"${String(r.productionStaff || '-').replace(/"/g, '""')}"`,
+        String(r.deliverablesAssigned || 0),
+        String(r.completed || 0),
+        String(r.inProgress || 0),
+        String(r.pending || 0),
+        `"${String(r.completionRate || 0)}%"`,
+        `"${String(r.avgTurnaround || '-').replace(/"/g, '""')}"`
+      ]);
+    }
+
+    const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `${tabName}_Report_${startDate ? formatToDDMMYYYY(startDate) : 'all'}_to_${endDate ? formatToDDMMYYYY(endDate) : 'all'}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Export PDF for current active tab (all filtered rows, not just paginated rows)
+  const handleDownloadPDF = () => {
+    if (currentActiveTabRows.length === 0) {
+      alert("No staff records available to export.");
+      return;
+    }
+
+    const tabTitle = activeTab === 'sales' ? 'Sales Staff Performance Directory'
+      : activeTab === 'operations' ? 'Operations Staff Performance Directory'
+      : 'Production Staff Performance Directory';
+
+    const tabFileName = activeTab === 'sales' ? 'Sales_Staff_Performance'
+      : activeTab === 'operations' ? 'Operations_Staff_Performance'
+      : 'Production_Staff_Performance';
+
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    const printHeader = (pageNum: number) => {
+      doc.setFillColor(24, 24, 27);
+      doc.rect(10, 8, pageWidth - 20, 24, 'F');
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text(tabTitle.toUpperCase(), 14, 18);
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(161, 161, 170);
+      const dateRangeStr = `Date Range: ${startDate ? formatToDDMMYYYY(startDate) : 'All'} to ${endDate ? formatToDDMMYYYY(endDate) : 'All'}`;
+      const generatedStr = `Generated: ${formatToDDMMYYYY(new Date())}`;
+      const countStr = `Total Staff Records: ${currentActiveTabRows.length}`;
+      doc.text(`${dateRangeStr}  |  ${generatedStr}  |  ${countStr}`, 14, 26);
+
+      const yHeader = 38;
+      doc.setFillColor(39, 39, 42);
+      doc.rect(10, yHeader - 5, pageWidth - 20, 8, 'F');
+
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(228, 228, 231);
+
+      if (activeTab === 'sales') {
+        doc.text('S.NO', 14, yHeader);
+        doc.text('SALES STAFF', 32, yHeader);
+        doc.text('LEADS', 90, yHeader);
+        doc.text('FOLLOW-UPS', 115, yHeader);
+        doc.text('QUOTES', 145, yHeader);
+        doc.text('ORDERS CONFIRMED', 170, yHeader);
+        doc.text('LOST', 215, yHeader);
+        doc.text('REVENUE (INR)', 235, yHeader);
+        doc.text('CONVERSION', 265, yHeader);
+      } else if (activeTab === 'operations') {
+        doc.text('S.NO', 14, yHeader);
+        doc.text('OPERATIONS STAFF', 32, yHeader);
+        doc.text('STAFF TYPE', 95, yHeader);
+        doc.text('ASSIGNED EVENTS', 135, yHeader);
+        doc.text('COMPLETED', 175, yHeader);
+        doc.text('IN PROGRESS', 205, yHeader);
+        doc.text('PENDING', 235, yHeader);
+        doc.text('COMPLETION RATE', 260, yHeader);
+      } else {
+        doc.text('S.NO', 14, yHeader);
+        doc.text('PRODUCTION STAFF', 32, yHeader);
+        doc.text('DELIVERABLES', 95, yHeader);
+        doc.text('COMPLETED', 135, yHeader);
+        doc.text('IN PROGRESS', 165, yHeader);
+        doc.text('PENDING', 195, yHeader);
+        doc.text('COMPLETION RATE', 225, yHeader);
+        doc.text('AVG TURNAROUND', 255, yHeader);
+      }
+
+      doc.setDrawColor(63, 63, 70);
+      doc.setLineWidth(0.3);
+      doc.line(10, yHeader + 3, pageWidth - 10, yHeader + 3);
+    };
+
+    printHeader(1);
+
+    let y = 46;
+    const rowHeight = 7;
+    const maxY = pageHeight - 16;
+
+    currentActiveTabRows.forEach((r, index) => {
+      if (y > maxY) {
+        doc.addPage();
+        printHeader(doc.internal.getNumberOfPages());
+        y = 46;
+      }
+
+      if (index % 2 === 1) {
+        doc.setFillColor(244, 244, 245);
+        doc.rect(10, y - 4.5, pageWidth - 20, rowHeight, 'F');
+      }
+
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(39, 39, 42);
+
+      doc.text(String(index + 1), 14, y);
+
+      if (activeTab === 'sales') {
+        doc.setFont('helvetica', 'bold');
+        doc.text(String(r.salesStaff || '-').substring(0, 24), 32, y);
+        doc.setFont('helvetica', 'normal');
+        doc.text(String(r.leads || 0), 90, y);
+        doc.text(String(r.followUps || 0), 115, y);
+        doc.text(String(r.quotations || 0), 145, y);
+        doc.text(String(r.ordersConfirmed || 0), 170, y);
+        doc.text(String(r.lost || 0), 215, y);
+        doc.text(`Rs.${(r.revenue || 0).toLocaleString('en-IN')}`, 235, y);
+        doc.text(`${r.conversionRate || 0}%`, 265, y);
+      } else if (activeTab === 'operations') {
+        doc.setFont('helvetica', 'bold');
+        doc.text(String(r.operationsStaff || '-').substring(0, 26), 32, y);
+        doc.setFont('helvetica', 'normal');
+        doc.text(String(r.staffType || '-').substring(0, 18), 95, y);
+        doc.text(String(r.assignedEvents || 0), 135, y);
+        doc.text(String(r.completed || 0), 175, y);
+        doc.text(String(r.inProgress || 0), 205, y);
+        doc.text(String(r.pending || 0), 235, y);
+        doc.text(`${r.completionRate || 0}%`, 260, y);
+      } else {
+        doc.setFont('helvetica', 'bold');
+        doc.text(String(r.productionStaff || '-').substring(0, 26), 32, y);
+        doc.setFont('helvetica', 'normal');
+        doc.text(String(r.deliverablesAssigned || 0), 95, y);
+        doc.text(String(r.completed || 0), 135, y);
+        doc.text(String(r.inProgress || 0), 165, y);
+        doc.text(String(r.pending || 0), 195, y);
+        doc.text(`${r.completionRate || 0}%`, 225, y);
+        doc.text(String(r.avgTurnaround || '-'), 255, y);
+      }
+
+      y += rowHeight;
+    });
+
+    const totalPages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7.5);
+      doc.setTextColor(113, 113, 122);
+      doc.text(`Page ${i} of ${totalPages}`, pageWidth - 25, pageHeight - 6);
+      doc.text("Business Owner Dashboard — Staff Performance Report", 14, pageHeight - 6);
+    }
+
+    doc.save(`${tabFileName}_Report_${startDate ? formatToDDMMYYYY(startDate) : 'all'}_to_${endDate ? formatToDDMMYYYY(endDate) : 'all'}.pdf`);
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-300 pb-12">
       
@@ -930,15 +1149,44 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
       {/* TOP HEADER & GLOBAL CONTROLS                         */}
       {/* ---------------------------------------------------- */}
       <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-5 shadow-2xl space-y-5">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-end gap-4 border-b border-zinc-900 pb-4">
-          
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-xs font-bold font-mono text-white hover:bg-zinc-800 transition-colors"
-          >
-            <Filter className="w-4 h-4" />
-            <span>Filter</span>
-          </button>
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-zinc-900 pb-4">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-mono font-bold text-zinc-300 uppercase">
+              {activeTab === 'sales' ? 'Sales Performance Directory' : activeTab === 'operations' ? 'Operations Performance Directory' : 'Production Performance Directory'}
+            </span>
+            <span className="text-[10px] font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+              {currentActiveTabRows.length} {currentActiveTabRows.length === 1 ? 'Record' : 'Records'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-wider mr-1">Download Report:</span>
+            <button
+              type="button"
+              onClick={handleDownloadPDF}
+              className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-700 hover:border-rose-500/50 text-white font-mono font-bold text-xs hover:bg-zinc-800 transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+              title="Download PDF"
+            >
+              <Download className="w-3.5 h-3.5 text-rose-400" />
+              <span>Download PDF</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadCSV}
+              className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-700 hover:border-cyan-500/50 text-white font-mono font-bold text-xs hover:bg-zinc-800 transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+              title="Download CSV"
+            >
+              <Download className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Download CSV</span>
+            </button>
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className="flex items-center justify-center gap-2 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-xl text-xs font-bold font-mono text-white hover:bg-zinc-800 transition-colors"
+            >
+              <Filter className="w-3.5 h-3.5" />
+              <span>Filter</span>
+            </button>
+          </div>
         </div>
 
         {/* GLOBAL FILTERS ROW */}
@@ -1945,9 +2193,9 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
                           <td className="p-3 text-xs font-medium text-zinc-200">{task.customerName}</td>
                           <td className="p-3 text-xs text-zinc-300">{task.eventName}</td>
                           <td className="p-3 text-xs text-zinc-400 font-mono">{task.taskDeliverable}</td>
-                          <td className="p-3 text-xs text-zinc-400 font-mono">{task.assignedDate}</td>
-                          <td className="p-3 text-xs text-zinc-400 font-mono">{task.targetDate}</td>
-                          <td className="p-3 text-xs text-zinc-400 font-mono">{task.completedDate}</td>
+                          <td className="p-3 text-xs text-zinc-400 font-mono">{formatToDDMMYYYY(task.assignedDate)}</td>
+                          <td className="p-3 text-xs text-zinc-400 font-mono">{formatToDDMMYYYY(task.targetDate)}</td>
+                          <td className="p-3 text-xs text-zinc-400 font-mono">{formatToDDMMYYYY(task.completedDate)}</td>
                           <td className="p-3">
                             <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-zinc-900 border border-zinc-700 text-zinc-300">
                               {task.currentStatus}
