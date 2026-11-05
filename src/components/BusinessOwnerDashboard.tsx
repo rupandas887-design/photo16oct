@@ -337,7 +337,8 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     logActivity,
     refreshData,
     globalDateRange,
-    setGlobalDateRange
+    setGlobalDateRange,
+    statusHistory = []
   } = useRole();
 
   // Logged-in Business Owner mobile computation
@@ -1353,9 +1354,36 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         ? uniqueCrew.join(', ') 
         : (saList[0]?.staff_name || ord.sales_person || 'Unassigned');
 
-      // Event End Status: Show actual current status so user sees if it's ongoing or not completed
-      const saTaskStatus = saList.find((s: any) => s.task_status && s.task_status !== 'Assigned')?.task_status;
-      const eventEndStatus = saTaskStatus || op?.event_status || ord.current_stage || ord.order_status || 'Event Ended';
+      // Event End Status: Show only current/latest status fetched from actual latest database record / status history
+      let resolvedStatus = ord.current_stage || ord.order_status || 'Event Ended';
+      if (statusHistory && Array.isArray(statusHistory) && statusHistory.length > 0) {
+        const oIdStr = ord.order_id ? String(ord.order_id).trim() : '';
+        const lIdStr = ord.lead_id ? String(ord.lead_id).trim() : '';
+        const matchingHistory = statusHistory.filter((h: any) => {
+          if (!h || !h.new_status || h.old_status === 'NOTE' || h.new_status === 'NOTE') return false;
+          const hOrd = h.order_id ? String(h.order_id).trim() : '';
+          const hLead = h.lead_id ? String(h.lead_id).trim() : '';
+          return (oIdStr && hOrd === oIdStr) || (lIdStr && hLead === lIdStr);
+        });
+
+        if (matchingHistory.length > 0) {
+          matchingHistory.sort((a: any, b: any) => {
+            const tA = a.created_at ? new Date(a.created_at).getTime() : 0;
+            const tB = b.created_at ? new Date(b.created_at).getTime() : 0;
+            if (tA !== tB) return tA - tB;
+            return String(a.id || '').localeCompare(String(b.id || ''));
+          });
+          const latestHist = matchingHistory[matchingHistory.length - 1];
+          if (latestHist && latestHist.new_status) {
+            const histTime = latestHist.created_at ? new Date(latestHist.created_at).getTime() : 0;
+            const ordTime = ord.updated_at ? new Date(ord.updated_at).getTime() : 0;
+            if (histTime >= ordTime) {
+              resolvedStatus = String(latestHist.new_status).trim();
+            }
+          }
+        }
+      }
+      const eventEndStatus = resolvedStatus;
 
       const eventName = ord.custom_event_name || ord.event_type || ld?.custom_event_name || ld?.event_type || 'Event';
       const customerName = ord.customer_name || ld?.customer_name || 'Client';
