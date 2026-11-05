@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Search, Calendar, Info, Download, FileSpreadsheet } from 'lucide-react';
+import { X, Search, Calendar, Info, Download, FileSpreadsheet, Filter } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { formatINR, formatDateDDMMYY } from '../utils';
@@ -24,6 +24,7 @@ interface BusinessOwnerCardDetailModalProps {
   totalLabel?: string;
   totalValue?: React.ReactNode;
   filterDescription?: string;
+  cardType?: string;
   onDownloadPDF?: (records: any[]) => void;
   onDownloadExcel?: (records: any[]) => void;
   onDownloadCSV?: (records: any[]) => void;
@@ -40,15 +41,57 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
   totalLabel = 'Total Value',
   totalValue,
   filterDescription,
+  cardType,
   onDownloadPDF,
   onDownloadExcel,
   onDownloadCSV
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [eventEndFilter, setEventEndFilter] = useState<'uploaded' | 'not_uploaded'>('uploaded');
 
-  // Search filter inside the modal for ease of review
+  const isEventEndModal = cardType === 'ops_event_end' || (typeof title === 'string' && title.toLowerCase().includes('event end'));
+
+  useEffect(() => {
+    if (isOpen) {
+      setSearchTerm('');
+      setEventEndFilter('uploaded');
+    }
+  }, [isOpen]);
+
+  const hasFootageLink = (item: any): boolean => {
+    const link = item?.footage_link;
+    if (!link || typeof link !== 'string') return false;
+    const trimmed = link.trim();
+    return (
+      trimmed !== '' &&
+      trimmed !== 'null' &&
+      trimmed !== 'undefined' &&
+      trimmed !== '—' &&
+      trimmed !== '-' &&
+      trimmed !== 'N/A' &&
+      trimmed.toLowerCase() !== 'not uploaded' &&
+      trimmed.length > 3
+    );
+  };
+
+  const uploadedCount = useMemo(() => {
+    return (data || []).filter(hasFootageLink).length;
+  }, [data]);
+
+  const notUploadedCount = useMemo(() => {
+    return (data || []).filter(item => !hasFootageLink(item)).length;
+  }, [data]);
+
+  // Search filter and Event End footage filter inside the modal for ease of review
   const filteredData = useMemo(() => {
     let list = data || [];
+    if (isEventEndModal) {
+      if (eventEndFilter === 'uploaded') {
+        list = list.filter(hasFootageLink);
+      } else if (eventEndFilter === 'not_uploaded') {
+        list = list.filter(item => !hasFootageLink(item));
+      }
+    }
     if (searchTerm.trim()) {
       const lowerSearch = searchTerm.toLowerCase();
       list = list.filter(item => {
@@ -59,7 +102,7 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
       });
     }
     return [...list].sort((a, b) => compareRecordsByDate(a, b, 'latest'));
-  }, [data, searchTerm]);
+  }, [data, searchTerm, isEventEndModal, eventEndFilter]);
 
   // Helper to detect date column or value
   const isDateColumnOrValue = (key: string, label: string, val: any): boolean => {
@@ -304,9 +347,9 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
           <div className="flex flex-wrap items-center gap-3">
             {/* Card Value representation */}
             <div className="px-4 py-2 bg-zinc-950 border border-zinc-850 rounded-xl flex items-center gap-3 shadow-inner">
-              <span className="text-xs font-mono text-zinc-400">{totalLabel}:</span>
+              <span className="text-xs font-mono text-zinc-400">{isEventEndModal ? 'Total Ended Events' : totalLabel}:</span>
               <span className={`text-sm sm:text-base font-black font-mono ${activeColors.text}`}>
-                {totalValue}
+                {isEventEndModal ? (data || []).length : totalValue}
               </span>
             </div>
 
@@ -315,7 +358,7 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
               <span className="text-xs font-mono text-zinc-400">Records Count:</span>
               <span className="text-sm sm:text-base font-black font-mono text-zinc-200">
                 {filteredData.length} {filteredData.length === 1 ? 'Record' : 'Records'}
-                {searchTerm.trim() && data.length !== filteredData.length && (
+                {(searchTerm.trim() || isEventEndModal) && data.length !== filteredData.length && (
                   <span className="text-[10px] text-zinc-500 font-normal ml-1">of {data.length}</span>
                 )}
               </span>
@@ -371,6 +414,66 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
             </div>
           </div>
         </div>
+
+        {/* EVENT END FILTER BAR: Exactly two options (Final Link Uploaded / Final Link Not Uploaded) */}
+        {isEventEndModal && (
+          <div className="px-6 py-3 bg-zinc-900/60 border-b border-zinc-900 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-xs font-mono font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-purple-400" />
+                <span>Filter:</span>
+              </span>
+
+              {/* Segmented Pill Buttons with exactly two options */}
+              <div className="inline-flex p-1 bg-zinc-950 border border-zinc-800 rounded-xl shadow-inner">
+                <button
+                  type="button"
+                  onClick={() => setEventEndFilter('uploaded')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                    eventEndFilter === 'uploaded'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+                  }`}
+                  data-testid="filter-final-link-uploaded"
+                  title="Show only ended events with uploaded final footage link"
+                >
+                  <span>Final Link Uploaded</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] ${
+                    eventEndFilter === 'uploaded'
+                      ? 'bg-purple-800/90 text-purple-100'
+                      : 'bg-zinc-850 text-zinc-400'
+                  }`}>
+                    {uploadedCount}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEventEndFilter('not_uploaded')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                    eventEndFilter === 'not_uploaded'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+                  }`}
+                  data-testid="filter-final-link-not-uploaded"
+                  title="Show only ended events without a final footage link"
+                >
+                  <span>Final Link Not Uploaded</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] ${
+                    eventEndFilter === 'not_uploaded'
+                      ? 'bg-purple-800/90 text-purple-100'
+                      : 'bg-zinc-850 text-zinc-400'
+                  }`}>
+                    {notUploadedCount}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <div className="text-xs font-mono text-zinc-400">
+              Showing <span className="font-bold text-white">{filteredData.length}</span> {eventEndFilter === 'uploaded' ? 'orders with uploaded final footage link' : 'orders without a final footage link'}
+            </div>
+          </div>
+        )}
 
         {/* Content Table Container */}
         <div className="flex-1 overflow-y-auto p-6">

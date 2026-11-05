@@ -1250,7 +1250,26 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         }
       }
 
-      // 3. Check staff assignments for this order
+      // 3. Check production links
+      const prod = (production || []).find((p: any) => p.order_id === orderId || (leadId && p.lead_id === leadId));
+      if (prod) {
+        const prodLinks = [
+          prod.final_consolidated_drive_link,
+          prod.final_edited_footage_link,
+          prod.edited_drive_link,
+          prod.delivery_link,
+          prod.raw_footage_location,
+          prod.server_path,
+          prod.upload_link_path
+        ];
+        for (const l of prodLinks) {
+          if (l && typeof l === 'string' && l.trim() && l.trim() !== 'null' && l.trim() !== 'undefined' && l.trim() !== '—' && l.trim() !== 'N/A' && l.trim().length > 3) {
+            return l.trim();
+          }
+        }
+      }
+
+      // 4. Check staff assignments for this order
       const matchedSA = (staffAssignments || []).filter((s: any) => s.order_id === orderId || (leadId && s.lead_id === leadId));
       matchedSA.sort((a: any, b: any) => {
         const tA = new Date(a.updated_at || a.created_at || 0).getTime();
@@ -1432,7 +1451,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       prodClientAcceptance: prodCompleted,
       prodAll: prodTotal
     };
-  }, [unifiedPipeline, productionProjects, orders, leads, operations, staffAssignments, rawFootage]);
+  }, [unifiedPipeline, productionProjects, orders, leads, operations, production, staffAssignments, rawFootage]);
 
   // Unified pending payment records matching Sales Dashboard Payment Pending exactly
   const allPendingRecords = useMemo(() => {
@@ -2766,6 +2785,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         totalLabel={modalTitleAndMeta.totalLabel}
         totalValue={modalTitleAndMeta.totalValue}
         filterDescription={modalTitleAndMeta.filterDescription}
+        cardType={selectedCard || undefined}
       />
 
       {/* REVIEW & CLOSE MODAL */}
@@ -5233,6 +5253,7 @@ const RevenuePaymentSummarySection: React.FC<RevenuePaymentSummarySectionProps> 
         onDownloadPDF={downloadPDF}
         onDownloadExcel={downloadExcel}
         onDownloadCSV={downloadCSV}
+        cardType={selectedCard || undefined}
       />
 
       {/* PAYMENT HISTORY MODAL */}
