@@ -2137,11 +2137,13 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       if (updateOrderStage) {
         await updateOrderStage(order.order_id, 'Order Closed');
       }
-      setProduction(prev => prev.map(p => 
-        (p.order_id === order.order_id || p.tracking_id === order.lead_id || p.production_id === targetProdId)
-          ? { ...p, editing_status: 'Order Closed', production_status: 'Order Closed', current_status: 'Order Closed' }
-          : p
-      ));
+      if (typeof setProduction === 'function') {
+        setProduction((prev: any[]) => (prev || []).map((p: any) => 
+          (p.order_id === order.order_id || p.tracking_id === order.lead_id || p.production_id === targetProdId)
+            ? { ...p, editing_status: 'Order Closed', production_status: 'Order Closed', current_status: 'Order Closed' }
+            : p
+        ));
+      }
 
       setApprovalFeedback(`Order ${order.order_id} (${order.customer_name}) has been successfully approved and closed.`);
       setReviewModalOrder(null);
