@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
 import { useRole } from '../RoleContext';
 import { 
@@ -18,7 +18,11 @@ import {
   CreditCard,
   X,
   RefreshCw,
-  ArrowUpDown
+  ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
@@ -35,6 +39,14 @@ export const PendingPaymentsReport: React.FC = () => {
   const { leads, orders, payments, currentUserName, recordPayment, refreshData, paymentHistory: contextPaymentHistory } = useRole();
   const [isSyncing, setIsSyncing] = useState(false);
   const [dbPaymentHistory, setDbPaymentHistory] = useState<any[]>([]);
+
+  // Throttling and lock references to prevent cascading API requests and freezing
+  const isSyncingRef = useRef(false);
+  const lastSyncTimeRef = useRef(0);
+  const refreshDataRef = useRef(refreshData);
+  refreshDataRef.current = refreshData;
+  const contextPaymentHistoryRef = useRef(contextPaymentHistory);
+  contextPaymentHistoryRef.current = contextPaymentHistory;
 
   // Function to fetch latest payment history records from Supabase directly
   const fetchLatestPaymentHistory = useCallback(async () => {
@@ -53,59 +65,81 @@ export const PendingPaymentsReport: React.FC = () => {
     }
   }, []);
 
+  const fetchPaymentHistoryRef = useRef(fetchLatestPaymentHistory);
+  fetchPaymentHistoryRef.current = fetchLatestPaymentHistory;
+
   // Sync latest data on mount and provide manual refresh handler
   const handleManualSync = useCallback(async () => {
-    if (!isSyncing) {
-      setIsSyncing(true);
-      try {
-        if (typeof refreshData === 'function') {
-          await refreshData();
-        }
-        await fetchLatestPaymentHistory();
-      } catch (err) {
-        console.warn('[PendingPaymentsReport] Sync error:', err);
-      } finally {
-        setTimeout(() => setIsSyncing(false), 400);
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
+    setIsSyncing(true);
+    try {
+      if (typeof refreshDataRef.current === 'function') {
+        await refreshDataRef.current();
       }
+      await fetchPaymentHistoryRef.current();
+    } catch (err) {
+      console.warn('[PendingPaymentsReport] Sync error:', err);
+    } finally {
+      lastSyncTimeRef.current = Date.now();
+      setTimeout(() => {
+        isSyncingRef.current = false;
+        setIsSyncing(false);
+      }, 400);
     }
-  }, [refreshData, isSyncing, fetchLatestPaymentHistory]);
+  }, []);
 
+  // One-time initial mount check: only fetch if context is not already populated
+  const hasMountedRef = useRef(false);
   useEffect(() => {
-    if (typeof refreshData === 'function') {
-      refreshData();
+    if (hasMountedRef.current) return;
+    hasMountedRef.current = true;
+
+    // Only request server fetch if data has not yet been populated
+    if ((!orders || orders.length === 0) && typeof refreshDataRef.current === 'function') {
+      refreshDataRef.current();
     }
-    fetchLatestPaymentHistory();
-  }, [refreshData, fetchLatestPaymentHistory]);
+    if (!contextPaymentHistoryRef.current || contextPaymentHistoryRef.current.length === 0) {
+      fetchPaymentHistoryRef.current();
+    }
+    lastSyncTimeRef.current = Date.now();
+  }, []);
 
+  // Listeners with strict 25-second cooldown to prevent infinite refetch loops & freeze on window focus
   useEffect(() => {
-    const handleSync = () => {
-      if (typeof refreshData === 'function') {
-        refreshData();
+    const handleThrottledSync = () => {
+      const now = Date.now();
+      if (now - lastSyncTimeRef.current < 25000 || isSyncingRef.current) {
+        return;
       }
-      fetchLatestPaymentHistory();
+      lastSyncTimeRef.current = now;
+      if (typeof refreshDataRef.current === 'function') {
+        refreshDataRef.current();
+      }
+      fetchPaymentHistoryRef.current();
     };
 
-    window.addEventListener('focus', handleSync);
+    window.addEventListener('focus', handleThrottledSync);
     const handleVisChange = () => {
       if (document.visibilityState === 'visible') {
-        handleSync();
+        handleThrottledSync();
       }
     };
     document.addEventListener('visibilitychange', handleVisChange);
-    window.addEventListener('lead-updated', handleSync);
-    window.addEventListener('payment-updated', handleSync);
-    window.addEventListener('order-updated', handleSync);
-    window.addEventListener('refresh-pending-payments', handleSync);
+    window.addEventListener('lead-updated', handleThrottledSync);
+    window.addEventListener('payment-updated', handleThrottledSync);
+    window.addEventListener('order-updated', handleThrottledSync);
+    window.addEventListener('refresh-pending-payments', handleThrottledSync);
 
     return () => {
-      window.removeEventListener('focus', handleSync);
+      window.removeEventListener('focus', handleThrottledSync);
       document.removeEventListener('visibilitychange', handleVisChange);
-      window.removeEventListener('lead-updated', handleSync);
-      window.removeEventListener('payment-updated', handleSync);
-      window.removeEventListener('order-updated', handleSync);
-      window.removeEventListener('refresh-pending-payments', handleSync);
+      window.removeEventListener('lead-updated', handleThrottledSync);
+      window.removeEventListener('payment-updated', handleThrottledSync);
+      window.removeEventListener('order-updated', handleThrottledSync);
+      window.removeEventListener('refresh-pending-payments', handleThrottledSync);
     };
-  }, [refreshData, fetchLatestPaymentHistory]);
+  }, []);
 
   // Search and Filter states
   const [globalSearch, setGlobalSearch] = useState('');
@@ -113,6 +147,15 @@ export const PendingPaymentsReport: React.FC = () => {
   const [searchOrderId, setSearchOrderId] = useState('');
   const [eventTypeFilter, setEventTypeFilter] = useState('All');
   const [paymentStatusFilter, setPaymentStatusFilter] = useState('All');
+
+  // Deferred values for input responsiveness
+  const deferredGlobalSearch = useDeferredValue(globalSearch);
+  const deferredSearchTerm = useDeferredValue(searchTerm);
+  const deferredSearchOrderId = useDeferredValue(searchOrderId);
+
+  // Pagination states: default 25 records per page (instant DOM rendering)
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(25);
 
   // 3-State Column Header Sorting: Days Overdue, Pending Amount, Paid Amount, Total Amount, Order ID, Overdue Since
   const [sortColumn, setSortColumn] = useState<'days_overdue' | 'pending_amount' | 'paid_amount' | 'total_amount' | 'order_id' | 'overdue_since' | null>(null);
@@ -223,8 +266,8 @@ export const PendingPaymentsReport: React.FC = () => {
 
   // Sort comparator: Newest Order ID / order creation sequence first (never sort by Event Date)
   const compareOrderRecords = (a: any, b: any): number => {
-    const seqA = extractOrderSeq(a.orderId);
-    const seqB = extractOrderSeq(b.orderId);
+    const seqA = a.orderSeq !== undefined ? a.orderSeq : extractOrderSeq(a.orderId);
+    const seqB = b.orderSeq !== undefined ? b.orderSeq : extractOrderSeq(b.orderId);
 
     // 1. If sequential numbers exist on both and differ:
     // Higher sequential Order ID is strictly newest (e.g. OR063 (63) > OR057 (57) > OR055 (55) > OR030 (30))
@@ -233,8 +276,8 @@ export const PendingPaymentsReport: React.FC = () => {
     }
 
     // 2. Creation timestamp of the order (or lead)
-    const timeA = a.order?.created_at ? (Date.parse(a.order.created_at) || 0) : (a.lead?.created_at ? (Date.parse(a.lead.created_at) || 0) : 0);
-    const timeB = b.order?.created_at ? (Date.parse(b.order.created_at) || 0) : (b.lead?.created_at ? (Date.parse(b.lead.created_at) || 0) : 0);
+    const timeA = a.orderCreatedAt !== undefined ? a.orderCreatedAt : (a.order?.created_at ? (Date.parse(a.order.created_at) || 0) : (a.lead?.created_at ? (Date.parse(a.lead.created_at) || 0) : 0));
+    const timeB = b.orderCreatedAt !== undefined ? b.orderCreatedAt : (b.order?.created_at ? (Date.parse(b.order.created_at) || 0) : (b.lead?.created_at ? (Date.parse(b.lead.created_at) || 0) : 0));
     if (timeB !== timeA) {
       return timeB - timeA;
     }
@@ -381,9 +424,36 @@ export const PendingPaymentsReport: React.FC = () => {
     });
   }, [dbPaymentHistory, contextPaymentHistory]);
 
+  // Index payment history by order_id and lead_id for O(1) instantaneous lookup
+  const historiesByOrderId = useMemo(() => {
+    const map = new Map<string, any[]>();
+    for (const h of allPaymentHistory) {
+      if (!h.order_id) continue;
+      const key = String(h.order_id);
+      let list = map.get(key);
+      if (!list) {
+        list = [];
+        map.set(key, list);
+      }
+      list.push(h);
+    }
+    return map;
+  }, [allPaymentHistory]);
+
   // Compile real-time pending payment records using saved Order records as the PRIMARY record source
   const allPendingRecords = useMemo(() => {
     const TODAY_STR = new Date().toISOString().split('T')[0];
+
+    // O(1) lookup tables for leads and payments
+    const leadByLeadId = new Map<string, any>();
+    (leads || []).forEach(l => {
+      if (l?.lead_id) leadByLeadId.set(String(l.lead_id), l);
+    });
+
+    const paymentByOrderId = new Map<string, any>();
+    (payments || []).forEach(p => {
+      if (p?.order_id) paymentByOrderId.set(String(p.order_id), p);
+    });
 
     const records: any[] = [];
     const seenOrderIds = new Set<string>();
@@ -395,7 +465,7 @@ export const PendingPaymentsReport: React.FC = () => {
       if (!orderId || seenOrderIds.has(orderId)) return null;
       seenOrderIds.add(orderId);
 
-      const payment = payments.find(p => p.order_id === orderId);
+      const payment = paymentByOrderId.get(orderId);
 
       // Final package / quotation amount
       const finalPackageAmount = Number(lead?.Final_Quotation_Amount) || 
@@ -406,14 +476,27 @@ export const PendingPaymentsReport: React.FC = () => {
 
       const advanceReceived = Number(order?.advance_received) || 0;
 
-      // Extract individual payment transactions belonging to this exact order
-      const orderHistories = allPaymentHistory.filter((h: any) => {
-        if (!h.order_id) return false;
-        if (h.order_id === orderId) return true;
-        if (order?.lead_id && h.order_id === order.lead_id) return true;
-        if (lead?.lead_id && h.order_id === lead.lead_id) return true;
-        return false;
-      });
+      // Extract individual payment transactions belonging to this exact order via Map lookup (O(1))
+      const directHistories = historiesByOrderId.get(orderId) || [];
+      const leadIdHistories = (order?.lead_id && order.lead_id !== orderId) ? (historiesByOrderId.get(order.lead_id) || []) : [];
+      const leadLeadIdHistories = (lead?.lead_id && lead.lead_id !== orderId && lead.lead_id !== order?.lead_id) ? (historiesByOrderId.get(lead.lead_id) || []) : [];
+
+      let orderHistories: any[];
+      if (leadIdHistories.length === 0 && leadLeadIdHistories.length === 0) {
+        orderHistories = directHistories;
+      } else {
+        const uniqueHistMap = new Map<string, any>();
+        for (const h of directHistories) {
+          uniqueHistMap.set(String(h.id || h.payment_history_id || ''), h);
+        }
+        for (const h of leadIdHistories) {
+          uniqueHistMap.set(String(h.id || h.payment_history_id || ''), h);
+        }
+        for (const h of leadLeadIdHistories) {
+          uniqueHistMap.set(String(h.id || h.payment_history_id || ''), h);
+        }
+        orderHistories = Array.from(uniqueHistMap.values());
+      }
 
       const approvedHistories = orderHistories.filter((h: any) => h.approval_status === 'Approved');
       const pendingApprovalHistories = orderHistories.filter((h: any) => h.approval_status === 'Waiting for Approval');
@@ -467,19 +550,10 @@ export const PendingPaymentsReport: React.FC = () => {
       if (paymentStatus === 'Fully Paid') {
         if (payment?.payment_date) {
           paymentCompletionDate = normalizeToYYYYMMDD(payment.payment_date);
-        } else {
-          const historyKey = `payment_history_${orderId}`;
-          const existingHistoryStr = typeof window !== 'undefined' ? localStorage.getItem(historyKey) : null;
-          if (existingHistoryStr) {
-            try {
-              const hist = JSON.parse(existingHistoryStr);
-              if (Array.isArray(hist) && hist.length > 0) {
-                const lastEntry = hist[hist.length - 1];
-                if (lastEntry && lastEntry.date) {
-                  paymentCompletionDate = normalizeToYYYYMMDD(String(lastEntry.date));
-                }
-              }
-            } catch (e) {}
+        } else if (orderHistories.length > 0) {
+          const lastEntry = orderHistories[orderHistories.length - 1];
+          if (lastEntry && (lastEntry.payment_date || lastEntry.date)) {
+            paymentCompletionDate = normalizeToYYYYMMDD(String(lastEntry.payment_date || lastEntry.date));
           }
         }
         if (!paymentCompletionDate) {
@@ -574,13 +648,24 @@ export const PendingPaymentsReport: React.FC = () => {
         events: sortedEvents
       };
 
+      const customerName = order?.customer_name || lead?.customer_name || 'Customer';
+      const mobileNumber = order?.mobile || lead?.mobile || '';
+      const orderSeq = extractOrderSeq(orderId);
+      const orderCreatedAt = order?.created_at ? (Date.parse(order.created_at) || 0) : (lead?.created_at ? (Date.parse(lead.created_at) || 0) : 0);
+
+      // Pre-compute normalized search tokens for fast matching
+      const searchIndex = `${orderId} ${customerName} ${mobileNumber} ${effectiveLead?.groom_name || ''} ${effectiveLead?.bride_name || ''} ${effectiveLead?.contact_person || ''} ${eventType} ${sortedEvents.map(e => e.event_name || '').join(' ')}`.toLowerCase();
+
       return {
         lead: effectiveLead,
         order,
         payment,
         orderId,
-        customerName: order?.customer_name || lead?.customer_name || 'Customer',
-        mobileNumber: order?.mobile || lead?.mobile || '',
+        orderSeq,
+        orderCreatedAt,
+        searchIndex,
+        customerName,
+        mobileNumber,
         eventType,
         recordEventTypes,
         eventDate: primaryEventDate,
@@ -610,7 +695,7 @@ export const PendingPaymentsReport: React.FC = () => {
       if (!order || !order.order_id) return;
       if (order.order_status === 'Cancelled' || (order as any).status === 'Cancelled') return;
 
-      const linkedLead = (leads || []).find(l => l.lead_id === order.lead_id);
+      const linkedLead = order.lead_id ? leadByLeadId.get(String(order.lead_id)) : undefined;
       const rec = processRecord(order, linkedLead);
       if (rec) records.push(rec);
     });
@@ -632,7 +717,7 @@ export const PendingPaymentsReport: React.FC = () => {
 
     // Sort: Newest Order ID first using actual system's latest Order ID / order creation sequence
     return records.sort(compareOrderRecords);
-  }, [orders, leads, payments, allPaymentHistory]);
+  }, [orders, leads, payments, historiesByOrderId]);
 
   // Dynamically retrieve the real-time record to keep modal updated
   const currentRecord = useMemo(() => {
@@ -778,31 +863,16 @@ export const PendingPaymentsReport: React.FC = () => {
       const effectiveEventDate = primaryMatchingEvent?.event_date || rec.eventDate;
 
       // 2. GLOBAL SEARCH (Strictly CASE-INSENSITIVE across Customer Name, Order ID, Mobile Number, related fields)
-      const cleanGlobalSearch = (globalSearch || searchTerm).trim().toLowerCase();
+      const cleanGlobalSearch = (deferredGlobalSearch || deferredSearchTerm).trim().toLowerCase();
       if (cleanGlobalSearch) {
-        const cName = String(rec.customerName || '').toLowerCase();
-        const oId = String(rec.orderId || '').toLowerCase();
-        const mob = String(rec.mobileNumber || '').toLowerCase().replace(/[\s\-+]/g, '');
         const cleanQ = cleanGlobalSearch.replace(/[\s\-+]/g, '');
-        const rawMob = String(rec.mobileNumber || '').toLowerCase();
-        const groom = String(rec.lead?.groom_name || '').toLowerCase();
-        const bride = String(rec.lead?.bride_name || '').toLowerCase();
-        const contact = String(rec.lead?.contact_person || '').toLowerCase();
-        const evNames = (rec.events || []).map((e: any) => String(e.event_name || '').toLowerCase()).join(' ');
-
-        const matchesGlobal = cName.includes(cleanGlobalSearch) ||
-          oId.includes(cleanGlobalSearch) ||
-          mob.includes(cleanQ) ||
-          rawMob.includes(cleanGlobalSearch) ||
-          groom.includes(cleanGlobalSearch) ||
-          bride.includes(cleanGlobalSearch) ||
-          contact.includes(cleanGlobalSearch) ||
-          evNames.includes(cleanGlobalSearch);
+        const matchesGlobal = (rec.searchIndex && rec.searchIndex.includes(cleanGlobalSearch)) ||
+          (cleanQ && rec.mobileNumber && rec.mobileNumber.replace(/[\s\-+]/g, '').includes(cleanQ));
 
         if (!matchesGlobal) return null;
       }
 
-      if (searchOrderId && !rec.orderId.toLowerCase().includes(searchOrderId.toLowerCase())) return null;
+      if (deferredSearchOrderId && !rec.orderId.toLowerCase().includes(deferredSearchOrderId.trim().toLowerCase())) return null;
 
       // Event Type Filter (strictly matches actual saved event types)
       if (eventTypeFilter !== 'All') {
@@ -920,7 +990,23 @@ export const PendingPaymentsReport: React.FC = () => {
 
       return compareOrderRecords(a, b);
     });
-  }, [allPendingRecords, activeEventDateRange, globalSearch, searchTerm, searchOrderId, eventTypeFilter, paymentStatusFilter, activeCardFilter, sortColumn, sortDirection]);
+  }, [allPendingRecords, activeEventDateRange, deferredGlobalSearch, deferredSearchTerm, deferredSearchOrderId, eventTypeFilter, paymentStatusFilter, activeCardFilter, sortColumn, sortDirection]);
+
+  // Reset pagination to page 1 whenever search, filters, or sorting change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [deferredGlobalSearch, deferredSearchTerm, deferredSearchOrderId, eventTypeFilter, paymentStatusFilter, activeCardFilter, dateFilterOption, customStartDate, customEndDate, sortColumn, sortDirection]);
+
+  // Paginated records for instantaneous DOM rendering
+  const totalRecords = filteredRecords.length;
+  const totalPages = pageSize === 0 ? 1 : Math.max(1, Math.ceil(totalRecords / pageSize));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+
+  const paginatedRecords = useMemo(() => {
+    if (pageSize === 0) return filteredRecords;
+    const start = (safeCurrentPage - 1) * pageSize;
+    return filteredRecords.slice(start, start + pageSize);
+  }, [filteredRecords, safeCurrentPage, pageSize]);
 
   // Unique event types for dropdown - strictly sourced from Sales Step 2 EVENT_TYPES
   const uniqueEventTypes = useMemo(() => {
@@ -1789,7 +1875,7 @@ export const PendingPaymentsReport: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                filteredRecords.map((rec, i) => {
+                paginatedRecords.map((rec, i) => {
                   const effectiveEventDate = rec.effectiveEventDate || rec.eventDate;
                   const daysOverdue = getOverdueDays(effectiveEventDate, rec.remainingAmount);
                   const formattedEventDate = formatEventDate(effectiveEventDate);
@@ -1976,6 +2062,89 @@ export const PendingPaymentsReport: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Toolbar */}
+        {filteredRecords.length > 0 && (
+          <div className="p-4 border-t border-zinc-850 bg-zinc-900/40 flex flex-wrap items-center justify-between gap-4 select-none">
+            {/* Left: Record Range & Page Size Selector */}
+            <div className="flex items-center gap-3 text-xs text-zinc-400 font-mono">
+              <span>
+                Showing <strong className="text-white">{pageSize === 0 ? 1 : ((safeCurrentPage - 1) * pageSize + 1)}</strong> to{' '}
+                <strong className="text-white">{pageSize === 0 ? totalRecords : Math.min(safeCurrentPage * pageSize, totalRecords)}</strong> of{' '}
+                <strong className="text-amber-400">{totalRecords}</strong> records
+              </span>
+
+              <div className="flex items-center gap-1.5 ml-2">
+                <span className="text-[11px] text-zinc-500 uppercase font-sans font-semibold">Rows:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setPageSize(val);
+                    setCurrentPage(1);
+                  }}
+                  className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-500 font-mono cursor-pointer"
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={0}>All</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Right: Page Navigation Controls */}
+            {pageSize > 0 && totalPages > 1 && (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage(1)}
+                  disabled={safeCurrentPage === 1}
+                  className="p-1.5 rounded-lg border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                  title="First Page"
+                >
+                  <ChevronsLeft className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={safeCurrentPage === 1}
+                  className="p-1.5 rounded-lg border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                  title="Previous Page"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+
+                <div className="flex items-center gap-1 px-2 text-xs font-mono text-zinc-300">
+                  <span>Page</span>
+                  <span className="px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold">
+                    {safeCurrentPage}
+                  </span>
+                  <span>of {totalPages}</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={safeCurrentPage === totalPages}
+                  className="p-1.5 rounded-lg border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                  title="Next Page"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={safeCurrentPage === totalPages}
+                  className="p-1.5 rounded-lg border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                  title="Last Page"
+                >
+                  <ChevronsRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <UpdatePaymentModal
