@@ -251,7 +251,7 @@ export const SalesCrmWizard: React.FC<SalesCrmWizardProps> = (props) => {
       whatsapp_number: targetLead.whatsapp_number || createForm.whatsapp_number,
       status: targetLead.status || 'Create Quote',
       budget: finalTotal || targetLead.budget,
-      package_price: finalTotal || targetLead.package_price,
+      package_price: targetLead.package_price || finalTotal,
       Final_Quotation_Amount: finalTotal || targetLead.Final_Quotation_Amount,
       Final_Package_Amount: finalTotal || targetLead.Final_Package_Amount,
       final_package_amount: finalTotal || targetLead.final_package_amount,

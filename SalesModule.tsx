@@ -15,6 +15,7 @@ import { UnifiedEventDropdownCell } from './UnifiedEventDropdownCell';
 import { EventCategoryCell } from './EventCategoryCell';
 import { EventLocationCell } from './EventLocationCell';
 import { EventDateCell } from './EventDateCell';
+import { EventTimeCell } from './EventTimeCell';
 import { EventCell } from './EventCell';
 import { MultiSelectDropdown } from './ui/MultiSelectDropdown';
 import { CameraLensStatsCard, CameraLensTheme } from './CameraLensStatsCard';
@@ -3998,21 +3999,33 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
             const primaryLp = lpData && lpData.length > 0 ? lpData[0] : null;
             const effectivePkgId = pkgId || data?.Select_Package_Option || primaryLp?.package_id || 'Custom Package';
 
+            const rawDisc = Number(data?.Quotation_Discount || 0);
+            const rawAdd = Number(data?.Additional_Services_Cost || 0);
+            const rawFinalQuoted = Number(data?.Final_Quotation_Amount || data?.Final_Package_Amount || 0);
+            const impliedOriginalBase = Math.max(0, rawFinalQuoted + rawDisc - rawAdd);
+
             const cleanCost = primaryLp?.package_cost ?? data?.package_price ?? data?.budget;
             if (cleanCost != null && !isNaN(Number(cleanCost))) {
+              let resolvedCost = Number(cleanCost);
+              if (impliedOriginalBase > 0 && resolvedCost < impliedOriginalBase) {
+                resolvedCost = impliedOriginalBase;
+              }
               setWizardLeadData(prev => {
                 const existingPkg = prev.selected_package_id || prev.Select_Package_Option;
                 const finalPkg = (existingPkg && existingPkg.trim() !== '') ? existingPkg : effectivePkgId;
                 return {
                   ...prev,
-                  package_cost: Number(cleanCost),
-                  package_price: Number(cleanCost),
-                  budget: Number(cleanCost),
+                  package_cost: resolvedCost,
+                  package_price: resolvedCost,
+                  budget: resolvedCost,
                   notes: data?.notes_special_customizations ?? prev.notes,
                   Select_Package_Option: finalPkg,
                   selected_package_id: finalPkg,
                 };
               });
+              if (effectivePkgId && resolvedCost > 0) {
+                setPkgPrices(prev => ({ ...prev, [effectivePkgId]: resolvedCost }));
+              }
             }
             if (data?.Quotation_Discount != null) {
               setQuoteDiscount(Number(data.Quotation_Discount));
@@ -5126,8 +5139,6 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
       const phoneStr = typeof rawPhone === 'string' ? rawPhone : String(rawPhone);
       
       const safeCustomerName = String(leadObj.customer_name || '');
-      const safeEventLocation = String(leadObj.event_location || leadObj.location || 'N/A');
-
       let eventDetailsStr = '';
       if (leadObj.events && leadObj.events.length > 0) {
         eventDetailsStr = leadObj.events.map((ev) => {
@@ -5146,7 +5157,6 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
         `Thank you for choosing *PhotoCrew Pictures*.\n\n` +
         `Please find your quotation details below:\n\n` +
         eventDetailsStr +
-        `📍 Event Address: ${safeEventLocation}\n` +
         `💰 Final Amount: ₹${finalAmt.toLocaleString('en-IN')}\n\n` +
         `Thank you.\nPhotoCrew Pictures`;
 
@@ -6235,7 +6245,11 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
     setInternalNotes(fullLead.follow_up_notes || '');
     setFollowUpDate(fullLead.next_follow_up_date || '');
     
-    const cleanPkgPrice = (fullLead.package_price && Number(fullLead.package_price) > 0)
+    const rawDisc = Number(fullLead.quotation_discount || fullLead.Quotation_Discount || 0);
+    const rawAdd = Number(fullLead.additional_services_cost || fullLead.Additional_Services_Cost || 0);
+    const rawFinalQuoted = Number(fullLead.Final_Quotation_Amount || fullLead.Final_Package_Amount || fullLead.final_package_amount || (primaryLP as any)?.final_amount || 0);
+
+    let cleanPkgPrice = (fullLead.package_price && Number(fullLead.package_price) > 0)
       ? Number(fullLead.package_price)
       : ((primaryLP?.package_cost && Number(primaryLP.package_cost) > 0)
         ? Number(primaryLP.package_cost)
@@ -6244,6 +6258,14 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
           : (fullLead.budget && Number(fullLead.budget) > 0
             ? Number(fullLead.budget)
             : (matchedPkg ? Number(matchedPkg.price) : 0))));
+
+    // Package Base Price must NEVER be reduced by advance payments or discounts.
+    // If package_price was previously corrupted/deducted:
+    // Implied original Package Base Price = Final Quotation Amount + Quotation Discount - Additional Services Cost
+    const impliedOriginalBase = Math.max(0, rawFinalQuoted + rawDisc - rawAdd);
+    if (impliedOriginalBase > 0 && cleanPkgPrice < impliedOriginalBase) {
+      cleanPkgPrice = impliedOriginalBase;
+    }
     
     setWizardLeadData({
       customer_name: fullLead.customer_name || '',
@@ -9957,6 +9979,40 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
         ? (eventsReporting[selectedLead.events[0].id || 'ev_0']?.reporting_time || selectedLead.events[0]?.reporting_time || selectedLead.reporting_time)
         : (eventsReporting['default']?.reporting_time || selectedLead.reporting_time);
 
+      const currentBasePrice = Number(
+        (wizardLeadData.package_cost !== undefined && wizardLeadData.package_cost !== null && wizardLeadData.package_cost !== '' && !isNaN(Number(wizardLeadData.package_cost)) && Number(wizardLeadData.package_cost) > 0)
+          ? Number(wizardLeadData.package_cost)
+          : ((wizardLeadData.package_price !== undefined && wizardLeadData.package_price !== null && wizardLeadData.package_price !== '' && !isNaN(Number(wizardLeadData.package_price)) && Number(wizardLeadData.package_price) > 0)
+            ? Number(wizardLeadData.package_price)
+            : ((selectedLead.package_price !== undefined && selectedLead.package_price !== null && !isNaN(Number(selectedLead.package_price)) && Number(selectedLead.package_price) > 0)
+              ? Number(selectedLead.package_price)
+              : ((selectedLead.package_cost !== undefined && selectedLead.package_cost !== null && !isNaN(Number(selectedLead.package_cost)) && Number(selectedLead.package_cost) > 0)
+                ? Number(selectedLead.package_cost)
+                : (dynamicBaseSum > 0 ? dynamicBaseSum : (Number(selectedLead.budget) || 0)))))
+      );
+      const discountAmount = Number(quoteDiscount || selectedLead.quotation_discount || selectedLead.Quotation_Discount || 0);
+      const advanceAmount = Number(numAdvance || 0);
+
+      // Package Base Price must ALWAYS display the original package price and never be reduced by advance or paid payments
+      const originalPackageBasePrice = currentBasePrice;
+
+      if (supabaseClient) {
+        try {
+          await supabaseClient
+            .from('leads')
+            .update({
+              package_price: originalPackageBasePrice,
+              budget: originalPackageBasePrice,
+              Select_Package_Option: confirmForm.package_name || selectedLead.Select_Package_Option,
+              Final_Quotation_Amount: Number(effectiveFinalAmt),
+              Final_Package_Amount: Number(effectiveFinalAmt)
+            })
+            .eq('lead_id', selectedLead.lead_id);
+        } catch (leadUpdateErr) {
+          console.warn("Direct Supabase update exception on order confirmation:", leadUpdateErr);
+        }
+      }
+
       await confirmOrder(
         selectedLead.lead_id,
         confirmForm.package_name,
@@ -9967,18 +10023,34 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
         confirmForm.payment_mode,
         confirmForm.notes,
         firstRepTime,
-        confirmForm.transaction_id
+        confirmForm.transaction_id,
+        originalPackageBasePrice
       );
 
       setShowConfirmModal(false);
       showToastMsg("Booking Confirmation saved successfully. Order transferred to Operations.", "success");
       setWizardLeadData(prev => ({
         ...prev,
+        package_cost: originalPackageBasePrice,
+        package_price: originalPackageBasePrice,
+        budget: originalPackageBasePrice,
         advance_received: numAdvance,
         status: 'Order Confirmed'
       }));
       setSalesStatus('Order Confirmed' as CurrentStage);
-      setSelectedLead(null);
+
+      const updatedLeadObj: Lead = {
+        ...selectedLead,
+        package_price: originalPackageBasePrice,
+        package_cost: originalPackageBasePrice as any,
+        budget: originalPackageBasePrice,
+        status: 'Order Confirmed',
+        current_status: 'Order Confirmed',
+        booking_status: 'Confirmed',
+        advance_collected: numAdvance
+      };
+      setSelectedLead(updatedLeadObj);
+
       if (activeTab === 'create') {
         resetForm();
         setActiveTab('list');
@@ -12588,6 +12660,12 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
                     </th>
                     <th className="p-3.5">Event Location</th>
                     <th className="p-3.5">Event Date</th>
+                    <th className="p-3.5">
+                      <span className="uppercase font-mono tracking-wider text-[10px] font-bold text-zinc-405 select-none">
+                        Event Time
+                      </span>
+                    </th>
+
                     <th className="p-3.5">Current Status</th>
                     <th className="p-3.5">Created Date</th>
                     <th className="p-3.5 text-right pr-5 w-[160px] min-w-max">Action</th>
@@ -12663,6 +12741,9 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
                           </td>
                           <td className="p-3.5 text-zinc-300">
                             <EventDateCell lead={lead} orders={orders} filterEventDateOption={filterEventDateOption} />
+                          </td>
+                          <td className="p-3.5 text-zinc-300">
+                            <EventTimeCell lead={lead} orders={orders} filterEventDateOption={filterEventDateOption} />
                           </td>
                           <td className="p-3.5">
                             <StatusText status={leadStatus} />
