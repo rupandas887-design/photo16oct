@@ -1615,7 +1615,7 @@ async function startServer() {
       const db = getServerSupabase();
       const queries = [
         db.from('users').select('*'),
-        db.from('leads').select('*').order('created_at', { ascending: false }),
+        db.from('leads').select('*').order('lead_id', { ascending: false }),
         db.from('orders').select('*').order('created_at', { ascending: false }),
         db.from('operations').select('*'),
         db.from('raw_footage').select('*'),

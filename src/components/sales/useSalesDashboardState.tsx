@@ -4551,7 +4551,11 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     setInternalNotes(fullLead.follow_up_notes || '');
     setFollowUpDate(fullLead.next_follow_up_date || '');
     
-    const cleanPkgPrice = (fullLead.package_price && Number(fullLead.package_price) > 0)
+    const leadDiscount = Number(fullLead.Quotation_Discount || fullLead.quotation_discount || latestQuote?.discount_amount || 0);
+    const leadAdditional = Number(fullLead.Additional_Services_Cost || fullLead.additional_services_cost || latestQuote?.additional_services_cost || 0);
+    const finalAmountVal = Number(fullLead.Final_Quotation_Amount || fullLead.final_quotation_amount || fullLead.final_amount || latestQuote?.final_amount || 0);
+
+    let cleanPkgPrice = (fullLead.package_price && Number(fullLead.package_price) > 0)
       ? Number(fullLead.package_price)
       : ((primaryLP?.package_cost && Number(primaryLP.package_cost) > 0)
         ? Number(primaryLP.package_cost)
@@ -4560,6 +4564,11 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           : (fullLead.budget && Number(fullLead.budget) > 0
             ? Number(fullLead.budget)
             : (matchedPkg ? Number(matchedPkg.price) : 0))));
+
+    // Safety guard: if cleanPkgPrice was previously saved as the discounted final amount, recover original base price
+    if (leadDiscount > 0 && cleanPkgPrice > 0 && finalAmountVal > 0 && cleanPkgPrice === finalAmountVal) {
+      cleanPkgPrice = cleanPkgPrice + leadDiscount - leadAdditional;
+    }
     
     setWizardLeadData({
       customer_name: fullLead.customer_name || '',
@@ -8045,8 +8054,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
 
       await updateLead(createdLeadId!, {
         status: finalStatus as CurrentStage,
-        budget: finalTotal,
-        package_price: finalTotal,
+        budget: subtotal,
+        package_price: subtotal,
         Quotation_Discount: quoteDiscount === "" ? null : Number(quoteDiscount),
         Additional_Services_Cost: quoteAdditional === "" ? null : Number(quoteAdditional),
         Final_Quotation_Amount: finalTotal,
@@ -8073,10 +8082,10 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         ...prev,
         selected_package_id: activePkgId,
         Select_Package_Option: activePkgId,
-        package_cost: finalTotal,
-        package_price: finalTotal,
+        package_cost: subtotal,
+        package_price: subtotal,
         final_amount: finalTotal,
-        budget: finalTotal,
+        budget: subtotal,
         final_quoted_amount: finalTotal,
         deliverables: deliverablesText,
         deliverables_description: deliverablesText
@@ -8090,8 +8099,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         mobile: createForm.mobile,
         whatsapp_number: createForm.whatsapp_number,
         status: finalStatus as CurrentStage,
-        budget: finalTotal,
-        package_price: finalTotal,
+        budget: subtotal,
+        package_price: subtotal,
         Quotation_Discount: quoteDiscount === "" ? null : Number(quoteDiscount),
         Additional_Services_Cost: quoteAdditional === "" ? null : Number(quoteAdditional),
         Final_Quotation_Amount: finalTotal,
@@ -8125,8 +8134,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         newStatus,
         updatePayload: {
           status: finalStatus,
-          budget: finalTotal,
-          package_price: finalTotal,
+          budget: subtotal,
+          package_price: subtotal,
           Quotation_Discount: quoteDiscount === "" ? null : Number(quoteDiscount),
           Additional_Services_Cost: quoteAdditional === "" ? null : Number(quoteAdditional),
           Final_Quotation_Amount: finalTotal,
@@ -8661,7 +8670,29 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       );
       const safeTeamMembersText = teamMembersText;
       const safeDeliverablesText = deliverablesText;
-      const cleanPkgCost = Number(effectiveFinalAmt) || Number(confirmForm.quotation_amount) || Number(selectedLead.Final_Package_Amount) || 0;
+
+      // Ensure original Package Base Price remains intact and is never overwritten by discount or final quotation amount
+      const resolvedDiscount = Number(selectedLead.quotation_discount || selectedLead.Quotation_Discount || quoteDiscount || 0);
+      const resolvedAdditional = Number(selectedLead.additional_services_cost || selectedLead.Additional_Services_Cost || quoteAdditional || 0);
+
+      const originalBasePrice = (() => {
+        const costVal = Number(wizardLeadData.package_cost);
+        if (!isNaN(costVal) && costVal > 0) return costVal;
+        const priceVal = Number(wizardLeadData.package_price);
+        if (!isNaN(priceVal) && priceVal > 0) return priceVal;
+        const leadPriceVal = Number(selectedLead.package_price);
+        if (!isNaN(leadPriceVal) && leadPriceVal > 0) {
+          if (resolvedDiscount > 0 && leadPriceVal === Number(effectiveFinalAmt)) {
+            return leadPriceVal + resolvedDiscount - resolvedAdditional;
+          }
+          return leadPriceVal;
+        }
+        const leadCostVal = Number(selectedLead.package_cost);
+        if (!isNaN(leadCostVal) && leadCostVal > 0) return leadCostVal;
+        const leadBudgetVal = Number(selectedLead.budget);
+        if (!isNaN(leadBudgetVal) && leadBudgetVal > 0) return leadBudgetVal;
+        return Math.max(0, Number(effectiveFinalAmt) + resolvedDiscount - resolvedAdditional);
+      })();
 
       if (supabaseClient) {
         try {
@@ -8674,8 +8705,13 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
               Add_Deliverable: safeDeliverablesText,
               Add_Member: safeTeamMembersText,
               Select_Package_Option: pkgId,
-              Final_Quotation_Amount: cleanPkgCost,
-              Final_Package_Amount: cleanPkgCost
+              package_price: originalBasePrice,
+              budget: originalBasePrice,
+              Quotation_Discount: resolvedDiscount,
+              Additional_Services_Cost: resolvedAdditional,
+              Final_Quotation_Amount: effectiveFinalAmt,
+              Final_Package_Amount: effectiveFinalAmt,
+              final_package_amount: effectiveFinalAmt
             })
             .eq('lead_id', selectedLead.lead_id);
 
@@ -8691,9 +8727,11 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
             lead_id: selectedLead.lead_id,
             package_id: pkgId,
             package_name: confirmForm.package_name || pkgId,
-            package_cost: cleanPkgCost || 0,
+            package_cost: originalBasePrice,
             quantity: 1,
-            total_amount: cleanPkgCost,
+            total_amount: originalBasePrice,
+            discount: resolvedDiscount,
+            additional_services_cost: resolvedAdditional,
             final_amount: effectiveFinalAmt,
             Team_Members_Included: teamMembersJson,
             editable_inclusions: editableInclusions,
@@ -8772,6 +8810,9 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       showToastMsg("Booking Confirmation saved successfully. Order transferred to Operations.", "success");
       setWizardLeadData(prev => ({
         ...prev,
+        package_cost: originalBasePrice,
+        package_price: originalBasePrice,
+        budget: originalBasePrice,
         advance_received: numAdvance,
         status: 'Order Confirmed'
       }));

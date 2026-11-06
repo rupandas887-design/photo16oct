@@ -3297,7 +3297,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             console.warn('[RoleContext] select-all proxy failed, falling back to individual fetches:', e);
             results = await Promise.all([
               supabaseClient.from('users').select('*'),
-              supabaseClient.from('leads').select('*').order('created_at', { ascending: false }),
+              supabaseClient.from('leads').select('*').order('lead_id', { ascending: false }),
               supabaseClient.from('orders').select('*').order('created_at', { ascending: false }),
               supabaseClient.from('operations').select('*'),
               supabaseClient.from('raw_footage').select('*'),
@@ -5494,6 +5494,28 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     const resolvedRemarks = `${targetLead.remarks || ''}\n[Booking Confirmed Update ${new Date().toISOString().split('T')[0]}]: ${notes || 'No extra notes'}. Payment Mode: ${paymentMode || 'N/A'}`;
     const timestamp = new Date().toISOString();
 
+    const leadDiscount = Number(targetLead.quotation_discount || targetLead.Quotation_Discount || 0);
+    const leadAdditional = Number(targetLead.additional_services_cost || targetLead.Additional_Services_Cost || 0);
+    const rawPkgPrice = Number(targetLead.package_price || 0);
+    const rawBudget = Number(targetLead.budget || 0);
+
+    const resolvedPackageBasePrice = (() => {
+      if (rawPkgPrice > 0) {
+        if (leadDiscount > 0 && rawPkgPrice === quotationAmount) {
+          // Recover original base price if previously overwritten with quotationAmount
+          return rawPkgPrice + leadDiscount - leadAdditional;
+        }
+        return rawPkgPrice;
+      }
+      if (rawBudget > 0) {
+        if (leadDiscount > 0 && rawBudget === quotationAmount) {
+          return rawBudget + leadDiscount - leadAdditional;
+        }
+        return rawBudget;
+      }
+      return Math.max(0, quotationAmount + leadDiscount - leadAdditional);
+    })();
+
     const resLead = await pushUpdate('leads', 'lead_id', leadId, { 
       status: 'Order Confirmed', 
       current_status: 'Order Confirmed', 
@@ -5515,7 +5537,8 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       remarks: resolvedRemarks,
       updated_by: currentUserName, 
       updated_at: timestamp,
-      package_price: targetLead.package_price
+      package_price: resolvedPackageBasePrice,
+      budget: resolvedPackageBasePrice
     });
 
     if (!resLead?.success) {
@@ -5611,11 +5634,11 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         state: targetLead.state || '',
         pincode: targetLead.pincode || '',
         desired_event_shoot_type: targetLead.desired_event_shoot_type || '',
-        package_price: targetLead.package_price,
+        package_price: resolvedPackageBasePrice,
         deliverables_description: targetLead.deliverables_description || '',
         notes_special_customizations: targetLead.notes_special_customizations || '',
-        quotation_discount: targetLead.quotation_discount || 0,
-        additional_services_cost: targetLead.additional_services_cost || 0,
+        quotation_discount: leadDiscount,
+        additional_services_cost: leadAdditional,
       });
       if (!rOrd?.success) throw new Error("Failed to update existing order: " + rOrd?.error);
       setOrders(prev => prev.map(o => o.order_id === masterOrderId ? {
@@ -5628,6 +5651,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         reporting_time: reportingTime || targetLead.reporting_time || o.reporting_time,
         event_location: targetLead.event_location,
         package_name: packageName,
+        package_price: resolvedPackageBasePrice,
         quotation_amount: quotationAmount,
         order_status: 'Confirmed',
         current_stage: 'Order Confirmed',
@@ -5664,11 +5688,11 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         pincode: targetLead.pincode || '',
         client_residence_address: targetLead.client_residence_address || '',
         desired_event_shoot_type: targetLead.desired_event_shoot_type || '',
-        package_price: targetLead.package_price,
+        package_price: resolvedPackageBasePrice,
         deliverables_description: targetLead.deliverables_description || '',
         notes_special_customizations: targetLead.notes_special_customizations || '',
-        quotation_discount: targetLead.quotation_discount || 0,
-        additional_services_cost: targetLead.additional_services_cost || 0,
+        quotation_discount: leadDiscount,
+        additional_services_cost: leadAdditional,
       };
       let rOrd = await pushInsert('orders', newOrder);
       let orderRetry = 0;
@@ -10158,13 +10182,17 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       if ('package_price' in finalUpdates) {
         const newVal = finalUpdates.package_price;
         const prevVal = prevLead.package_price;
+        const discount = Number(finalUpdates.Quotation_Discount || finalUpdates.quotation_discount || prevLead.Quotation_Discount || prevLead.quotation_discount || 0);
+        const finalAmt = Number(finalUpdates.Final_Quotation_Amount || finalUpdates.final_quotation_amount || 0);
+
         if ((newVal === null || newVal === undefined || newVal === 0 || (newVal as any) === '') && (prevVal !== null && prevVal !== undefined && prevVal !== 0 && (prevVal as any) !== '')) {
           console.warn(`[SAFETY] Prevented accidental overwrite of package_price. Retaining existing data.`);
-          delete finalUpdates.package_price;
-          // Also protect budget since they are often synced
-          if ('budget' in finalUpdates && (finalUpdates.budget === null || finalUpdates.budget === undefined || finalUpdates.budget === 0 || (finalUpdates.budget as any) === '')) {
-             delete finalUpdates.budget;
-          }
+          finalUpdates.package_price = prevVal;
+          if ('budget' in finalUpdates) finalUpdates.budget = prevVal;
+        } else if (discount > 0 && newVal && prevVal && Number(newVal) === finalAmt && Number(prevVal) > Number(newVal)) {
+          console.warn(`[SAFETY] Blocked discounted final amount (${newVal}) from overwriting Package Base Price (${prevVal}). Retaining original base price.`);
+          finalUpdates.package_price = prevVal;
+          if ('budget' in finalUpdates) finalUpdates.budget = prevVal;
         }
       }
 
