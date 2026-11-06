@@ -725,32 +725,58 @@ export const PendingPaymentsReport: React.FC = () => {
     return allPendingRecords.find(r => r.orderId === paymentModalRecord.orderId) || paymentModalRecord;
   }, [allPendingRecords, paymentModalRecord]);
 
-  // Compute metrics for the Pending Payment Analytics Cards
+  // Compute metrics for the Pending Payment Analytics Cards in a single efficient O(N) pass
   const stats = useMemo(() => {
-    const totalPendingOrders = allPendingRecords.filter(r => r.remainingAmount > 0).length;
-    const fullyPaidOrders = allPendingRecords.filter(r => r.paymentStatus === 'Fully Paid').length;
-    const totalPendingAmount = allPendingRecords.reduce((acc, r) => acc + (r.paymentStatus === 'Fully Paid' ? 0 : r.remainingAmount), 0);
-    const partialPaymentOrders = allPendingRecords.filter(r => r.paymentStatus === 'Partial').length;
-    const overduePendingPayments = allPendingRecords.filter(r => r.isOverdue).length;
-    const overdueAmount = allPendingRecords.filter(r => r.isOverdue).reduce((acc, r) => acc + r.remainingAmount, 0);
-    const upcomingPaymentDue = allPendingRecords.filter(r => !r.isOverdue && r.remainingAmount > 0).length;
-    const averageOutstandingAmount = totalPendingOrders > 0 ? totalPendingAmount / totalPendingOrders : 0;
-    
-    // Calculate Due Today and Due This Week
     const today = new Date();
     const todayStr = today.toISOString().split('T')[0];
-    
     const endOfWeek = new Date();
     endOfWeek.setDate(today.getDate() + (7 - today.getDay()));
     const endOfWeekStr = endOfWeek.toISOString().split('T')[0];
 
-    const dueTodayAmount = allPendingRecords
-      .filter(r => r.eventDate === todayStr && r.remainingAmount > 0)
-      .reduce((acc, r) => acc + r.remainingAmount, 0);
+    let totalPendingOrders = 0;
+    let fullyPaidOrders = 0;
+    let totalPendingAmount = 0;
+    let partialPaymentOrders = 0;
+    let overduePendingPayments = 0;
+    let overdueAmount = 0;
+    let upcomingPaymentDue = 0;
+    let dueTodayAmount = 0;
+    let dueThisWeekAmount = 0;
 
-    const dueThisWeekAmount = allPendingRecords
-      .filter(r => r.eventDate >= todayStr && r.eventDate <= endOfWeekStr && r.remainingAmount > 0)
-      .reduce((acc, r) => acc + r.remainingAmount, 0);
+    for (let i = 0; i < allPendingRecords.length; i++) {
+      const r = allPendingRecords[i];
+      const isPaid = r.paymentStatus === 'Fully Paid';
+      const hasPending = r.remainingAmount > 0;
+
+      if (hasPending) {
+        totalPendingOrders++;
+      }
+      if (isPaid) {
+        fullyPaidOrders++;
+      } else {
+        totalPendingAmount += r.remainingAmount;
+      }
+      if (r.paymentStatus === 'Partial') {
+        partialPaymentOrders++;
+      }
+      if (r.isOverdue) {
+        overduePendingPayments++;
+        overdueAmount += r.remainingAmount;
+      } else if (hasPending) {
+        upcomingPaymentDue++;
+      }
+
+      if (hasPending && r.eventDate) {
+        if (r.eventDate === todayStr) {
+          dueTodayAmount += r.remainingAmount;
+        }
+        if (r.eventDate >= todayStr && r.eventDate <= endOfWeekStr) {
+          dueThisWeekAmount += r.remainingAmount;
+        }
+      }
+    }
+
+    const averageOutstandingAmount = totalPendingOrders > 0 ? totalPendingAmount / totalPendingOrders : 0;
 
     return {
       totalPendingOrders,
