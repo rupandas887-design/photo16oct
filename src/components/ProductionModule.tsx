@@ -13511,7 +13511,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                         className="w-4 h-4 rounded border-zinc-600 bg-zinc-950 text-white focus:ring-0 focus:ring-offset-0 transition-colors cursor-pointer appearance-none checked:bg-white checked:border-white relative before:content-[''] checked:before:absolute checked:before:w-1.5 checked:before:h-2.5 checked:before:border-r-2 checked:before:border-b-2 checked:before:border-black checked:before:rotate-45 checked:before:top-[1px] checked:before:left-[5px]"
                       />
                       <span className="text-[13px] font-bold text-zinc-100">
-                        Client Approval
+                        Client Approval & WhatsApp Exit
                       </span>
                     </label>
 
