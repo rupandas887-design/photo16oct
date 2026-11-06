@@ -473,6 +473,8 @@ export const SalesLeadsTable: React.FC<SalesLeadsTableProps> = (props) => {
   };
 
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
+  const [rowLoadingAction, setRowLoadingAction] = useState<string | null>(null);
+  const inFlightActionRef = useRef<Set<string>>(new Set());
 
   const updateDropdownPos = React.useCallback((leadId: string) => {
     const btn = document.getElementById(`btn_actions_confirm_${leadId}`);
@@ -529,6 +531,10 @@ export const SalesLeadsTable: React.FC<SalesLeadsTableProps> = (props) => {
 
     const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
       const target = e.target as HTMLElement;
+      if (!target || typeof target.closest !== 'function') {
+        setOpenDropdownLeadId(null);
+        return;
+      }
       if (!target.closest('.actions-dropdown-menu') && !target.closest('.actions-dropdown-btn')) {
         setOpenDropdownLeadId(null);
       }
@@ -1022,28 +1028,42 @@ export const SalesLeadsTable: React.FC<SalesLeadsTableProps> = (props) => {
                               
                               return (
                                   <div className="relative inline-block text-right actions-dropdown-container">
-                                    <button
-                                      type="button"
-                                      id={`btn_actions_confirm_${lead.lead_id}`}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (openDropdownLeadId === lead.lead_id) {
-                                          setOpenDropdownLeadId(null);
-                                        } else {
-                                          setOpenDropdownLeadId(lead.lead_id);
-                                          broadcastDropdownOpen(`sales-lead-${lead.lead_id}`);
-                                        }
-                                      }}
-                                      className="actions-dropdown-btn w-36 h-8 text-[11px] font-bold rounded-xl border transition-all cursor-pointer inline-flex items-center justify-between px-2.5 shadow shrink-0 bg-zinc-950 hover:bg-zinc-900 text-amber-400 hover:text-white border-zinc-850"
-                                    >
-                                      <span>⚡ Actions</span>
-                                      <span className="text-[10px] ml-1">▼</span>
-                                    </button>
+                                    {rowLoadingAction === lead.lead_id ? (
+                                      <button
+                                        type="button"
+                                        disabled
+                                        className="actions-dropdown-btn w-36 h-8 text-[11px] font-bold rounded-xl border inline-flex items-center justify-center gap-1.5 px-2.5 shadow shrink-0 bg-zinc-900 text-amber-400 border-zinc-800 opacity-90 cursor-wait select-none"
+                                      >
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                                        <span>Processing...</span>
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        id={`btn_actions_confirm_${lead.lead_id}`}
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (openDropdownLeadId === lead.lead_id) {
+                                            setOpenDropdownLeadId(null);
+                                          } else {
+                                            updateDropdownPos(lead.lead_id);
+                                            setOpenDropdownLeadId(lead.lead_id);
+                                            broadcastDropdownOpen(`sales-lead-${lead.lead_id}`);
+                                          }
+                                        }}
+                                        className="actions-dropdown-btn w-36 h-8 text-[11px] font-bold rounded-xl border transition-all cursor-pointer inline-flex items-center justify-between px-2.5 shadow shrink-0 bg-zinc-950 hover:bg-zinc-900 text-amber-400 hover:text-white border-zinc-850 select-none"
+                                      >
+                                        <span>⚡ Actions</span>
+                                        <span className="text-[10px] ml-1">▼</span>
+                                      </button>
+                                    )}
                                     
                                     {openDropdownLeadId === lead.lead_id && createPortal(
                                       <div 
                                         className="fixed rounded-xl bg-slate-900 border border-slate-800 shadow-2xl p-1.5 space-y-1.5 text-left actions-dropdown-menu animate-in fade-in zoom-in-95 duration-100"
                                         style={dropdownStyle}
+                                        onMouseDown={(e) => e.stopPropagation()}
                                         onClick={(e) => e.stopPropagation()}
                                       >
                                         {/* ALWAYS SHOW ADD NOTE */}
@@ -1070,10 +1090,20 @@ export const SalesLeadsTable: React.FC<SalesLeadsTableProps> = (props) => {
                                             <button
                                               type="button"
                                               id={`btn_followup_${lead.lead_id}`}
-                                              onClick={(e) => {
+                                              onClick={async (e) => {
                                                 e.stopPropagation();
+                                                if (inFlightActionRef.current.has(lead.lead_id)) return;
+                                                inFlightActionRef.current.add(lead.lead_id);
+                                                setRowLoadingAction(lead.lead_id);
                                                 setOpenDropdownLeadId(null);
-                                                handleSelectLead(lead);
+                                                try {
+                                                  await handleSelectLead(lead);
+                                                } catch (err) {
+                                                  console.error("Error managing lead CRM:", err);
+                                                } finally {
+                                                  inFlightActionRef.current.delete(lead.lead_id);
+                                                  setRowLoadingAction(null);
+                                                }
                                               }}
                                               className={`w-full h-8 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-2 shadow ${(!isLeadLostStatus && canEdit && !isCrmEnded) ? 'bg-sky-950/30 hover:bg-sky-900/50 text-sky-400 hover:text-white border border-sky-900/50' : 'bg-zinc-950 hover:bg-zinc-900 text-amber-400 hover:text-white border border-zinc-850/40'}`}
                                             >
@@ -1088,41 +1118,51 @@ export const SalesLeadsTable: React.FC<SalesLeadsTableProps> = (props) => {
                                           <button
                                             type="button"
                                             id={`btn_confirm_order_direct_${lead.lead_id}`}
-                                            onClick={(e) => {
+                                            onClick={async (e) => {
                                               e.stopPropagation();
-                                              if (handleConfirmOrderAction) {
-                                                handleConfirmOrderAction(lead);
-                                              } else {
-                                                setOpenDropdownLeadId(null);
-                                                handleSelectLead(lead);
-                                                const today = new Date().toISOString().split('T')[0];
-                                                const linkedOrder = orders?.find((o: any) => o.lead_id === lead.lead_id);
-                                                const linkedPayment = linkedOrder ? payments?.find((p: any) => p.order_id === linkedOrder.order_id) : null;
-                                                const calcAdvance = linkedPayment 
-                                                  ? ((linkedPayment.advance_received ?? 0) + (linkedPayment.final_payment_received ?? 0)) 
-                                                  : (linkedOrder 
-                                                      ? (linkedOrder.advance_received ?? 0) 
-                                                      : (lead.advance_collected !== undefined && lead.advance_collected !== null && lead.advance_collected !== ''
-                                                          ? Number(lead.advance_collected) 
-                                                          : 0));
-                                                const step3Amount = getStep3FinalQuotationAmount(lead, {
-                                                  dynamicFinalAmt,
-                                                  wizardLeadData,
-                                                  quotations,
-                                                  leads,
-                                                  orders,
-                                                  leadPackages
-                                                });
-                                                setConfirmForm({
-                                                  ...confirmForm,
-                                                  package_name: packages?.find((p: any) => String(p.package_id) === String(lead.Select_Package_Option))?.package_name || lead.Select_Package_Option || '',
-                                                  quotation_amount: step3Amount || Number(lead.Final_Quotation_Amount) || Number((lead as any).final_quotation_amount) || 0,
-                                                  advance_received: calcAdvance,
-                                                  event_date: lead.event_date || today,
-                                                  event_time: lead.event_time || ''
-                                                });
-                                                initEventsReporting(lead);
-                                                setShowConfirmModal(true);
+                                              if (inFlightActionRef.current.has(lead.lead_id)) return;
+                                              inFlightActionRef.current.add(lead.lead_id);
+                                              setRowLoadingAction(lead.lead_id);
+                                              setOpenDropdownLeadId(null);
+                                              try {
+                                                if (handleConfirmOrderAction) {
+                                                  await handleConfirmOrderAction(lead);
+                                                } else {
+                                                  await handleSelectLead(lead);
+                                                  const today = new Date().toISOString().split('T')[0];
+                                                  const linkedOrder = orders?.find((o: any) => o.lead_id === lead.lead_id);
+                                                  const linkedPayment = linkedOrder ? payments?.find((p: any) => p.order_id === linkedOrder.order_id) : null;
+                                                  const calcAdvance = linkedPayment 
+                                                    ? ((linkedPayment.advance_received ?? 0) + (linkedPayment.final_payment_received ?? 0)) 
+                                                    : (linkedOrder 
+                                                        ? (linkedOrder.advance_received ?? 0) 
+                                                        : (lead.advance_collected !== undefined && lead.advance_collected !== null && lead.advance_collected !== ''
+                                                            ? Number(lead.advance_collected) 
+                                                            : 0));
+                                                  const step3Amount = getStep3FinalQuotationAmount(lead, {
+                                                    dynamicFinalAmt,
+                                                    wizardLeadData,
+                                                    quotations,
+                                                    leads,
+                                                    orders,
+                                                    leadPackages
+                                                  });
+                                                  setConfirmForm({
+                                                    ...confirmForm,
+                                                    package_name: packages?.find((p: any) => String(p.package_id) === String(lead.Select_Package_Option))?.package_name || lead.Select_Package_Option || '',
+                                                    quotation_amount: step3Amount || Number(lead.Final_Quotation_Amount) || Number((lead as any).final_quotation_amount) || 0,
+                                                    advance_received: calcAdvance,
+                                                    event_date: lead.event_date || today,
+                                                    event_time: lead.event_time || ''
+                                                  });
+                                                  initEventsReporting(lead);
+                                                  setShowConfirmModal(true);
+                                                }
+                                              } catch (err) {
+                                                console.error("Error opening confirm order modal:", err);
+                                              } finally {
+                                                inFlightActionRef.current.delete(lead.lead_id);
+                                                setRowLoadingAction(null);
                                               }
                                             }}
                                             className="w-full h-8 px-3 text-xs font-bold bg-emerald-950 hover:bg-emerald-900 text-emerald-400 hover:text-white rounded-lg border border-emerald-900/30 transition-all cursor-pointer flex items-center gap-2 shadow"

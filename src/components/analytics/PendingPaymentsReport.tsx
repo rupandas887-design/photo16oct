@@ -1945,20 +1945,24 @@ export const PendingPaymentsReport: React.FC = () => {
                     <td className="px-4 py-4 text-xs text-right">
                       <div className="flex justify-end gap-2">
                         <button 
-                          onClick={() => {
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
                             setPaymentModalRecord(rec);
                             setShowPaymentModal(true);
                           }}
-                          className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/20 text-emerald-400 rounded transition font-bold text-[10px] uppercase tracking-wider cursor-pointer"
+                          className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/20 text-emerald-400 rounded transition font-bold text-[10px] uppercase tracking-wider cursor-pointer select-none"
                         >
                           Update
                         </button>
                         <button 
-                          onClick={() => {
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
                             setViewDetailsRecord(rec);
                             setShowDetailsModal(true);
                           }}
-                          className="px-2.5 py-1.5 bg-blue-500/10 hover:bg-blue-500/25 border border-blue-500/20 text-blue-400 rounded transition font-bold text-[10px] uppercase tracking-wider cursor-pointer"
+                          className="px-2.5 py-1.5 bg-blue-500/10 hover:bg-blue-500/25 border border-blue-500/20 text-blue-400 rounded transition font-bold text-[10px] uppercase tracking-wider cursor-pointer select-none"
                         >
                           Details
                         </button>
@@ -1981,7 +1985,11 @@ export const PendingPaymentsReport: React.FC = () => {
           setPaymentModalRecord(null);
         }}
         record={paymentModalRecord}
-        onSuccess={handleManualSync}
+        onSuccess={() => {
+          setUpdateSuccessMsg('✅ Payment updated successfully.');
+          setTimeout(() => setUpdateSuccessMsg(''), 4000);
+          handleManualSync();
+        }}
       />
 
       <PaymentHistoryModal 

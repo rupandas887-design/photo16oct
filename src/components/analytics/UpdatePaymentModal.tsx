@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { CreditCard } from 'lucide-react';
+import { CreditCard, Loader2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useRole } from '../RoleContext';
 
@@ -127,8 +127,10 @@ export const UpdatePaymentModal: React.FC<UpdatePaymentModalProps> = ({
     };
   }, [paymentModalRecord, orders, payments, leads, paymentHistory]);
 
+  const inFlightRef = React.useRef(false);
+
   const handleSavePayment = async () => {
-    if (isSaving || !paymentModalRecord) return;
+    if (isSaving || inFlightRef.current || !paymentModalRecord) return;
     const cleanAmt = String(paymentAmount).trim();
     const amt = Number(cleanAmt);
     setModalSuccessMsg('');
@@ -150,8 +152,10 @@ export const UpdatePaymentModal: React.FC<UpdatePaymentModalProps> = ({
       return;
     }
 
+    inFlightRef.current = true;
+    setIsSaving(true);
+
     try {
-      setIsSaving(true);
       await recordPayment(
         paymentModalRecord.orderId, 
         amt, 
@@ -162,13 +166,8 @@ export const UpdatePaymentModal: React.FC<UpdatePaymentModalProps> = ({
         paymentNotes,
         paymentType
       );
-      
-      // Refresh global state so leads, orders, payments, and paymentHistory immediately reflect updates
-      if (refreshData) {
-        await refreshData();
-      }
 
-      // Show verified success message inside popup
+      // Show verified success message inside popup immediately
       setModalSuccessMsg('✅ Payment successfully saved.');
       
       // Reset input fields
@@ -177,19 +176,32 @@ export const UpdatePaymentModal: React.FC<UpdatePaymentModalProps> = ({
       setPaymentMode('UPI');
       setPaymentNotes('');
 
+      // Dispatch custom event for real-time listener sync
+      try {
+        window.dispatchEvent(new CustomEvent('payment-updated', { detail: { orderId: paymentModalRecord.orderId } }));
+      } catch (_) {}
+
+      // Trigger callback with success feedback
       if (onSuccess) {
         onSuccess();
       }
-      
-      // Auto hide the success message after 2.5 seconds
+
+      // Non-blocking background sync so user UI never freezes or hangs
+      if (typeof refreshData === 'function') {
+        refreshData().catch((e: any) => console.warn('[UpdatePaymentModal] Background refresh error:', e));
+      }
+
+      // Automatically auto-close after 1.2s to show success feedback smoothly
       setTimeout(() => {
         setModalSuccessMsg('');
-      }, 2500);
+        onClose();
+      }, 1200);
     } catch (err: any) {
       console.error(err);
       setModalErrorMsg('❌ ' + (err?.message || 'Payment update failed. Please retry.'));
     } finally {
       setIsSaving(false);
+      inFlightRef.current = false;
     }
   };
 
@@ -372,9 +384,16 @@ export const UpdatePaymentModal: React.FC<UpdatePaymentModalProps> = ({
             type="button"
             onClick={handleSavePayment}
             disabled={isSaving || (currentRecord && currentRecord.remainingAmount === 0) || !paymentAmount.trim() || isNaN(Number(paymentAmount)) || Number(paymentAmount) <= 0 || !paymentType}
-            className="flex-1 py-2 rounded-xl text-xs font-bold text-zinc-950 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition uppercase tracking-wider cursor-pointer"
+            className="flex-1 py-2 rounded-xl text-xs font-bold text-zinc-950 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition uppercase tracking-wider cursor-pointer inline-flex items-center justify-center gap-1.5"
           >
-            {isSaving ? 'Saving...' : 'Save Payment'}
+            {isSaving ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Saving...</span>
+              </>
+            ) : (
+              'Save Payment'
+            )}
           </button>
         </div>
       </motion.div>

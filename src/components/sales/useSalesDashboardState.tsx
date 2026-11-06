@@ -684,6 +684,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   const [statusError, setStatusError] = useState<{ title: string; reason: string; suggestedFix: string } | null>(null);
 
   const [isSaving, setIsSaving] = useState(false);
+  const inFlightConfirmRef = useRef(false);
+  const inFlightLostRef = useRef(false);
   const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [noteModalLeadId, setNoteModalLeadId] = useState("");
   const [noteModalOrderId, setNoteModalOrderId] = useState("");
@@ -6232,7 +6234,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   };
 
   const handleSaveLostLead = async () => {
-    if (!selectedLead) return;
+    if (!selectedLead || isSaving || inFlightLostRef.current) return;
     const finalReason = lostReason === 'Other' ? otherLostReason : lostReason;
     if (!finalReason || finalReason.trim() === '') {
       showToastMsg("Lost Reason is mandatory.", "error");
@@ -6242,6 +6244,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       showToastMsg("Lost Notes are mandatory.", "error");
       return;
     }
+    inFlightLostRef.current = true;
     setIsSaving(true);
     try {
       await updateLead(selectedLead.lead_id, {
@@ -6272,6 +6275,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       showToastMsg(err.message || String(err), "error");
     } finally {
       setIsSaving(false);
+      inFlightLostRef.current = false;
     }
   };
   
@@ -8494,11 +8498,11 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   };
 
   // Canonical Action column & Step 3 Confirm handler
-  const handleConfirmOrderAction = (lead: Lead) => {
+  const handleConfirmOrderAction = async (lead: Lead) => {
     if (setOpenDropdownLeadId) {
       setOpenDropdownLeadId(null);
     }
-    handleSelectLead(lead);
+    await handleSelectLead(lead);
 
     const today = new Date().toISOString().split('T')[0];
     const linkedOrder = orders?.find((o: any) => o.lead_id === lead.lead_id);
@@ -8536,10 +8540,12 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   // Handle Order Confirmation Process
   const handleConfirmOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedLead || isSaving) return;
+    if (!selectedLead || isSaving || inFlightConfirmRef.current) return;
+    inFlightConfirmRef.current = true;
 
     if (!confirmForm.event_date) {
       showToastMsg("Please select Confirmed Event Date.", "error");
+      inFlightConfirmRef.current = false;
       return;
     }
 
@@ -8816,6 +8822,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       showToastMsg(parsed.reason || "Failed to confirm order.", "error");
     } finally {
       setIsSaving(false);
+      inFlightConfirmRef.current = false;
     }
   };
 
