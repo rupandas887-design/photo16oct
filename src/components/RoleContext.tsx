@@ -410,6 +410,120 @@ export const mapUserFieldsFromDb = (u: any): any => {
   };
 };
 
+export const resolveAuthoritativeRole = (
+  userRecord: any,
+  opStaffList: any[] = [],
+  prodStaffList: any[] = []
+): UserRole => {
+  if (!userRecord) return 'Business Owner';
+
+  const rawRole = (userRecord.role || '').trim();
+  const email = (userRecord.email || '').trim().toLowerCase();
+  const username = (userRecord.username || '').trim().toLowerCase();
+  const rawMobile = (userRecord.mobile || userRecord.phone || '').replace(/\D/g, '');
+  const mobileLast10 = rawMobile.length >= 10 ? rawMobile.slice(-10) : rawMobile;
+  const userId = userRecord.id ? String(userRecord.id).trim() : '';
+  const mappedUserId = mapFromDbUserId(userId);
+  const dbUserId = mapToDbUserId(userId);
+
+  // 1. Dedicated System Accounts always map to their specific roles
+  if (
+    email === 'owner@photocrew.com' ||
+    userId === '00000000-0000-0000-0000-000000000001' ||
+    mappedUserId === '00000000-0000-0000-0000-000000000001'
+  ) {
+    return 'Business Owner';
+  }
+
+  if (
+    email === 'sales@photocrew.com' ||
+    userId === '00000000-0000-0000-0000-000000000002' ||
+    mappedUserId === '00000000-0000-0000-0000-000000000002'
+  ) {
+    return 'Sales Team';
+  }
+
+  if (
+    email === 'operation@photocrew.com' ||
+    email === 'operations@photocrew.com' ||
+    userId === '00000000-0000-0000-0000-000000000003' ||
+    mappedUserId === '00000000-0000-0000-0000-000000000003' ||
+    userId === 'f58de2d0-aba7-4ecf-9b11-89933ce7b545'
+  ) {
+    return 'Operations Team';
+  }
+
+  if (
+    email === 'production@photocrew.com' ||
+    userId === '00000000-0000-0000-0000-000000000004' ||
+    mappedUserId === '00000000-0000-0000-0000-000000000004' ||
+    userId === '6eb78be8-6e79-40bc-8567-231c3c98cb45'
+  ) {
+    return 'Production Team';
+  }
+
+  // 2. Direct checks in operations_staff and production_staff
+  const checkStaffMatch = (staffMember: any) => {
+    if (!staffMember) return false;
+    const sStaffId = staffMember.staff_id ? String(staffMember.staff_id).trim() : '';
+    const sId = staffMember.id ? String(staffMember.id).trim() : '';
+    const sEmail = (staffMember.email || '').trim().toLowerCase();
+    const sMobile = (staffMember.mobile || '').replace(/\D/g, '');
+    const sMobileLast10 = sMobile.length >= 10 ? sMobile.slice(-10) : sMobile;
+
+    if (userId && (sStaffId === userId || sId === userId || sStaffId === mappedUserId || sStaffId === dbUserId)) return true;
+    if (email && sEmail && (sEmail === email || sEmail === username)) return true;
+    if (mobileLast10 && mobileLast10.length >= 7 && (sMobile === rawMobile || (sMobileLast10 && sMobileLast10 === mobileLast10))) return true;
+    return false;
+  };
+
+  const inOpStaff = Array.isArray(opStaffList) && opStaffList.some(checkStaffMatch);
+  const inProdStaff = Array.isArray(prodStaffList) && prodStaffList.some(checkStaffMatch);
+
+  // 3. Disambiguation if user matches both staff tables
+  const lowerRole = rawRole.toLowerCase();
+  if (inOpStaff && inProdStaff) {
+    if (lowerRole.includes('op') || rawRole === 'Operation Staff' || rawRole === 'Operations Staff') {
+      return 'Operation Staff';
+    }
+    if (lowerRole.includes('prod') || rawRole === 'Production Staff' || lowerRole.includes('editor')) {
+      return 'Production Staff';
+    }
+    const opEmailMatch = opStaffList.some(os => os.email && os.email.trim().toLowerCase() === email);
+    const prodEmailMatch = prodStaffList.some(ps => ps.email && ps.email.trim().toLowerCase() === email);
+    if (opEmailMatch && !prodEmailMatch) return 'Operation Staff';
+    if (prodEmailMatch && !opEmailMatch) return 'Production Staff';
+
+    return (rawRole as UserRole) || 'Operation Staff';
+  }
+
+  // 4. If matched in operations_staff only
+  if (inOpStaff) {
+    return 'Operation Staff';
+  }
+
+  // 5. If matched in production_staff only
+  if (inProdStaff) {
+    return 'Production Staff';
+  }
+
+  // 6. Explicit string values from userRecord.role
+  if (rawRole === 'Production Staff' || lowerRole === 'production staff' || lowerRole === 'editor' || lowerRole.includes('editor')) {
+    return 'Production Staff';
+  }
+  if (rawRole === 'Operation Staff' || rawRole === 'Operations Staff' || lowerRole === 'operation staff' || lowerRole === 'operations staff' || lowerRole.includes('photographer') || lowerRole.includes('drone') || lowerRole.includes('cinematographer')) {
+    return 'Operation Staff';
+  }
+
+  // 7. Normalization for manager / owner / sales roles
+  if (lowerRole.includes('owner') || lowerRole.includes('business')) return 'Business Owner';
+  if (lowerRole.includes('sales')) return 'Sales Team';
+  if (lowerRole.includes('production') || lowerRole.includes('prod')) return 'Production Team';
+  if (lowerRole.includes('operation') || lowerRole.includes('op')) return 'Operations Team';
+
+  return (rawRole as UserRole) || 'Business Owner';
+};
+
 export const getStaffCurrentPassword = (
   member: any,
   usersList: any[] = []
@@ -1148,6 +1262,13 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [currentUser]);
 
   const [currentRole, setCurrentRoleState] = useState<UserRole>(() => {
+    try {
+      const savedUser = localStorage.getItem('erp_current_user');
+      if (savedUser) {
+        const u = JSON.parse(savedUser);
+        if (u && u.role) return u.role as UserRole;
+      }
+    } catch (_) {}
     return (localStorage.getItem('erp_role') as UserRole) || 'Business Owner';
   });
 
@@ -3884,28 +4005,36 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       const authUser = session.user;
       const email = authUser.email?.toLowerCase().trim();
       
-      // Skip DB fetch if already logged in via login function or currently logging in
+      // Skip DB fetch only if an explicit login() submission is currently in progress
       if (isLoggingInRef.current) {
         console.log(`[SYNC SESSION] Skipping fetch for ${email} because login is in progress.`);
         return;
       }
-      if (currentUserRef.current && currentUserRef.current.id === mapFromDbUserId(authUser.id)) {
-        console.log(`[SYNC SESSION] Skipping fetch for ${email} because user is already set.`);
-        return;
-      }
 
-      console.log(`[SYNC SESSION] Syncing profile for ${email} / Auth ID: ${authUser.id}`);
+      console.log(`[SYNC SESSION] Verifying authenticated profile for ${email} / Auth ID: ${authUser.id}`);
       
-      // Look up profile in public.users table
+      // Look up profile in public.users, production_staff, and operations_staff tables
       let dbUser: any = null;
+      let matchedProdStaff: any[] = [];
+      let matchedOpStaff: any[] = [];
+
       try {
-        const { data: userById } = await supabaseClient
-          .from('users')
-          .select('*')
-          .eq('id', authUser.id)
-          .maybeSingle();
-        
-        dbUser = userById;
+        const cleanMobile = authUser.user_metadata?.mobile || '';
+        const orClauses: string[] = [];
+        if (authUser.id) orClauses.push(`staff_id.eq.${authUser.id}`);
+        if (email) orClauses.push(`email.ilike.${email}`);
+        if (cleanMobile) orClauses.push(`mobile.eq.${cleanMobile}`);
+        const filterStr = orClauses.join(',');
+
+        const [userRes, prodRes, opRes] = await Promise.all([
+          supabaseClient.from('users').select('*').eq('id', authUser.id).maybeSingle(),
+          filterStr ? supabaseClient.from('production_staff').select('*').or(filterStr) : Promise.resolve({ data: [] }),
+          filterStr ? supabaseClient.from('operations_staff').select('*').or(filterStr) : Promise.resolve({ data: [] })
+        ]);
+
+        dbUser = userRes?.data;
+        if (prodRes && prodRes.data && Array.isArray(prodRes.data)) matchedProdStaff = prodRes.data;
+        if (opRes && opRes.data && Array.isArray(opRes.data)) matchedOpStaff = opRes.data;
 
         if (!dbUser && email) {
           const { data: userByEmail } = await supabaseClient
@@ -3915,7 +4044,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             .maybeSingle();
           
           if (userByEmail) {
-            console.log(`[SYNC SESSION] Found user profile by email ${email} with different ID ${userByEmail.id}. Aligning ID to auth ID ${authUser.id}`);
+            console.log(`[SYNC SESSION] Found user profile by email ${email} with ID ${userByEmail.id}. Aligning ID to auth ID ${authUser.id}`);
             const { error: updateIdErr } = await supabaseClient
               .from('users')
               .update({ id: authUser.id })
@@ -3930,12 +4059,11 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         }
 
         // Additional fallback: lookup by user_metadata mobile
-        const metaMobile = authUser.user_metadata?.mobile;
-        if (!dbUser && metaMobile) {
+        if (!dbUser && cleanMobile) {
           const { data: userByMobile } = await supabaseClient
             .from('users')
             .select('*')
-            .eq('mobile', metaMobile)
+            .eq('mobile', cleanMobile)
             .maybeSingle();
           if (userByMobile) {
             dbUser = userByMobile;
@@ -3949,9 +4077,8 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
 
       if (dbUser) {
         finalProfileUser = mapUserFieldsFromDb(dbUser);
-        console.log(`[SYNC SESSION] Loaded profile successfully. Role: ${finalProfileUser.role}`);
       } else {
-        // Check localStorage to avoid kicking out an already active session
+        // Fallback to cached profile in localStorage if offline or transient network failure
         try {
           const savedStr = localStorage.getItem('erp_current_user');
           if (savedStr) {
@@ -3969,21 +4096,31 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       }
 
       // Check if user is active
-      if (finalProfileUser && !finalProfileUser.active) {
+      if (finalProfileUser && finalProfileUser.active === false) {
         console.warn(`[SYNC SESSION] User is deactivated. Logging out.`);
         logout();
         return;
       }
 
       if (finalProfileUser) {
-        // Update states
+        // Authoritatively verify role against production_staff, operations_staff, and users
+        const verifiedRole = resolveAuthoritativeRole(
+          { ...finalProfileUser, ...dbUser },
+          matchedOpStaff,
+          matchedProdStaff
+        );
+
+        finalProfileUser.role = verifiedRole;
+        console.log(`[SYNC SESSION] Authoritatively verified role: ${verifiedRole} for ${finalProfileUser.name}`);
+
+        // Update React states
         setCurrentUser(finalProfileUser);
-        setCurrentRoleState(finalProfileUser.role);
+        setCurrentRoleState(verifiedRole);
         setCurrentUserNameState(finalProfileUser.name);
         
-        // Update local storage
+        // Cache verified profile in local storage
         localStorage.setItem('erp_current_user', JSON.stringify(finalProfileUser));
-        localStorage.setItem('erp_role', finalProfileUser.role);
+        localStorage.setItem('erp_role', verifiedRole);
         localStorage.setItem('erp_user_name', finalProfileUser.name);
       }
     };
@@ -4239,51 +4376,62 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
 
 
 
-  // Handle auto-logout if user is deactivated
+  // Handle auto-logout if user is deactivated and synchronize role integrity
   useEffect(() => {
-    if (currentUser && (users.length > 0 || staff.length > 0 || productionStaff.length > 0)) {
-      let isActive = true; // Default to true if not found yet
-      let roleToSync = currentUser.role;
-      let nameToSync = currentUser.name;
-      let found = false;
+    if (!currentUser) return;
 
-      // Check specific staff tables first based on user role to avoid stale override from users table
-      if (currentUser.role === 'Production Staff') {
+    // For staff roles, do not evaluate role or deactivation until staff tables have populated from DB
+    const isStaffRole = currentUser.role === 'Operation Staff' || currentUser.role === 'Production Staff';
+    if (isStaffRole && staff.length === 0 && productionStaff.length === 0) {
+      return;
+    }
+
+    if (users.length > 0 || staff.length > 0 || productionStaff.length > 0) {
+      let isActive = true; // Default to true if not found yet
+      let found = false;
+      let matchedStaffMember: any = null;
+
+      // 1. Check production_staff table first
+      if (productionStaff.length > 0) {
         const prodUser = productionStaff.find(s => 
           s.staff_id === currentUser.id || 
+          s.staff_id === mapToDbUserId(currentUser.id) ||
           (s.email && currentUser.email && s.email.toLowerCase() === currentUser.email.toLowerCase()) || 
           (s.mobile && currentUser.mobile && s.mobile === currentUser.mobile)
         );
         if (prodUser) {
           isActive = prodUser.status !== 'Inactive' && prodUser.status !== 'inactive';
-          roleToSync = 'Production Staff';
-          nameToSync = prodUser.name;
+          matchedStaffMember = prodUser;
           found = true;
         }
-      } else if (currentUser.role === 'Operation Staff') {
+      }
+
+      // 2. Check operations_staff table
+      if (!found && staff.length > 0) {
         const staffUser = staff.find(s => 
           s.staff_id === currentUser.id || 
+          s.staff_id === mapToDbUserId(currentUser.id) ||
           (s.email && currentUser.email && s.email.toLowerCase() === currentUser.email.toLowerCase()) || 
           (s.mobile && currentUser.mobile && s.mobile === currentUser.mobile)
         );
         if (staffUser) {
           isActive = staffUser.status !== 'Inactive' && staffUser.status !== 'inactive';
-          roleToSync = 'Operation Staff';
-          nameToSync = staffUser.name;
+          matchedStaffMember = staffUser;
           found = true;
         }
       }
 
-      if (!found) {
-        const dbUser = users.find(u => 
-          u.id === currentUser.id || 
-          (u.email && currentUser.email && u.email.toLowerCase() === currentUser.email.toLowerCase()) || 
-          (u.mobile && currentUser.mobile && u.mobile === currentUser.mobile)
-        );
-        if (dbUser) {
+      // 3. Check public.users table
+      const dbUser = users.find(u => 
+        u.id === currentUser.id || 
+        mapToDbUserId(u.id) === mapToDbUserId(currentUser.id) ||
+        (u.email && currentUser.email && u.email.toLowerCase() === currentUser.email.toLowerCase()) || 
+        (u.mobile && currentUser.mobile && u.mobile === currentUser.mobile)
+      );
+
+      if (dbUser) {
+        if (!found) {
           isActive = dbUser.active !== false && dbUser.active !== 'false';
-          roleToSync = dbUser.role || currentUser.role;
-          nameToSync = dbUser.name || currentUser.name;
           found = true;
         }
       }
@@ -4342,10 +4490,25 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           };
 
           verifyAndHandleLogout();
-        } else if (roleToSync !== currentUser.role || nameToSync !== currentUser.name) {
-          setCurrentUser({ ...currentUser, role: roleToSync, name: nameToSync });
-          setCurrentRoleState(roleToSync);
-          setCurrentUserNameState(nameToSync);
+        } else {
+          // Authoritatively resolve role to prevent any stale override from users.role
+          const roleToSync = resolveAuthoritativeRole(
+            dbUser || currentUser,
+            staff,
+            productionStaff
+          );
+          const nameToSync = matchedStaffMember?.name || dbUser?.name || currentUser.name;
+
+          if (roleToSync !== currentUser.role || nameToSync !== currentUser.name) {
+            console.log(`[ROLE SYNC] Aligning role from ${currentUser.role} to ${roleToSync} for ${nameToSync}`);
+            const updated = { ...currentUser, role: roleToSync, name: nameToSync };
+            setCurrentUser(updated);
+            setCurrentRoleState(roleToSync);
+            setCurrentUserNameState(nameToSync);
+            localStorage.setItem('erp_current_user', JSON.stringify(updated));
+            localStorage.setItem('erp_role', roleToSync);
+            localStorage.setItem('erp_user_name', nameToSync);
+          }
         }
       }
     }
@@ -4471,38 +4634,43 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         });
       }
 
-      // Fallback: Check in-memory staff lists (operations_staff, production_staff) if user record not yet created
+      // Fallback: Check in-memory staff lists (production_staff, operations_staff) if user record not yet created in users table
       if (candidateUsers.length === 0) {
-        let matchingStaff = staff.find(s => {
+        let matchingProdStaff = productionStaff.find(s => {
           const sEmail = (s.email || '').trim().toLowerCase();
           const sMobile = (s.mobile || '').replace(/\D/g, '');
           const sWa = (s.whatsapp_number || '').replace(/\D/g, '');
           const sNameEmail = s.name ? (s.name.toLowerCase().replace(/\s+/g, '') + '@photocrew.com') : '';
           
           if (sEmail && sEmail === cleanInput.toLowerCase()) return true;
-          if (last10.length >= 7 && sMobile.endsWith(last10)) return true;
-          if (last10.length >= 7 && sWa.endsWith(last10)) return true;
+          if (last10.length >= 7 && (sMobile === rawDigits || sMobile.endsWith(last10))) return true;
+          if (last10.length >= 7 && (sWa === rawDigits || sWa.endsWith(last10))) return true;
           if (sNameEmail && sNameEmail === cleanInput.toLowerCase()) return true;
           return false;
         });
-        
+
+        let matchingStaff: any = null;
         let fallbackRole: UserRole = 'Operation Staff';
 
-        if (!matchingStaff) {
-          matchingStaff = productionStaff.find(s => {
+        if (matchingProdStaff) {
+          matchingStaff = matchingProdStaff;
+          fallbackRole = 'Production Staff';
+        } else {
+          const matchingOpStaff = staff.find(s => {
             const sEmail = (s.email || '').trim().toLowerCase();
             const sMobile = (s.mobile || '').replace(/\D/g, '');
             const sWa = (s.whatsapp_number || '').replace(/\D/g, '');
             const sNameEmail = s.name ? (s.name.toLowerCase().replace(/\s+/g, '') + '@photocrew.com') : '';
             
             if (sEmail && sEmail === cleanInput.toLowerCase()) return true;
-            if (last10.length >= 7 && sMobile.endsWith(last10)) return true;
-            if (last10.length >= 7 && sWa.endsWith(last10)) return true;
+            if (last10.length >= 7 && (sMobile === rawDigits || sMobile.endsWith(last10))) return true;
+            if (last10.length >= 7 && (sWa === rawDigits || sWa.endsWith(last10))) return true;
             if (sNameEmail && sNameEmail === cleanInput.toLowerCase()) return true;
             return false;
           });
-          if (matchingStaff) {
-            fallbackRole = 'Production Staff';
+          if (matchingOpStaff) {
+            matchingStaff = matchingOpStaff;
+            fallbackRole = 'Operation Staff';
           }
         }
 
@@ -4518,7 +4686,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             active: matchingStaff.status !== 'Inactive'
           };
 
-          // Save to users table so future direct queries find them
+          // Save to users table so future direct queries find them (respecting users_role_check constraint)
           try {
             await supabaseClient.from('users').upsert({
               id: newStaffUser.id,
@@ -4526,7 +4694,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
               email: newStaffUser.email,
               username: newStaffUser.username,
               mobile: newStaffUser.mobile,
-              role: fallbackRole,
+              role: fallbackRole === 'Production Staff' ? 'Production Team' : fallbackRole,
               active: newStaffUser.active,
               created_at: new Date().toISOString()
             }, { onConflict: 'email' });
@@ -4770,58 +4938,40 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         return { success: false, error: msg };
       }
 
-      // Explicit Production Staff Role Detection:
-      // If dbUser is an actual Production Staff member (present in production_staff), ensure they are routed to Production Staff dashboard, NOT Production Team dashboard.
-      // Do NOT touch dedicated Production Team accounts (e.g. production@photocrew.com).
-      const isDedicatedProdTeamAccount =
-        (dbUser.email || '').trim().toLowerCase() === 'production@photocrew.com' ||
-        dbUser.id === '00000000-0000-0000-0000-000000000004';
+      // Authoritatively resolve role against production_staff, operations_staff, and users
+      let prodList = productionStaff;
+      let opList = staff;
+      if ((!prodList || prodList.length === 0 || !opList || opList.length === 0) && supabaseClient) {
+        try {
+          const cleanMobile = dbUser.mobile || '';
+          const orClauses: string[] = [];
+          if (dbUser.id) orClauses.push(`staff_id.eq.${dbUser.id}`);
+          if (dbUser.email) orClauses.push(`email.ilike.${dbUser.email}`);
+          if (cleanMobile) orClauses.push(`mobile.eq.${cleanMobile}`);
+          const filterStr = orClauses.join(',');
 
-      if (!isDedicatedProdTeamAccount) {
-        const uEmail = (dbUser.email || '').trim().toLowerCase();
-        const uMobile = (dbUser.mobile || '').replace(/\D/g, '');
-        const matchedInProdStaff = productionStaff.some(ps => {
-          if (ps.staff_id && ps.staff_id === dbUser.id) return true;
-          const psEmail = (ps.email || '').trim().toLowerCase();
-          const psMobile = (ps.mobile || '').replace(/\D/g, '');
-          if (psEmail && uEmail && psEmail === uEmail) return true;
-          if (psMobile && uMobile && psMobile.length >= 7 && (psMobile === uMobile || psMobile.endsWith(uMobile) || uMobile.endsWith(psMobile))) return true;
-          return false;
-        });
-
-        if (matchedInProdStaff) {
-          dbUser.role = 'Production Staff';
-          if (supabaseClient) {
-            supabaseClient.from('users').update({ role: 'Production Staff' }).eq('id', dbUser.id).then(() => null);
-          }
-        }
+          const [pRes, oRes] = await Promise.all([
+            filterStr ? supabaseClient.from('production_staff').select('*').or(filterStr) : supabaseClient.from('production_staff').select('*'),
+            filterStr ? supabaseClient.from('operations_staff').select('*').or(filterStr) : supabaseClient.from('operations_staff').select('*')
+          ]);
+          if (pRes?.data && pRes.data.length > 0) prodList = pRes.data;
+          if (oRes?.data && oRes.data.length > 0) opList = oRes.data;
+        } catch (_) {}
       }
 
-      const normalizeUserRole = (rawRole: string): UserRole => {
-        const r = (rawRole || '').trim().toLowerCase();
-        if (r.includes('owner') || r.includes('business')) return 'Business Owner';
-        if (r.includes('sales')) return 'Sales Team';
-        if (r.includes('prod') && r.includes('staff')) return 'Production Staff';
-        if (r.includes('prod') && r.includes('team')) return 'Production Team';
-        if (r.includes('op') && r.includes('staff')) return 'Operation Staff';
-        if (r.includes('op') && r.includes('team')) return 'Operations Team';
-        if (r.includes('editor') || r.includes('production')) return 'Production Staff';
-        if (r.includes('photo') || r.includes('video') || r.includes('drone') || r.includes('operation')) return 'Operation Staff';
-        return rawRole as UserRole;
-      };
+      const authoritativeRole = resolveAuthoritativeRole(dbUser, opList, prodList);
+      dbUser.role = authoritativeRole;
 
-      const normalizedRole = normalizeUserRole(dbUser.role);
       const validRoles: UserRole[] = ['Business Owner', 'Sales Team', 'Operations Team', 'Production Team', 'Operation Staff', 'Production Staff'];
-      if (!validRoles.includes(normalizedRole)) {
+      if (!validRoles.includes(authoritativeRole)) {
         const msg = 'You do not have permission to access this page.';
         logAttempt('Failed', msg, dbUser.id);
         return { success: false, error: msg };
       }
 
-      dbUser.role = normalizedRole;
-
       // Load credentials & fields
       const foundUser = mapUserFieldsFromDb(dbUser);
+      foundUser.role = authoritativeRole;
 
       // Successful login
       setCurrentUser(foundUser);
@@ -8214,8 +8364,12 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       employee_id
     };
     
-    // Save to Supabase using pushUpsert
-    const dbRes = await pushUpsert('users', { ...newUser, id: mapToDbUserId(finalAuthId) });
+    // Save to Supabase using pushUpsert (mapping Production Staff to Production Team for users table constraint)
+    const dbRes = await pushUpsert('users', { 
+      ...newUser, 
+      id: mapToDbUserId(finalAuthId),
+      role: newUser.role === 'Production Staff' ? 'Production Team' : newUser.role 
+    });
     if (!dbRes.success) {
       if (dbRes.error && dbRes.error.includes('users_email_key')) {
         throw new Error("This email address is already registered.");
@@ -8279,7 +8433,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     const dbPayload: any = {
       name: safeName,
       active: safeActive,
-      role: safeRole
+      role: safeRole === 'Production Staff' ? 'Production Team' : safeRole
     };
     if (safeEmail) dbPayload.email = safeEmail;
     if (safeMobile) dbPayload.mobile = safeMobile;

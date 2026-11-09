@@ -1129,8 +1129,8 @@ async function startServer() {
           const r = String(uItem.role).trim().toLowerCase();
           if (r.includes('owner') || r.includes('business')) normalizedRole = 'Business Owner';
           else if (r.includes('sales')) normalizedRole = 'Sales Team';
-          else if (r.includes('prod') && r.includes('staff')) normalizedRole = 'Production Staff';
-          else if (r.includes('editor')) normalizedRole = 'Production Staff';
+          else if (r.includes('prod') && r.includes('staff')) normalizedRole = 'Production Team'; // users table constraint only allows Production Team
+          else if (r.includes('editor')) normalizedRole = 'Production Team';
           else if (r.includes('prod') && r.includes('team')) normalizedRole = 'Production Team';
           else if (r.includes('op') && r.includes('staff')) normalizedRole = 'Operation Staff';
           else if (r.includes('op') && r.includes('team')) normalizedRole = 'Operations Team';
@@ -2607,8 +2607,8 @@ async function startServer() {
         const r = String(role).trim().toLowerCase();
         if (r.includes('owner') || r.includes('business')) userUpdates.role = 'Business Owner';
         else if (r.includes('sales')) userUpdates.role = 'Sales Team';
-        else if (r.includes('prod') && r.includes('staff')) userUpdates.role = 'Production Staff';
-        else if (r.includes('editor')) userUpdates.role = 'Production Staff';
+        else if (r.includes('prod') && r.includes('staff')) userUpdates.role = 'Production Team'; // users table constraint allows Production Team
+        else if (r.includes('editor')) userUpdates.role = 'Production Team';
         else if (r.includes('prod') && r.includes('team')) userUpdates.role = 'Production Team';
         else if (r.includes('op') && r.includes('staff')) userUpdates.role = 'Operation Staff';
         else if (r.includes('op') && r.includes('team')) userUpdates.role = 'Operations Team';

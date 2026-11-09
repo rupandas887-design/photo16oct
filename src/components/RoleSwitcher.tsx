@@ -18,7 +18,9 @@ export const RoleSwitcher: React.FC<RoleSwitcherProps> = ({ sidebarOpen, setSide
     logout, 
     refreshData,
     staff = [],
+    productionStaff = [],
     staffAssignments = [],
+    editorAssignments = [],
     leads = [],
     orders = [],
     operations = []
@@ -26,17 +28,33 @@ export const RoleSwitcher: React.FC<RoleSwitcherProps> = ({ sidebarOpen, setSide
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isGitModalOpen, setIsGitModalOpen] = useState(false);
 
-  const staffMember = (staff || []).find(s => 
-    (s.mobile && currentUser?.mobile && s.mobile === currentUser.mobile) || 
-    (s.email && currentUser?.email && s.email.toLowerCase() === currentUser.email?.toLowerCase()) ||
-    (s.name && currentUser?.name && s.name.trim().toLowerCase() === currentUser.name?.trim().toLowerCase())
-  );
+  const isProdStaff = currentRole === 'Production Staff';
+  const staffMember = useMemo(() => {
+    const list = isProdStaff ? productionStaff : staff;
+    return (list || []).find(s => 
+      (s.staff_id && currentUser?.id && (s.staff_id === currentUser.id || s.id === currentUser.id)) ||
+      (s.mobile && currentUser?.mobile && s.mobile === currentUser.mobile) || 
+      (s.email && currentUser?.email && s.email.toLowerCase() === currentUser.email?.toLowerCase()) ||
+      (s.name && currentUser?.name && s.name.trim().toLowerCase() === currentUser.name?.trim().toLowerCase())
+    );
+  }, [isProdStaff, productionStaff, staff, currentUser]);
+
   const staffName = staffMember?.name || currentUser?.name || '';
   
   const assignedTasksCount = useMemo(() => {
-    if (!currentUser || !staffName || (currentRole !== 'Operation Staff' && currentRole !== 'Production Staff')) return 0;
+    if (!currentUser || (currentRole !== 'Operation Staff' && currentRole !== 'Production Staff')) return 0;
+    if (currentRole === 'Production Staff') {
+      const staffId = staffMember?.staff_id || currentUser.id;
+      const sName = (staffName || '').trim().toLowerCase();
+      return (editorAssignments || []).filter(ea => {
+        const matchId = ea.staff_id === staffId || ea.editor_id === staffId;
+        const matchName = ea.editor_name && sName && ea.editor_name.trim().toLowerCase() === sName;
+        const activeStatus = ea.task_status !== 'Completed' && ea.task_status !== 'Client Accepted' && ea.status !== 'Completed';
+        return (matchId || matchName) && activeStatus;
+      }).length;
+    }
     return calculateStaffActiveBookingsCount(staffName, staffAssignments, leads, orders, operations);
-  }, [currentUser, staffName, currentRole, staffAssignments, leads, orders, operations]);
+  }, [currentUser, staffMember, staffName, currentRole, editorAssignments, staffAssignments, leads, orders, operations]);
 
   if (!currentUser) return null;
 

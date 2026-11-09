@@ -573,15 +573,13 @@ const MainAppContent: React.FC = () => {
 
       {(currentRole === 'Operation Staff' || currentRole === 'Production Staff' || (currentRole as string) === 'Operations Staff') ? (
         <div className="bg-gradient-to-b from-zinc-900 to-zinc-950 rounded-2xl border border-zinc-850 p-4 space-y-3.5 shadow-xl relative animate-in fade-in duration-300">
-          {currentRole !== 'Production Staff' && (
-            <div className="flex items-center justify-between pb-1 border-b border-zinc-850">
-              <h3 className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-zinc-400 font-mono flex items-center gap-1.5">
-                <Briefcase className="w-3.5 h-3.5 text-amber-500" />
-                <span>OPERATIONS STAFF</span>
-              </h3>
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            </div>
-          )}
+          <div className="flex items-center justify-between pb-1 border-b border-zinc-850">
+            <h3 className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-zinc-400 font-mono flex items-center gap-1.5">
+              <Briefcase className={`w-3.5 h-3.5 ${currentRole === 'Production Staff' ? 'text-purple-400' : 'text-amber-500'}`} />
+              <span>{currentRole === 'Production Staff' ? 'PRODUCTION STAFF' : 'OPERATIONS STAFF'}</span>
+            </h3>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          </div>
 
           <nav className="space-y-1.5">
             <button
