@@ -533,13 +533,26 @@ export const EquipmentManagement: React.FC = () => {
     }
   };
 
-  const handleOpenEditCategory = (catId: string, catName: string, e?: React.MouseEvent) => {
+  const handleOpenEditCategory = (catIdOrName: string, maybeCatName?: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (!canEdit) {
       showToast('error', 'Unauthorized! Operations Team or Business Owner privileges required.');
       return;
     }
-    setEditingCategoryId(catId);
+    const catName = maybeCatName || catIdOrName || '';
+    
+    // Always resolve the permanent database UUID if available
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    let realId: string | null = null;
+    if (catIdOrName && uuidRegex.test(catIdOrName)) {
+      realId = catIdOrName;
+    } else {
+      realId = dbCategoryMap[catName.toLowerCase()] ||
+               dbCategories.find(c => c.category_name && c.category_name.trim().toLowerCase() === catName.trim().toLowerCase())?.id ||
+               null;
+    }
+
+    setEditingCategoryId(realId || catIdOrName);
     setEditingCategoryName(catName);
     setEditCategoryNameInput(catName);
     setEditCategoryError('');
@@ -559,19 +572,22 @@ export const EquipmentManagement: React.FC = () => {
       return;
     }
 
-    if (!editingCategoryId) {
-      setEditCategoryError('Missing category ID. Please close and re-open the edit dialog.');
+    const currentName = (editingCategoryName || '').trim();
+    if (!currentName && !editingCategoryId) {
+      setEditCategoryError('Missing category information. Please close and re-open the edit dialog.');
       return;
     }
 
-    if (trimmedNew.toLowerCase() === editingCategoryName.trim().toLowerCase()) {
+    if (trimmedNew.toLowerCase() === currentName.toLowerCase()) {
       setEditCategoryError('New category name is identical to the current name.');
       return;
     }
 
-    // Check duplicate against all other categories in database (strictly excluding current category by ID)
+    // Check duplicate against all other categories in database (strictly excluding current category by ID/name)
     const isDuplicate = dbCategories.some(
-      c => c.id !== editingCategoryId && c.category_name.trim().toLowerCase() === trimmedNew.toLowerCase()
+      c => c.id !== editingCategoryId && 
+           c.category_name.trim().toLowerCase() === trimmedNew.toLowerCase() &&
+           c.category_name.trim().toLowerCase() !== currentName.toLowerCase()
     );
     if (isDuplicate) {
       setEditCategoryError(`A category with the name "${trimmedNew}" already exists.`);
@@ -583,20 +599,29 @@ export const EquipmentManagement: React.FC = () => {
 
     try {
       const now = new Date().toISOString();
-      const oldCatLower = editingCategoryName.trim().toLowerCase();
+      const oldCatLower = currentName.toLowerCase();
 
-      // 1. UPDATE existing database record using its permanent unique UUID (.eq('id', categoryId))
+      // Resolve target ID: check if editingCategoryId is a UUID, or find by name in dbCategories/dbCategoryMap
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      let targetId = (editingCategoryId && uuidRegex.test(editingCategoryId)) ? editingCategoryId : null;
+      if (!targetId) {
+        targetId = dbCategoryMap[oldCatLower] || 
+                   dbCategories.find(c => c.category_name && c.category_name.trim().toLowerCase() === oldCatLower)?.id ||
+                   null;
+      }
+
+      // 1. UPDATE existing database record using its permanent unique UUID or category name
       // Strictly UPDATE - NEVER use INSERT or UPSERT when editing an existing category.
       const updateRes = await fetch('/api/db/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           table: 'equipment_categories',
-          matchColumn: 'id',
-          matchValue: editingCategoryId,
+          matchColumn: targetId ? 'id' : 'category_name',
+          matchValue: targetId || currentName,
           updates: {
             category_name: trimmedNew,
-            old_category_name: editingCategoryName,
+            old_category_name: currentName,
             updated_at: now
           }
         })
@@ -606,13 +631,24 @@ export const EquipmentManagement: React.FC = () => {
         throw new Error(updateJson?.error || 'Failed to update category record in database.');
       }
 
+      const activeCategoryId = targetId || editingCategoryId || trimmedNew;
+
       // Update local dbCategories array and dbCategoryMap
-      setDbCategories(prev => prev.map(c => c.id === editingCategoryId ? { ...c, category_name: trimmedNew, updated_at: now } : c));
+      setDbCategories(prev => {
+        const updated = prev.map(c => 
+          (targetId && c.id === targetId) || (c.category_name && c.category_name.trim().toLowerCase() === oldCatLower)
+            ? { ...c, category_name: trimmedNew, updated_at: now }
+            : c
+        );
+        return updated;
+      });
       setDbCategoryMap(prev => {
         const next = { ...prev };
         delete next[oldCatLower];
-        next[trimmedNew.toLowerCase()] = editingCategoryId;
-        next[editingCategoryId] = trimmedNew;
+        next[trimmedNew.toLowerCase()] = activeCategoryId;
+        if (activeCategoryId) {
+          next[activeCategoryId] = trimmedNew;
+        }
         return next;
       });
 
@@ -2075,7 +2111,7 @@ export const EquipmentManagement: React.FC = () => {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleOpenEditCategory(selectedCategoryView);
+                      handleOpenEditCategory(selectedCategoryView, selectedCategoryView, e);
                     }}
                     className="ml-2 px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-amber-400 border border-zinc-750 hover:border-amber-500/40 rounded-xl text-[10px] font-mono font-bold transition-all cursor-pointer inline-flex items-center gap-1 shadow-sm"
                     title={`Edit category name: ${selectedCategoryView}`}

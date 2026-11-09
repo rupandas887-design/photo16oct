@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { History, X, Search, ArrowDownUp, Loader2 } from 'lucide-react';
 import { supabaseClient } from '../supabaseClient';
 import { useRole } from './RoleContext';
-import { formatDateDDMMYY, formatTime12Hour } from '../utils';
+import { formatDateDDMMYY, formatTime12Hour, getAllMatchingOrderIds } from '../utils';
 
 export interface OrderHistoryModalProps {
   isOpen: boolean;
@@ -19,6 +19,47 @@ interface StatusHistoryItem {
   timestamp: string;
 }
 
+/**
+ * Standard PhotoCrew ERP stage progression ranks to ensure chronological workflow order
+ * in case of simultaneous timestamps or seed record resolution.
+ */
+const getStageWorkflowRank = (statusText?: string): number => {
+  if (!statusText) return 0;
+  const s = statusText.trim().toLowerCase();
+  
+  // 1. Initial Sales Lead stages
+  if (s.includes('new lead') || s === 'new' || s === 'lead' || s === 'inquiry') return 10;
+  if (s.includes('create quote') || s.includes('created quotation') || s === 'contacted') return 20;
+  if (s.includes('quote sent') || s.includes('quotation sent')) return 30;
+  if (s.includes('follow-up') || s.includes('follow up') || s.includes('negotiation')) return 40;
+  if (s.includes('lost')) return 45;
+
+  // 2. Order Confirmation
+  if (s.includes('confirm order') || s.includes('order confirmed') || s.includes('new order received') || s === 'confirmed') return 50;
+
+  // 3. Operations stages
+  if (s.includes('operation assigned') || s.includes('assigned crew') || s.includes('staff assigned') || s.includes('event scheduled') || s.includes('scheduled')) return 60;
+  if (s.includes('event started') || s.includes('event start')) return 70;
+  if (s.includes('event ended') || s.includes('event end') || s.includes('event completed') || s.includes('event complete')) return 80;
+  if (s.includes('footage handover') || s.includes('raw footage')) return 90;
+  if (s.includes('verified footage') || s.includes('footage handover verified') || s.includes('operations completed')) return 100;
+
+  // 4. Production stages
+  if (s.includes('assigned editor') || s.includes('editor assigned')) return 110;
+  if (s.includes('editing started') || s.includes('production started')) return 120;
+  if (s.includes('editing in progress') || s.includes('in progress') || s.includes('active editing')) return 130;
+  if (s.includes('internal qc') || s.includes('internal review')) return 140;
+  if (s.includes('customer review') || s.includes('client review')) return 150;
+  if (s.includes('revision')) return 160;
+  if (s.includes('editing completed') || s.includes('proof uploaded') || s.includes('ready for delivery')) return 170;
+  if (s.includes('client acceptance') || s.includes('client accepted') || s.includes('client approval') || s.includes('approved')) return 180;
+  if (s.includes('business owner review') || s.includes('final approval')) return 190;
+  if (s.includes('delivered') || s.includes('project delivered')) return 200;
+  if (s.includes('order closed') || s.includes('project closed') || s.includes('closed') || s.includes('completed')) return 210;
+
+  return 55;
+};
+
 export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
   isOpen,
   onClose,
@@ -27,7 +68,11 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
   const { 
     leads = [], 
     orders = [], 
-    statusHistory = [] 
+    production = [],
+    operations = [],
+    rawFootage = [],
+    statusHistory = [],
+    logs = []
   } = useRole();
 
   const [dbHistory, setDbHistory] = useState<any[]>([]);
@@ -58,33 +103,98 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  // Identify Target Lead / Order IDs
-  const targetOrderId = order?.order_id || order?.orderId || order?.rawOrder?.order_id || '';
-  const targetLeadId = order?.lead_id || order?.leadId || order?.rawLead?.lead_id || order?.rawOrder?.lead_id || '';
+  // Helper to sanitize IDs
+  const sanitizeId = (id?: any): string => {
+    if (!id || typeof id !== 'string') return '';
+    const clean = id.trim();
+    if (['n/a', 'na', 'null', 'undefined', '—', '-', 'none', 'unknown'].includes(clean.toLowerCase())) return '';
+    return clean;
+  };
+
+  // Identify Target Lead / Order / Production IDs
+  const rawOrderId = sanitizeId(order?.order_id || order?.orderId || order?.rawOrder?.order_id);
+  const rawLeadId = sanitizeId(order?.lead_id || order?.leadId || order?.rawLead?.lead_id || order?.rawOrder?.lead_id);
+  const rawProdId = sanitizeId(order?.production_id || order?.rawProd?.production_id);
 
   const matchedOrder = useMemo(() => {
-    if (!targetOrderId && !targetLeadId) return order;
-    return (orders || []).find(o => 
-      (targetOrderId && o.order_id === targetOrderId) || 
-      (targetLeadId && o.lead_id === targetLeadId)
-    ) || order;
-  }, [orders, targetOrderId, targetLeadId, order]);
+    if (rawOrderId) {
+      const found = (orders || []).find(o => sanitizeId(o.order_id).toLowerCase() === rawOrderId.toLowerCase());
+      if (found) return found;
+    }
+    if (rawLeadId) {
+      const found = (orders || []).find(o => sanitizeId(o.lead_id).toLowerCase() === rawLeadId.toLowerCase());
+      if (found) return found;
+    }
+    return order?.rawOrder || (rawOrderId ? order : null);
+  }, [orders, rawOrderId, rawLeadId, order]);
 
   const matchedLead = useMemo(() => {
-    const leadId = targetLeadId || matchedOrder?.lead_id;
-    if (!leadId) return null;
-    return (leads || []).find(l => l.lead_id === leadId || l.lead_id === targetOrderId) || null;
-  }, [leads, targetLeadId, matchedOrder, targetOrderId]);
+    const leadIdToLook = rawLeadId || sanitizeId(matchedOrder?.lead_id);
+    if (leadIdToLook) {
+      const found = (leads || []).find(l => sanitizeId(l.lead_id).toLowerCase() === leadIdToLook.toLowerCase());
+      if (found) return found;
+    }
+    if (rawOrderId) {
+      const found = (leads || []).find(l => sanitizeId(l.order_id).toLowerCase() === rawOrderId.toLowerCase());
+      if (found) return found;
+    }
+    return order?.rawLead || (rawLeadId ? order : null);
+  }, [leads, rawLeadId, rawOrderId, matchedOrder, order]);
 
-  const primaryOrderId = matchedOrder?.order_id || targetOrderId || '';
-  const primaryLeadId = matchedLead?.lead_id || targetLeadId || matchedOrder?.lead_id || '';
+  const matchedProd = useMemo(() => {
+    if (rawProdId) {
+      const found = (production || []).find(p => sanitizeId(p.production_id).toLowerCase() === rawProdId.toLowerCase());
+      if (found) return found;
+    }
+    if (rawOrderId) {
+      const found = (production || []).find(p => sanitizeId(p.order_id).toLowerCase() === rawOrderId.toLowerCase());
+      if (found) return found;
+    }
+    if (rawLeadId) {
+      const found = (production || []).find(p => sanitizeId(p.lead_id).toLowerCase() === rawLeadId.toLowerCase());
+      if (found) return found;
+    }
+    return order?.rawProd || null;
+  }, [production, rawProdId, rawOrderId, rawLeadId, order]);
+
+  const matchedOp = useMemo(() => {
+    if (rawOrderId) {
+      const found = (operations || []).find(op => sanitizeId(op.order_id).toLowerCase() === rawOrderId.toLowerCase());
+      if (found) return found;
+    }
+    if (rawLeadId) {
+      const found = (operations || []).find(op => sanitizeId((op as any).lead_id).toLowerCase() === rawLeadId.toLowerCase());
+      if (found) return found;
+    }
+    return order?.rawOps || null;
+  }, [operations, rawOrderId, rawLeadId, order]);
+
+  const primaryOrderId = sanitizeId(matchedOrder?.order_id || rawOrderId);
+  const primaryLeadId = sanitizeId(matchedLead?.lead_id || rawLeadId || matchedOrder?.lead_id);
+  const primaryProdId = sanitizeId(matchedProd?.production_id || rawProdId);
   const customerName = matchedOrder?.customer_name || matchedLead?.customer_name || order?.customer_name || '';
+
+  // Collect all variant IDs for robust querying across tables
+  const allMatchingIds = useMemo(() => {
+    const set = new Set<string>();
+    if (primaryOrderId) set.add(primaryOrderId);
+    if (primaryLeadId) set.add(primaryLeadId);
+    if (primaryProdId) set.add(primaryProdId);
+
+    const variants = getAllMatchingOrderIds(primaryOrderId, primaryLeadId, orders, leads);
+    variants.forEach(v => {
+      const c = sanitizeId(v);
+      if (c) set.add(c);
+    });
+    return Array.from(set);
+  }, [primaryOrderId, primaryLeadId, primaryProdId, orders, leads]);
 
   // Clean staff name (remove role suffix like "|Sales Team")
   const cleanStaffName = (raw?: string) => {
     if (!raw) return 'System';
     const firstPart = raw.split('|')[0].trim();
-    return firstPart || 'System';
+    if (!firstPart || firstPart.toLowerCase() === 'unassigned' || firstPart.toLowerCase() === 'n/a') return 'System';
+    return firstPart;
   };
 
   // Helper date parser
@@ -105,7 +215,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
 
   // Directly fetch the COMPLETE history from Supabase lead_status_history whenever modal opens
   useEffect(() => {
-    if (!isOpen || (!primaryOrderId && !primaryLeadId)) {
+    if (!isOpen || allMatchingIds.length === 0) {
       setDbHistory([]);
       return;
     }
@@ -114,12 +224,9 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     const fetchHistoryFromDb = async () => {
       setIsLoading(true);
       try {
-        const orConditions = [
-          primaryOrderId ? `order_id.eq.${primaryOrderId}` : null,
-          primaryOrderId ? `lead_id.eq.${primaryOrderId}` : null,
-          primaryLeadId ? `lead_id.eq.${primaryLeadId}` : null,
-          primaryLeadId ? `order_id.eq.${primaryLeadId}` : null
-        ].filter(Boolean).join(',');
+        const orConditions = allMatchingIds
+          .flatMap(id => [`order_id.eq.${id}`, `lead_id.eq.${id}`])
+          .join(',');
 
         if (!orConditions) {
           setIsLoading(false);
@@ -151,38 +258,55 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, primaryOrderId, primaryLeadId]);
+  }, [isOpen, allMatchingIds]);
 
   // Combine database records with fallback/in-memory records to guarantee full stage progression
   const fullStatusHistory = useMemo<StatusHistoryItem[]>(() => {
     if (!isOpen || !order) return [];
 
-    // Collect all records from DB fetch or in-memory fallback
-    const sourceRecords = dbHistory.length > 0 
-      ? dbHistory 
-      : (statusHistory || []).filter(sh => {
-          const shOrder = sh.order_id ? String(sh.order_id).trim().toLowerCase() : '';
-          const shLead = sh.lead_id ? String(sh.lead_id).trim().toLowerCase() : '';
-          const pOrder = primaryOrderId ? String(primaryOrderId).trim().toLowerCase() : '';
-          const pLead = primaryLeadId ? String(primaryLeadId).trim().toLowerCase() : '';
-          return (pOrder && (shOrder === pOrder || shLead === pOrder)) ||
-                 (pLead && (shLead === pLead || shOrder === pLead));
-        });
+    // Filter in-memory statusHistory from RoleContext
+    const inMemoryStatusHistory = (statusHistory || []).filter((sh: any) => {
+      const shOrd = sanitizeId(sh.order_id);
+      const shLd = sanitizeId(sh.lead_id);
+      return (shOrd && allMatchingIds.some(id => id.toLowerCase() === shOrd.toLowerCase())) ||
+             (shLd && allMatchingIds.some(id => id.toLowerCase() === shLd.toLowerCase()));
+    });
 
-    // 1. Process and deduplicate sequential rapid dual-writes from source records
-    const cleanDbList: StatusHistoryItem[] = [];
-    for (const r of sourceRecords) {
-      const statusText = r.new_status || r.status || '';
-      if (!statusText || statusText.toUpperCase() === 'NOTE') continue;
+    // Merge dbHistory and inMemoryStatusHistory, deduplicating by ID
+    const combinedRaw = [...dbHistory];
+    const seenIds = new Set<string>(dbHistory.map(r => String(r.id || '')));
+    inMemoryStatusHistory.forEach((r: any) => {
+      const idKey = r.id ? String(r.id) : `${r.created_at || r.timestamp}_${r.new_status}`;
+      if (!seenIds.has(idKey)) {
+        seenIds.add(idKey);
+        combinedRaw.push(r);
+      }
+    });
 
-      const prev = cleanDbList[cleanDbList.length - 1];
-      // Skip twin dual-write if exact same status within 10 seconds
-      if (prev && prev.new_status.toLowerCase() === statusText.toLowerCase()) {
-        const diffMs = Math.abs(new Date(r.created_at || r.timestamp).getTime() - new Date(prev.created_at).getTime());
-        if (diffMs < 10000) {
-          continue;
+    // Also extract stage transition logs from activity logs if any
+    (logs || []).forEach((lg: any) => {
+      const recId = sanitizeId(lg.record_id);
+      if (recId && allMatchingIds.some(id => id.toLowerCase() === recId.toLowerCase())) {
+        if (lg.new_stage && typeof lg.new_stage === 'string' && lg.new_stage.trim()) {
+          const idKey = `log_${lg.id || lg.timestamp}_${lg.new_stage}`;
+          if (!seenIds.has(idKey)) {
+            seenIds.add(idKey);
+            combinedRaw.push({
+              id: idKey,
+              created_at: lg.timestamp,
+              new_status: lg.new_stage,
+              changed_by: lg.user_name || 'System'
+            });
+          }
         }
       }
+    });
+
+    // 1. Clean and deduplicate raw records
+    const cleanDbList: StatusHistoryItem[] = [];
+    for (const r of combinedRaw) {
+      const statusText = (r.new_status || r.status || '').trim();
+      if (!statusText || statusText.toUpperCase() === 'NOTE') continue;
 
       cleanDbList.push({
         id: r.id ? String(r.id) : `hist_${cleanDbList.length}`,
@@ -193,78 +317,258 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       });
     }
 
-    // 2. If initial creation is not present in lead_status_history, prepend initial stage
-    const earliestTime = cleanDbList.length > 0 ? new Date(cleanDbList[0].created_at).getTime() : Infinity;
-    const initialLeadDate = matchedLead?.created_at || matchedLead?.created_date;
-    if (initialLeadDate && new Date(initialLeadDate).getTime() < earliestTime - 60000) {
-      const initStatus = matchedLead?.status || matchedLead?.current_stage || 'New Lead';
-      // Only prepend if not already starting with that status
-      if (cleanDbList.length === 0 || cleanDbList[0].new_status.toLowerCase() !== initStatus.toLowerCase()) {
-        cleanDbList.unshift({
-          id: `initial_lead_${primaryLeadId || primaryOrderId}`,
-          created_at: initialLeadDate,
-          new_status: initStatus,
-          changed_by: cleanStaffName(matchedLead?.sales_person || matchedLead?.sales_staff_name),
-          timestamp: initialLeadDate
-        });
+    // 2. Guarantee STARTING STATUS (Lead creation / initial inquiry)
+    const initialLeadDate = matchedLead?.created_at || matchedLead?.created_date || matchedOrder?.created_at;
+    const initialSalesPerson = cleanStaffName(
+      matchedLead?.sales_person || 
+      matchedLead?.sales_staff_name || 
+      matchedLead?.created_by || 
+      matchedOrder?.sales_person || 
+      'Sales Team'
+    );
+    
+    // Determine the true starting status
+    let initialStatus = 'New Lead';
+    if (matchedLead) {
+      const rawLeadStatus = matchedLead.status || matchedLead.current_status || '';
+      if (['Create Quote', 'Created Quotation', 'Contacted'].includes(rawLeadStatus)) {
+        initialStatus = 'Create Quote';
+      } else if (rawLeadStatus === 'Quote Sent') {
+        initialStatus = 'Quote Sent';
+      } else if (rawLeadStatus === 'Quote Follow-up') {
+        initialStatus = 'Quote Follow-up';
+      } else if (rawLeadStatus === 'Lead Lost' || rawLeadStatus === 'Lost Lead') {
+        initialStatus = 'New Lead';
+      } else {
+        initialStatus = 'New Lead';
       }
     }
 
-    // 3. Fallback for legacy records that have zero records in lead_status_history
-    if (cleanDbList.length === 0) {
-      // Step A: Lead registration
-      const initDate = matchedLead?.created_at || matchedOrder?.created_at;
-      if (initDate) {
-        cleanDbList.push({
-          id: `init_${primaryLeadId || primaryOrderId}`,
-          created_at: initDate,
-          new_status: matchedLead?.status || 'New Lead',
-          changed_by: cleanStaffName(matchedLead?.sales_person || matchedOrder?.sales_person),
-          timestamp: initDate
-        });
-      }
+    // Check if starting status is present in cleanDbList
+    const hasInitialStatus = cleanDbList.some(item => {
+      const st = item.new_status.toLowerCase();
+      return st === initialStatus.toLowerCase() || st === 'new lead' || st === 'create quote' || st === 'new';
+    });
 
-      // Step B: Order Confirmed
-      if (matchedOrder?.created_at && matchedOrder?.created_at !== initDate) {
+    if (!hasInitialStatus && initialLeadDate) {
+      cleanDbList.push({
+        id: `initial_lead_${primaryLeadId || primaryOrderId}`,
+        created_at: initialLeadDate,
+        new_status: initialStatus,
+        changed_by: initialSalesPerson,
+        timestamp: initialLeadDate
+      });
+    }
+
+    // 3. Guarantee ORDER CONFIRMED milestone if order was confirmed
+    if (matchedOrder && matchedOrder.order_id) {
+      const hasOrderConfirmed = cleanDbList.some(item => {
+        const st = item.new_status.toLowerCase();
+        return st.includes('confirm') || st === 'order confirmed';
+      });
+
+      if (!hasOrderConfirmed) {
+        const orderDate = matchedOrder.created_at || matchedOrder.order_date || initialLeadDate || new Date().toISOString();
         cleanDbList.push({
-          id: `ord_${primaryOrderId}`,
-          created_at: matchedOrder.created_at,
+          id: `ord_confirm_${primaryOrderId}`,
+          created_at: orderDate,
           new_status: 'Order Confirmed',
-          changed_by: cleanStaffName(matchedOrder?.sales_person || matchedLead?.sales_person),
-          timestamp: matchedOrder.created_at
-        });
-      }
-
-      // Step C: Current status if advanced
-      const currentStage = matchedOrder?.current_stage || matchedOrder?.order_status || matchedLead?.status;
-      if (currentStage && !cleanDbList.some(item => item.new_status.toLowerCase() === currentStage.toLowerCase())) {
-        cleanDbList.push({
-          id: `curr_${primaryOrderId}`,
-          created_at: matchedOrder?.updated_at || new Date().toISOString(),
-          new_status: currentStage,
-          changed_by: 'System',
-          timestamp: matchedOrder?.updated_at || new Date().toISOString()
+          changed_by: cleanStaffName(matchedOrder.sales_person || initialSalesPerson),
+          timestamp: orderDate
         });
       }
     }
 
-    // 4. Sort chronologically: Oldest first, newest last (or user selected)
+    // 4. Guarantee OPERATIONS milestones if reached
+    if (matchedOp || (matchedOrder && matchedOrder.assigned_crew && matchedOrder.assigned_crew !== 'Unassigned')) {
+      const hasAssignedCrew = cleanDbList.some(item => {
+        const st = item.new_status.toLowerCase();
+        return st.includes('assigned crew') || st.includes('event scheduled') || st.includes('operation assigned');
+      });
+
+      if (!hasAssignedCrew) {
+        const opTime = matchedOp?.created_at || matchedOrder?.created_at || new Date().toISOString();
+        cleanDbList.push({
+          id: `ops_assign_${primaryOrderId}`,
+          created_at: opTime,
+          new_status: 'Assigned Crew',
+          changed_by: cleanStaffName(matchedOp?.photographer_assigned || 'Operations Team'),
+          timestamp: opTime
+        });
+      }
+
+      // Event Ended milestone
+      const opStatus = (matchedOp?.event_status || matchedOrder?.current_stage || '').toLowerCase();
+      const hasEventEnded = cleanDbList.some(item => item.new_status.toLowerCase().includes('event end'));
+      if (!hasEventEnded && (opStatus.includes('event end') || opStatus.includes('completed') || order?.event_end_status)) {
+        const eventDate = matchedOrder?.event_date || matchedOp?.event_date || new Date().toISOString();
+        cleanDbList.push({
+          id: `ops_event_end_${primaryOrderId}`,
+          created_at: eventDate,
+          new_status: 'Event Ended',
+          changed_by: cleanStaffName(matchedOp?.photographer_assigned || 'Operations Team'),
+          timestamp: eventDate
+        });
+      }
+
+      // Verified Footage milestone
+      const hasVerifiedFootage = cleanDbList.some(item => item.new_status.toLowerCase().includes('verified footage'));
+      if (!hasVerifiedFootage && (opStatus.includes('footage') || matchedProd || opStatus.includes('production') || opStatus.includes('closed'))) {
+        const footageTime = matchedOrder?.updated_at || matchedProd?.created_at || new Date().toISOString();
+        cleanDbList.push({
+          id: `ops_verified_footage_${primaryOrderId}`,
+          created_at: footageTime,
+          new_status: 'Verified Footage',
+          changed_by: 'Operations Team',
+          timestamp: footageTime
+        });
+      }
+    }
+
+    // 5. Guarantee PRODUCTION milestones if reached
+    if (matchedProd) {
+      const prodEditingStatus = (matchedProd.editing_status || matchedProd.production_status || '').trim();
+
+      // Assigned Editor milestone
+      if (matchedProd.editor_assigned && matchedProd.editor_assigned !== 'Unassigned') {
+        const hasEditorAssigned = cleanDbList.some(item => item.new_status.toLowerCase().includes('editor'));
+        if (!hasEditorAssigned) {
+          const editorTime = matchedProd.created_at || new Date().toISOString();
+          cleanDbList.push({
+            id: `prod_editor_${primaryOrderId}`,
+            created_at: editorTime,
+            new_status: 'Assigned Editor',
+            changed_by: cleanStaffName(matchedProd.editor_assigned),
+            timestamp: editorTime
+          });
+        }
+      }
+
+      // Editing Started / In Progress milestone
+      const hasEditingStarted = cleanDbList.some(item => item.new_status.toLowerCase().includes('editing'));
+      if (!hasEditingStarted && prodEditingStatus) {
+        const editTime = matchedProd.created_at || matchedProd.updated_at || new Date().toISOString();
+        cleanDbList.push({
+          id: `prod_editing_start_${primaryOrderId}`,
+          created_at: editTime,
+          new_status: prodEditingStatus.includes('Started') ? 'Editing Started' : 'Editing In Progress',
+          changed_by: cleanStaffName(matchedProd.editor_assigned || 'Production Staff'),
+          timestamp: editTime
+        });
+      }
+
+      // Client Acceptance / Accepted milestone
+      const hasClientAcceptance = cleanDbList.some(item => item.new_status.toLowerCase().includes('acceptance') || item.new_status.toLowerCase().includes('accepted'));
+      if (!hasClientAcceptance && (prodEditingStatus.toLowerCase().includes('acceptance') || prodEditingStatus.toLowerCase().includes('accepted') || (matchedProd as any).client_acceptance)) {
+        const acceptTime = matchedProd.updated_at || new Date().toISOString();
+        cleanDbList.push({
+          id: `prod_acceptance_${primaryOrderId}`,
+          created_at: acceptTime,
+          new_status: 'Client Accepted',
+          changed_by: 'Production Team',
+          timestamp: acceptTime
+        });
+      }
+    }
+
+    // 6. Guarantee ORDER CLOSED milestone if order is closed
+    const isOrderClosed = 
+      (matchedOrder?.current_stage || '').toLowerCase().includes('closed') ||
+      (matchedOrder?.order_status || '').toLowerCase().includes('closed') ||
+      (matchedProd?.editing_status || '').toLowerCase().includes('closed') ||
+      order?.isClosed === true;
+
+    if (isOrderClosed) {
+      const hasClosed = cleanDbList.some(item => item.new_status.toLowerCase().includes('closed'));
+      if (!hasClosed) {
+        const closedTime = matchedOrder?.updated_at || matchedProd?.updated_at || new Date().toISOString();
+        cleanDbList.push({
+          id: `order_closed_${primaryOrderId}`,
+          created_at: closedTime,
+          new_status: 'Order Closed',
+          changed_by: 'Business Owner',
+          timestamp: closedTime
+        });
+      }
+    }
+
+    // 7. Guarantee CURRENT/LATEST STATUS is represented
+    const currentActiveStatus = 
+      order?.prod_status || 
+      order?.event_end_status || 
+      order?.ops_status || 
+      order?.sales_status || 
+      order?.current_status || 
+      matchedProd?.editing_status || 
+      matchedProd?.production_status || 
+      matchedOrder?.current_stage || 
+      matchedOrder?.order_status || 
+      matchedLead?.current_status || 
+      matchedLead?.status;
+
+    if (currentActiveStatus && typeof currentActiveStatus === 'string' && currentActiveStatus.trim()) {
+      const normalizedCurrent = currentActiveStatus.trim();
+      const hasCurrent = cleanDbList.some(item => item.new_status.toLowerCase() === normalizedCurrent.toLowerCase());
+      if (!hasCurrent) {
+        const latestTime = matchedOrder?.updated_at || matchedLead?.updated_at || matchedProd?.updated_at || new Date().toISOString();
+        cleanDbList.push({
+          id: `current_stage_${primaryOrderId || primaryLeadId}`,
+          created_at: latestTime,
+          new_status: normalizedCurrent,
+          changed_by: cleanStaffName(matchedOrder?.sales_person || matchedLead?.sales_person || 'System'),
+          timestamp: latestTime
+        });
+      }
+    }
+
+    // 8. Primary Sort: Chronological by timestamp, with workflow rank tie-breaker
     cleanDbList.sort((a, b) => {
       const timeA = new Date(a.created_at || a.timestamp || 0).getTime() || 0;
       const timeB = new Date(b.created_at || b.timestamp || 0).getTime() || 0;
-      return sortOrder === 'asc' ? timeA - timeB : timeB - timeA;
+      const diffMs = timeA - timeB;
+
+      // If timestamps are within 5 seconds of each other, use PhotoCrew lifecycle workflow rank
+      if (Math.abs(diffMs) <= 5000) {
+        const rankA = getStageWorkflowRank(a.new_status);
+        const rankB = getStageWorkflowRank(b.new_status);
+        if (rankA !== rankB) {
+          return rankA - rankB;
+        }
+      }
+
+      return diffMs;
     });
 
-    return cleanDbList;
+    // 9. Deduplicate consecutive duplicate statuses
+    const deduplicatedList: StatusHistoryItem[] = [];
+    for (const item of cleanDbList) {
+      const prev = deduplicatedList[deduplicatedList.length - 1];
+      if (prev && prev.new_status.toLowerCase().trim() === item.new_status.toLowerCase().trim()) {
+        continue;
+      }
+      deduplicatedList.push(item);
+    }
+
+    // 10. Apply user sort order ('asc' oldest first, 'desc' newest first)
+    if (sortOrder === 'desc') {
+      deduplicatedList.reverse();
+    }
+
+    return deduplicatedList;
   }, [
     isOpen,
     order,
     dbHistory,
     statusHistory,
+    logs,
     matchedOrder,
     matchedLead,
+    matchedProd,
+    matchedOp,
     primaryOrderId,
     primaryLeadId,
+    primaryProdId,
+    allMatchingIds,
     sortOrder
   ]);
 
@@ -338,7 +642,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         </div>
 
         {/* TOOLBAR: SEARCH & CHRONOLOGICAL SORT */}
-        <div className="px-4 py-2.5 sm:px-6 bg-zinc-900/40 border-b border-zinc-850 flex items-center justify-between gap-3 shrink-0">
+        <div className="px-4 py-2.5 sm:px-6 bg-zinc-900/40 border-b border-zinc-855 flex items-center justify-between gap-3 shrink-0">
           <div className="relative flex-1 max-w-xs sm:max-w-sm">
             <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-2.5" />
             <input
@@ -411,7 +715,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         {/* FOOTER */}
         <div className="px-4 py-3 sm:px-6 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between shrink-0">
           <div className="text-xs text-zinc-500 font-mono">
-            Showing <strong className="text-zinc-300">{filteredStatusHistory.length}</strong> {filteredStatusHistory.length === 1 ? 'change' : 'changes'} (oldest to newest)
+            Showing <strong className="text-zinc-300">{filteredStatusHistory.length}</strong> {filteredStatusHistory.length === 1 ? 'change' : 'changes'} ({sortOrder === 'asc' ? 'oldest to newest' : 'newest to oldest'})
           </div>
 
           <button

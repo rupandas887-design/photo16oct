@@ -1577,7 +1577,21 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       render: (item: any) => (
         <button
           type="button"
-          onClick={() => setSelectedHistoryOrder(item.rawOrder || item.rawLead || item)}
+          onClick={() => setSelectedHistoryOrder({
+            ...item,
+            ...(item.rawLead || {}),
+            ...(item.rawOrder || {}),
+            ...(item.rawProd || {}),
+            order_id: item.order_id || item.rawOrder?.order_id || item.rawLead?.order_id || '',
+            lead_id: item.lead_id || item.rawLead?.lead_id || item.rawOrder?.lead_id || '',
+            customer_name: item.customer_name || item.rawOrder?.customer_name || item.rawLead?.customer_name || '',
+            current_stage: item.prod_status || item.current_status || item.event_end_status || item.sales_status || item.ops_status || item.rawOrder?.current_stage || item.rawLead?.status,
+            production_id: item.production_id || item.rawProd?.production_id,
+            rawOrder: item.rawOrder,
+            rawLead: item.rawLead,
+            rawProd: item.rawProd,
+            rawOps: item.rawOps
+          })}
           className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
           title="View Project History & Timeline"
         >
@@ -1780,7 +1794,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     if (selectedCard && (selectedCard.startsWith('prod_') || selectedCard === 'overview_prod' || selectedCard === 'overview_acceptance')) return [...baseProdCols, actionCol];
     if (selectedCard === 'overview_closed') return [...baseOrderCols, { key: 'current_stage', label: 'Status', render: () => <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold font-mono text-[10px]">Closed & Completed</span> }, actionCol];
 
-    return [];
+    return [...baseOrderCols, actionCol];
   }, [selectedCard]);
 
   const modalTitleAndMeta = useMemo(() => {

@@ -587,6 +587,11 @@ async function startServer() {
       }
     }
 
+    if (table === 'equipment_categories') {
+      delete clone.old_category_name;
+      delete clone.oldCategoryName;
+    }
+
     if (table === 'raw_footage') {
       const validCols = new Set([
         'tracking_id', 'order_id', 'event_completed_date', 'raw_received',
@@ -1205,14 +1210,19 @@ async function startServer() {
       const oldName = item?.old_category_name || (operation === 'update' ? matchVal : null);
 
       if (operation === 'update') {
-        let foundRow = null;
+        let foundRow: any = null;
         if (matchVal && uuidRegex.test(String(matchVal))) {
           const { data: byId } = await db.from('equipment_categories').select('*').eq('id', matchVal).maybeSingle();
           if (byId) foundRow = byId;
         }
 
+        if (!foundRow && oldName) {
+          const { data: byOldName } = await db.from('equipment_categories').select('*').ilike('category_name', String(oldName).trim()).maybeSingle();
+          if (byOldName) foundRow = byOldName;
+        }
+
         if (!foundRow && targetName) {
-          const { data: byName } = await db.from('equipment_categories').select('*').ilike('category_name', String(targetName)).maybeSingle();
+          const { data: byName } = await db.from('equipment_categories').select('*').ilike('category_name', String(targetName).trim()).maybeSingle();
           if (byName) foundRow = byName;
         }
 
@@ -1221,8 +1231,8 @@ async function startServer() {
           if (Array.isArray(allCats)) {
             foundRow = allCats.find((c: any) => 
               (c.id && String(c.id) === String(matchVal)) ||
-              (oldName && c.category_name && String(c.category_name).toLowerCase() === String(oldName).toLowerCase()) ||
-              (targetName && c.category_name && String(c.category_name).toLowerCase() === String(targetName).toLowerCase())
+              (oldName && c.category_name && String(c.category_name).trim().toLowerCase() === String(oldName).trim().toLowerCase()) ||
+              (targetName && c.category_name && String(c.category_name).trim().toLowerCase() === String(targetName).trim().toLowerCase())
             );
           }
         }
@@ -1233,9 +1243,14 @@ async function startServer() {
             updated_at: new Date().toISOString()
           }).eq('id', foundRow.id).select();
 
-          if (!updErr && updData) {
+          if (!updErr && updData && updData.length > 0) {
             return { success: true, data: updData };
           }
+          if (updErr) {
+            console.error('[Server DB equipment_categories update error]:', updErr);
+            return { success: false, error: updErr.message || String(updErr) };
+          }
+          return { success: true, data: [{ ...foundRow, category_name: targetName || foundRow.category_name }] };
         } else {
           const newId = crypto.randomUUID ? crypto.randomUUID() : 'cat-' + Date.now();
           const { data: insData, error: insErr } = await db.from('equipment_categories').insert({
@@ -1245,9 +1260,14 @@ async function startServer() {
             created_at: new Date().toISOString()
           }).select();
 
-          if (!insErr && insData) {
+          if (!insErr && insData && insData.length > 0) {
             return { success: true, data: insData };
           }
+          if (insErr) {
+            console.error('[Server DB equipment_categories insert fallback error]:', insErr);
+            return { success: false, error: insErr.message || String(insErr) };
+          }
+          return { success: true, data: [{ id: newId, category_name: targetName }] };
         }
       }
     }
