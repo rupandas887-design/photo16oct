@@ -1197,6 +1197,61 @@ async function startServer() {
       }
     }
 
+    // Self-healing handler for equipment_categories update/upsert/insert
+    if (table === 'equipment_categories') {
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const item = Array.isArray(payload) ? payload[0] : payload;
+      const targetName = item?.category_name || item?.name;
+      const oldName = item?.old_category_name || (operation === 'update' ? matchVal : null);
+
+      if (operation === 'update') {
+        let foundRow = null;
+        if (matchVal && uuidRegex.test(String(matchVal))) {
+          const { data: byId } = await db.from('equipment_categories').select('*').eq('id', matchVal).maybeSingle();
+          if (byId) foundRow = byId;
+        }
+
+        if (!foundRow && targetName) {
+          const { data: byName } = await db.from('equipment_categories').select('*').ilike('category_name', String(targetName)).maybeSingle();
+          if (byName) foundRow = byName;
+        }
+
+        if (!foundRow) {
+          const { data: allCats } = await db.from('equipment_categories').select('*');
+          if (Array.isArray(allCats)) {
+            foundRow = allCats.find((c: any) => 
+              (c.id && String(c.id) === String(matchVal)) ||
+              (oldName && c.category_name && String(c.category_name).toLowerCase() === String(oldName).toLowerCase()) ||
+              (targetName && c.category_name && String(c.category_name).toLowerCase() === String(targetName).toLowerCase())
+            );
+          }
+        }
+
+        if (foundRow) {
+          const { data: updData, error: updErr } = await db.from('equipment_categories').update({
+            category_name: targetName || foundRow.category_name,
+            updated_at: new Date().toISOString()
+          }).eq('id', foundRow.id).select();
+
+          if (!updErr && updData) {
+            return { success: true, data: updData };
+          }
+        } else {
+          const newId = crypto.randomUUID ? crypto.randomUUID() : 'cat-' + Date.now();
+          const { data: insData, error: insErr } = await db.from('equipment_categories').insert({
+            id: newId,
+            category_name: targetName || 'Category',
+            status: 'Active',
+            created_at: new Date().toISOString()
+          }).select();
+
+          if (!insErr && insData) {
+            return { success: true, data: insData };
+          }
+        }
+      }
+    }
+
     let currentPayload = sanitizeRecordForDbServer(payload, table);
     let retriesLeft = 15;
     let lastError: any = null;

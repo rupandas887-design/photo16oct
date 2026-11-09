@@ -5905,7 +5905,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                       </button>
                       
                       {/* Send Review Link */}
-                      {(displayStatus === "Customer Review" || displayStatus === "Editing Completed") && (
+                      {(displayStatus === "Customer Review" || displayStatus === "Editing Completed") && currentRole !== 'Production Team' && currentRole !== 'Production Staff' && (
                         <button
                           type="button"
                           onClick={() => {

@@ -596,6 +596,7 @@ export const EquipmentManagement: React.FC = () => {
           matchValue: editingCategoryId,
           updates: {
             category_name: trimmedNew,
+            old_category_name: editingCategoryName,
             updated_at: now
           }
         })
