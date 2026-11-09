@@ -190,101 +190,91 @@ export const SalesPackagesManager: React.FC<SalesPackagesManagerProps> = (props)
     }
   };
 
-  // Dedicated Full-Page Form Mode (no centered modal, no backdrop overlay, natural page scrolling)
+  // Dedicated Centered Overlay Modal with robust internal scrolling and mobile responsiveness
   if (isAddFormOpen || editingPackage) {
     return (
-      <div id="add_edit_package_modal" className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-7 md:p-8 space-y-6 text-left relative font-sans animate-fade-in shadow-xl">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 text-left text-xs bg-black/70 animate-fade-in overscroll-contain">
+        <div
+          id="add_edit_package_modal"
+          className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl flex flex-col shadow-2xl relative text-slate-300 overflow-hidden overscroll-contain animate-in zoom-in-95 duration-150"
+          style={{ maxHeight: 'calc(100dvh - 40px)' }}
+        >
+          <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
 
-        {/* In-app Discard Changes Confirmation Modal */}
-        {showDiscardModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in text-left">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
-              <div className="flex items-center gap-3 text-amber-400">
-                <AlertCircle className="w-5 h-5 shrink-0" />
-                <h4 className="text-sm font-bold text-slate-100 font-sans">Discard unsaved changes?</h4>
-              </div>
-              <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                You have unsaved changes in this service package. Are you sure you want to discard them and return to the package catalog?
-              </p>
-              <div className="flex items-center justify-end gap-2.5 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowDiscardModal(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-all cursor-pointer border border-transparent"
-                >
-                  Keep Editing
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowDiscardModal(false);
-                    handleResetForm();
-                  }}
-                  className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-xl transition-all cursor-pointer shadow-md border border-transparent"
-                >
-                  Discard & Exit
-                </button>
+          {/* In-app Discard Changes Confirmation Modal */}
+          {showDiscardModal && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in text-left">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+                <div className="flex items-center gap-3 text-amber-400">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <h4 className="text-sm font-bold text-slate-100 font-sans">Discard unsaved changes?</h4>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                  You have unsaved changes in this service package. Are you sure you want to discard them and return to the package catalog?
+                </p>
+                <div className="flex items-center justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowDiscardModal(false)}
+                    className="px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-all cursor-pointer border border-transparent"
+                  >
+                    Keep Editing
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDiscardModal(false);
+                      handleResetForm();
+                    }}
+                    className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-xl transition-all cursor-pointer shadow-md border border-transparent"
+                  >
+                    Discard & Exit
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Form Top Header & Navigation */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleCloseOrCancel}
-              className="p-2 sm:px-3 sm:py-2 text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 rounded-xl transition-all cursor-pointer flex items-center gap-2 text-xs font-semibold shadow-sm"
-              title="Return to package list"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>Back to Packages</span>
-            </button>
-            <div>
-              <h3 className="text-base sm:text-lg font-bold text-slate-100 font-mono tracking-wide flex items-center gap-2">
-                <span>{editingPackage ? '✏️ Edit Service Package' : '✨ Define New Service Package'}</span>
-              </h3>
-              <p className="text-xs text-slate-400 mt-0.5">
-                {editingPackage 
-                  ? `Editing package configuration for ${editingPackage.package_name || editingPackage.package_id}` 
-                  : 'Configure rates, included team members, and client deliverables for this offering.'}
-              </p>
+          {/* Modal Header */}
+          <div className="border-b border-slate-800 p-4 sm:p-6 flex items-center justify-between shrink-0 bg-slate-900 z-10 select-none">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleCloseOrCancel}
+                className="p-2 text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 text-xs font-semibold shadow-sm"
+                title="Return to package list"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span className="hidden sm:inline">Back</span>
+              </button>
+              <div>
+                <h3 className="text-sm sm:text-base font-bold text-slate-100 font-mono tracking-wide flex items-center gap-2">
+                  <span>{editingPackage ? '✏️ Edit Service Package' : '✨ Define New Service Package'}</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {editingPackage 
+                    ? `Editing configuration for ${editingPackage.package_name || editingPackage.package_id}` 
+                    : 'Configure rates, team members, and client deliverables for this offering.'}
+                </p>
+              </div>
             </div>
-          </div>
 
-          <div className="flex items-center gap-2.5 self-end sm:self-auto">
-            <button
-              type="button"
-              onClick={handleCloseOrCancel}
-              className="px-4 py-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition-all cursor-pointer font-medium border border-transparent shadow-sm"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={isSaving}
-              className="px-5 py-2 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-all cursor-pointer border border-transparent disabled:opacity-50 disabled:cursor-not-allowed shadow-md flex items-center gap-1.5"
-            >
-              {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-              <span>{isSaving ? 'Saving...' : editingPackage ? 'Update Package' : 'Save Package'}</span>
-            </button>
             <button
               type="button"
               onClick={handleCloseOrCancel}
               className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all cursor-pointer border border-slate-800 hover:border-slate-700 flex items-center gap-1.5 text-xs shadow-sm"
-              title="Close form"
+              title="Close modal"
             >
               <X className="w-4 h-4" />
-              <span className="hidden sm:inline">Close</span>
             </button>
           </div>
-        </div>
 
-        {/* Full-Page Form Fields with Normal Document Scrolling */}
-        <div className="space-y-6 text-xs text-slate-300">
+          {/* Scrollable Form Body */}
+          <div
+            id="add_edit_package_modal_body"
+            className="overflow-y-auto overflow-x-hidden p-4 sm:p-6 space-y-6 text-xs text-slate-300 flex-1 min-h-0 w-full max-w-full overscroll-contain"
+            style={{ overscrollBehavior: 'contain' }}
+          >
           {/* SECTION 1: PACKAGE DETAILS */}
           <div className="space-y-3.5 w-full">
             <label className="block text-slate-300 font-bold uppercase tracking-wider text-[11px] font-mono text-emerald-400">
@@ -521,24 +511,25 @@ export const SalesPackagesManager: React.FC<SalesPackagesManagerProps> = (props)
           </div>
         </div>
 
-        {/* Bottom Form Actions */}
-        <div className="flex items-center justify-end gap-3 pt-6 border-t border-slate-800">
-          <button
-            type="button"
-            onClick={handleCloseOrCancel}
-            className="px-4 py-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition-all cursor-pointer font-medium border border-transparent"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={isSaving}
-            className="px-6 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-all cursor-pointer border border-transparent disabled:opacity-50 disabled:cursor-not-allowed shadow-md flex items-center gap-2"
-          >
-            {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-            <span>{isSaving ? 'Saving...' : editingPackage ? 'Update Package' : 'Save Package'}</span>
-          </button>
+          {/* Sticky Footer Form Actions */}
+          <div className="border-t border-slate-800 p-4 sm:p-6 bg-slate-900 shrink-0 flex items-center justify-end gap-3 z-10 select-none">
+            <button
+              type="button"
+              onClick={handleCloseOrCancel}
+              className="px-4 py-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition-all cursor-pointer font-medium border border-transparent"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={isSaving}
+              className="px-6 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-all cursor-pointer border border-transparent disabled:opacity-50 disabled:cursor-not-allowed shadow-md flex items-center gap-2"
+            >
+              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              <span>{isSaving ? 'Saving...' : editingPackage ? 'Update Package' : 'Save Package'}</span>
+            </button>
+          </div>
         </div>
       </div>
     );
