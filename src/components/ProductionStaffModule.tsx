@@ -1593,7 +1593,7 @@ Thank you.`;
     if (!editingCompletedModal) return;
 
     if (!editingCompletedForm.confirmation_proof.trim()) {
-      alert("Validation Failed: Please upload or provide Customer Review Image / Confirmation Proof.");
+      alert("Validation Failed: Please upload or provide Customer Approved Image Proof.");
       return;
     }
 
@@ -3131,13 +3131,13 @@ Thank you.`;
                 {renderOrderHeader(editingCompletedModal.group)}
 
                 <p className="text-xs text-zinc-400 mb-4">
-                  Upload customer review image / confirmation proof. After attaching the image, complete the mandatory checklist below confirming that the edited folder has been uploaded to the server.
+                  Upload the image showing the customer's approval of the final edited photos or videos. This image will serve as proof of customer approval.
                 </p>
 
                 <form id="editing-completed-form" onSubmit={handleEditingCompletedSubmit} className="space-y-4">
                   <div>
                     <label className="block text-xs font-mono font-bold text-zinc-300 uppercase mb-1">
-                      Customer Review Image / Proof <span className="text-rose-400">*</span>
+                      CUSTOMER APPROVED IMAGE PROOF <span className="text-rose-400">*</span>
                     </label>
 
                     {/* File Upload Field */}
@@ -3160,7 +3160,7 @@ Thank you.`;
                       >
                         <Upload className="w-5 h-5 text-indigo-400" />
                         <span className="text-xs font-bold text-indigo-300">
-                          {editingCompletedForm.confirmation_proof ? 'Change Customer Review Image' : 'Select Customer Review Image'}
+                          {editingCompletedForm.confirmation_proof ? 'Change Customer Approved Image' : 'Select Customer Approved Image'}
                         </span>
                         <span className="text-[10px] text-zinc-500 font-mono">PNG, JPG, JPEG, WEBP (auto-compressed & uploaded to Supabase)</span>
                       </label>
@@ -3185,7 +3185,7 @@ Thank you.`;
                         <div className="relative rounded-lg overflow-hidden border border-zinc-800 max-h-48 bg-zinc-900 flex items-center justify-center">
                           <img
                             src={resolveStorageUrl(editingCompletedForm.confirmation_proof) || editingCompletedForm.confirmation_proof}
-                            alt="Customer Review Image Preview"
+                            alt="Customer Approved Image Preview"
                             referrerPolicy="no-referrer"
                             className="max-h-48 max-w-full object-contain rounded-lg"
                           />
