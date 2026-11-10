@@ -683,19 +683,16 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     }
 
     cleanDbList.sort((a, b) => {
-      const timeA = new Date(a.created_at || a.timestamp || 0).getTime() || 0;
-      const timeB = new Date(b.created_at || b.timestamp || 0).getTime() || 0;
-      const diffMs = timeA - timeB;
-
-      if (Math.abs(diffMs) <= 5000) {
-        const rankA = getStageWorkflowRank(a.new_status);
-        const rankB = getStageWorkflowRank(b.new_status);
-        if (rankA !== rankB) {
-          return rankA - rankB;
-        }
+      const rankA = getStageWorkflowRank(a.new_status);
+      const rankB = getStageWorkflowRank(b.new_status);
+      
+      if (rankA !== rankB) {
+        return rankA - rankB;
       }
 
-      return diffMs;
+      const timeA = new Date(a.created_at || a.timestamp || 0).getTime() || 0;
+      const timeB = new Date(b.created_at || b.timestamp || 0).getTime() || 0;
+      return timeA - timeB;
     });
 
     const deduplicatedList: StatusHistoryItem[] = [];
@@ -1154,24 +1151,22 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                                 </a>
                               ))}
                             </div>
-                          ) : proofData.type === 'proof' ? (
+                           ) : (proofData.images.length > 0 || proofData.links.length > 0) ? (
                             <div className="flex flex-wrap items-center gap-2">
-                              {proofData.images.length > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedGallery({ stageName: proofData.stageName, images: proofData.images, links: proofData.links })}
-                                  className="px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
-                                  title={`View ${proofData.images.length} proof image(s)`}
-                                >
-                                  <Eye className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                                  <span>View Proof</span>
-                                  {proofData.images.length > 1 && (
-                                    <span className="px-1.5 py-0.2 bg-amber-500/25 text-amber-300 rounded-full text-[10px] font-mono font-semibold">
-                                      {proofData.images.length}
-                                    </span>
-                                  )}
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() => setSelectedGallery({ stageName: proofData.stageName, images: proofData.images, links: proofData.links })}
+                                className="px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                                title={`View proof files for ${proofData.stageName}`}
+                              >
+                                <Eye className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                <span>View Proof</span>
+                                {(proofData.images.length + proofData.links.length) > 0 && (
+                                  <span className="px-1.5 py-0.2 bg-amber-500/25 text-amber-300 rounded-full text-[10px] font-mono font-semibold">
+                                    {proofData.images.length + proofData.links.length}
+                                  </span>
+                                )}
+                              </button>
 
                               {proofData.links.map((lnk, lIdx) => (
                                 <a
