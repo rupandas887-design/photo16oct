@@ -4079,13 +4079,12 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads, onOpenNo
                 <th className="py-3 px-4 font-bold">Event Type</th>
                 <th className="py-3 px-4 font-bold">Event Date</th>
                 <th className="py-3 px-4 font-bold">Assigned Sales / Staff</th>
-                <th className="py-3 px-4 text-right font-bold">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
               {filteredLeadsReport.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-zinc-500 font-mono text-xs">
+                  <td colSpan={7} className="py-12 text-center text-zinc-500 font-mono text-xs">
                     No leads found matching the selected filters.
                   </td>
                 </tr>
@@ -4106,7 +4105,6 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads, onOpenNo
                       </td>
                       <td className="py-3 px-4">
                         <div className="text-zinc-200 font-mono">{l.mobile || '-'}</div>
-                        {l.whatsapp_number && <div className="text-[10px] text-zinc-400 font-mono">WA: {l.whatsapp_number}</div>}
                       </td>
                       <td className="py-3 px-4">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold font-mono ${
@@ -4127,48 +4125,6 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads, onOpenNo
                       </td>
                       <td className="py-3 px-4">
                         <div className="text-zinc-200">{l.sales_person || l.sales_staff_name || 'Unassigned'}</div>
-                      </td>
-                      <td className="py-3 px-4 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedHistoryOrder({
-                              ...l,
-                              order_id: l.order_id || '',
-                              lead_id: l.lead_id || '',
-                              customer_name: l.customer_name || '',
-                              current_stage: l.status || l.current_status || 'New',
-                              rawLead: l
-                            })}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
-                            title="View Project History & Timeline"
-                          >
-                            <History className="w-3.5 h-3.5" />
-                            <span>History</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const noteData = {
-                                lead_id: l.lead_id,
-                                order_id: l.order_id || '',
-                                customer_name: l.customer_name || 'Customer'
-                              };
-                              if (onOpenNoteModal) {
-                                onOpenNoteModal(noteData);
-                              } else {
-                                setLocalNoteModalOrder(noteData);
-                              }
-                            }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
-                            title="View Notes & Add Note"
-                          >
-                            <FileText className="w-3.5 h-3.5" />
-                            <span>View / Add Note</span>
-                          </button>
-                        </div>
                       </td>
                     </tr>
                   );
