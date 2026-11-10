@@ -20,7 +20,8 @@ import {
   Calendar,
   User,
   ShieldCheck,
-  FileCheck
+  FileCheck,
+  Link as LinkIcon
 } from 'lucide-react';
 import { supabaseClient } from '../supabaseClient';
 import { useRole } from './RoleContext';
@@ -41,15 +42,16 @@ interface StatusHistoryItem {
   timestamp: string;
 }
 
-export interface ProofImageItem {
+export interface ProofItem {
   id: string;
+  type: 'image' | 'link';
   url: string;
-  caption: string;
-  staffName: string;
-  staffRole?: string;
-  eventName?: string;
+  rawUrl: string;
+  proofName: string;
+  uploadedBy: string;
   timestamp?: string;
   stageName: string;
+  eventName?: string;
 }
 
 export interface ClientAcceptanceChecklistItem {
@@ -97,6 +99,7 @@ const getStageWorkflowRank = (statusText?: string): number => {
   if (s.includes('event ended') || s.includes('event end') || s.includes('event completed') || s.includes('event complete')) return 80;
   if (s.includes('footage handover') || s.includes('raw footage')) return 90;
   if (s.includes('verified footage') || s.includes('footage handover verified') || s.includes('operations completed')) return 100;
+  if (s.includes('cancelled') || s.includes('cancel')) return 105;
 
   // 4. Production stages
   if (s.includes('assigned editor') || s.includes('editor assigned')) return 110;
@@ -112,6 +115,26 @@ const getStageWorkflowRank = (statusText?: string): number => {
   if (s.includes('order closed') || s.includes('project closed') || s.includes('closed') || s.includes('completed')) return 210;
 
   return 55;
+};
+
+// URL type helpers
+const isImageUrl = (url?: string): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim().toLowerCase();
+  if (trimmed.startsWith('data:image/') || trimmed.startsWith('blob:')) return true;
+  return /\.(jpg|jpeg|png|webp|gif|svg|bmp|avif)(\?.*)?$/i.test(trimmed) ||
+         /(img\/)?proofs\/.*\.(jpg|jpeg|png|webp|gif|svg|bmp)$/i.test(trimmed) ||
+         trimmed.includes('/storage/v1/object/public/img/') ||
+         trimmed.includes('/storage/v1/object/sign/img/');
+};
+
+const isLinkUrl = (url?: string): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('www.')) {
+    return !isImageUrl(trimmed);
+  }
+  return false;
 };
 
 export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
@@ -142,9 +165,10 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
   const [dbEditorAssignments, setDbEditorAssignments] = useState<any[]>([]);
   const [dbProductionRecords, setDbProductionRecords] = useState<any[]>([]);
   const [dbClientAcceptanceVerifs, setDbClientAcceptanceVerifs] = useState<any[]>([]);
+  const [dbRawFootage, setDbRawFootage] = useState<any[]>([]);
 
   // Modals state for Proof Gallery, Lightbox, and Client Acceptance Checklist
-  const [selectedGallery, setSelectedGallery] = useState<{ stageName: string; images: ProofImageItem[] } | null>(null);
+  const [selectedGallery, setSelectedGallery] = useState<{ stageName: string; images: ProofItem[]; links: ProofItem[] } | null>(null);
   const [selectedChecklist, setSelectedChecklist] = useState<ClientAcceptanceChecklistData | null>(null);
   const [lightboxImageIndex, setLightboxImageIndex] = useState<number | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -302,6 +326,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       setDbEditorAssignments([]);
       setDbProductionRecords([]);
       setDbClientAcceptanceVerifs([]);
+      setDbRawFootage([]);
       return;
     }
 
@@ -319,20 +344,18 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
 
         // 1. Fetch Status History
         if (orConditionsLeadAndOrder) {
-          const { data: histData, error: histErr } = await supabaseClient
+          const { data: histData } = await supabaseClient
             .from('lead_status_history')
             .select('*')
             .or(orConditionsLeadAndOrder)
             .order('created_at', { ascending: true });
 
-          if (histErr) {
-            console.warn("[OrderHistoryModal] DB fetch error from lead_status_history:", histErr.message);
-          } else if (isMounted && histData) {
+          if (isMounted && histData) {
             setDbHistory(histData);
           }
         }
 
-        // 2. Fetch Staff Assignments (Event Start, Event End, Equipment Handover photos)
+        // 2. Fetch Staff Assignments
         if (orConditionsLeadAndOrder) {
           const { data: saData } = await supabaseClient
             .from('staff_assignments')
@@ -344,7 +367,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
           }
         }
 
-        // 3. Fetch Lead Equipment History (photos for handover / return)
+        // 3. Fetch Lead Equipment History
         if (orConditionsLeadAndOrder) {
           const { data: eqData } = await supabaseClient
             .from('lead_equipment_history')
@@ -356,7 +379,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
           }
         }
 
-        // 4. Fetch Editor Assignments (Production proofs, customer review photos)
+        // 4. Fetch Editor Assignments
         if (orConditionsOrderOnly) {
           const { data: eaData } = await supabaseClient
             .from('editor_assignments')
@@ -368,7 +391,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
           }
         }
 
-        // 5. Fetch Production records (Checklists, approval proofs)
+        // 5. Fetch Production records
         if (orConditionsLeadAndOrder) {
           const { data: prData } = await supabaseClient
             .from('production')
@@ -392,6 +415,18 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
           }
         }
 
+        // 7. Fetch Raw Footage records
+        if (orConditionsOrderOnly) {
+          const { data: rfData } = await supabaseClient
+            .from('raw_footage')
+            .select('*')
+            .or(orConditionsOrderOnly);
+
+          if (isMounted && rfData) {
+            setDbRawFootage(rfData);
+          }
+        }
+
       } catch (err: any) {
         console.warn("[OrderHistoryModal] Exception fetching history and proofs:", err);
       } finally {
@@ -412,7 +447,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
   const fullStatusHistory = useMemo<StatusHistoryItem[]>(() => {
     if (!isOpen || !order) return [];
 
-    // Filter in-memory statusHistory from RoleContext
     const inMemoryStatusHistory = (statusHistory || []).filter((sh: any) => {
       const shOrd = sanitizeId(sh.order_id);
       const shLd = sanitizeId(sh.lead_id);
@@ -420,7 +454,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
              (shLd && allMatchingIds.some(id => id.toLowerCase() === shLd.toLowerCase()));
     });
 
-    // Merge dbHistory and inMemoryStatusHistory, deduplicating by ID
     const combinedRaw = [...dbHistory];
     const seenIds = new Set<string>(dbHistory.map(r => String(r.id || '')));
     inMemoryStatusHistory.forEach((r: any) => {
@@ -431,7 +464,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     });
 
-    // Also extract stage transition logs from activity logs if any
     (logs || []).forEach((lg: any) => {
       const recId = sanitizeId(lg.record_id);
       if (recId && allMatchingIds.some(id => id.toLowerCase() === recId.toLowerCase())) {
@@ -450,7 +482,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     });
 
-    // 1. Clean and deduplicate raw records
     const cleanDbList: StatusHistoryItem[] = [];
     for (const r of combinedRaw) {
       const statusText = (r.new_status || r.status || '').trim();
@@ -465,7 +496,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       });
     }
 
-    // 2. Guarantee STARTING STATUS (Lead creation / initial inquiry)
+    // Guarantee initial lead date & stages
     const initialLeadDate = matchedLead?.created_at || matchedLead?.created_date || matchedOrder?.created_at;
     const initialSalesPerson = cleanStaffName(
       matchedLead?.sales_person || 
@@ -475,7 +506,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       'Sales Team'
     );
     
-    // Determine the true starting status
     let initialStatus = 'New Lead';
     if (matchedLead) {
       const rawLeadStatus = matchedLead.status || matchedLead.current_status || '';
@@ -483,16 +513,9 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         initialStatus = 'Create Quote';
       } else if (rawLeadStatus === 'Quote Sent') {
         initialStatus = 'Quote Sent';
-      } else if (rawLeadStatus === 'Quote Follow-up') {
-        initialStatus = 'Quote Follow-up';
-      } else if (rawLeadStatus === 'Lead Lost' || rawLeadStatus === 'Lost Lead') {
-        initialStatus = 'New Lead';
-      } else {
-        initialStatus = 'New Lead';
       }
     }
 
-    // Check if starting status is present in cleanDbList
     const hasInitialStatus = cleanDbList.some(item => {
       const st = item.new_status.toLowerCase();
       return st === initialStatus.toLowerCase() || st === 'new lead' || st === 'create quote' || st === 'new';
@@ -508,7 +531,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       });
     }
 
-    // 3. Guarantee ORDER CONFIRMED milestone if order was confirmed
     if (matchedOrder && matchedOrder.order_id) {
       const hasOrderConfirmed = cleanDbList.some(item => {
         const st = item.new_status.toLowerCase();
@@ -527,7 +549,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     }
 
-    // 4. Guarantee OPERATIONS milestones if reached
     if (matchedOp || (matchedOrder && matchedOrder.assigned_crew && matchedOrder.assigned_crew !== 'Unassigned')) {
       const hasAssignedCrew = cleanDbList.some(item => {
         const st = item.new_status.toLowerCase();
@@ -545,7 +566,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         });
       }
 
-      // Event Ended milestone
       const opStatus = (matchedOp?.event_status || matchedOrder?.current_stage || '').toLowerCase();
       const hasEventEnded = cleanDbList.some(item => item.new_status.toLowerCase().includes('event end'));
       if (!hasEventEnded && (opStatus.includes('event end') || opStatus.includes('completed') || order?.event_end_status)) {
@@ -559,7 +579,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         });
       }
 
-      // Verified Footage milestone
       const hasVerifiedFootage = cleanDbList.some(item => item.new_status.toLowerCase().includes('verified footage'));
       if (!hasVerifiedFootage && (opStatus.includes('footage') || matchedProd || opStatus.includes('production') || opStatus.includes('closed'))) {
         const footageTime = matchedOrder?.updated_at || matchedProd?.created_at || new Date().toISOString();
@@ -573,11 +592,9 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     }
 
-    // 5. Guarantee PRODUCTION milestones if reached
     if (matchedProd) {
       const prodEditingStatus = (matchedProd.editing_status || matchedProd.production_status || '').trim();
 
-      // Assigned Editor milestone
       if (matchedProd.editor_assigned && matchedProd.editor_assigned !== 'Unassigned') {
         const hasEditorAssigned = cleanDbList.some(item => item.new_status.toLowerCase().includes('editor'));
         if (!hasEditorAssigned) {
@@ -592,7 +609,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         }
       }
 
-      // Editing Started / In Progress milestone
       const hasEditingStarted = cleanDbList.some(item => item.new_status.toLowerCase().includes('editing'));
       if (!hasEditingStarted && prodEditingStatus) {
         const editTime = matchedProd.created_at || matchedProd.updated_at || new Date().toISOString();
@@ -605,7 +621,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         });
       }
 
-      // Client Acceptance / Accepted milestone
       const hasClientAcceptance = cleanDbList.some(item => item.new_status.toLowerCase().includes('acceptance') || item.new_status.toLowerCase().includes('accepted'));
       if (!hasClientAcceptance && (prodEditingStatus.toLowerCase().includes('acceptance') || prodEditingStatus.toLowerCase().includes('accepted') || (matchedProd as any).client_acceptance)) {
         const acceptTime = matchedProd.updated_at || new Date().toISOString();
@@ -619,7 +634,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     }
 
-    // 6. Guarantee ORDER CLOSED milestone if order is closed
     const isOrderClosed = 
       (matchedOrder?.current_stage || '').toLowerCase().includes('closed') ||
       (matchedOrder?.order_status || '').toLowerCase().includes('closed') ||
@@ -640,7 +654,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     }
 
-    // 7. Guarantee CURRENT/LATEST STATUS is represented
     const currentActiveStatus = 
       order?.prod_status || 
       order?.event_end_status || 
@@ -669,13 +682,11 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     }
 
-    // 8. Primary Sort: Chronological by timestamp, with workflow rank tie-breaker
     cleanDbList.sort((a, b) => {
       const timeA = new Date(a.created_at || a.timestamp || 0).getTime() || 0;
       const timeB = new Date(b.created_at || b.timestamp || 0).getTime() || 0;
       const diffMs = timeA - timeB;
 
-      // If timestamps are within 5 seconds of each other, use PhotoCrew lifecycle workflow rank
       if (Math.abs(diffMs) <= 5000) {
         const rankA = getStageWorkflowRank(a.new_status);
         const rankB = getStageWorkflowRank(b.new_status);
@@ -687,7 +698,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       return diffMs;
     });
 
-    // 9. Deduplicate consecutive duplicate statuses
     const deduplicatedList: StatusHistoryItem[] = [];
     for (const item of cleanDbList) {
       const prev = deduplicatedList[deduplicatedList.length - 1];
@@ -697,7 +707,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       deduplicatedList.push(item);
     }
 
-    // 10. Apply user sort order ('asc' oldest first, 'desc' newest first)
     if (sortOrder === 'desc') {
       deduplicatedList.reverse();
     }
@@ -720,7 +729,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     sortOrder
   ]);
 
-  // Combined and deduplicated proof sources (DB + in-memory)
+  // Combined proof sources (DB + in-memory)
   const allStaffAssignments = useMemo(() => {
     const map = new Map<string, any>();
     (inMemStaffAssignments || []).forEach(sa => {
@@ -761,220 +770,108 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
   }, [dbClientAcceptanceVerifs]);
 
   /**
-   * Stage-Wise Proof Matcher:
-   * Categorizes and extracts uploaded images/documents or checklist data for each row.
+   * Stage-Wise Proof Matcher (Operations & Production Stages)
+   * Extracts accurate Proof Name, Uploaded By, and File Type (Image vs Link).
    */
   const getStageProofData = (statusText: string, timestamp?: string) => {
     const s = (statusText || '').trim().toLowerCase();
+    const items: ProofItem[] = [];
+    const seenUrls = new Set<string>();
 
-    // 1. EVENT START
-    if (s.includes('event start') || s.includes('event started') || s.includes('started event')) {
-      const images: ProofImageItem[] = [];
-      const seenUrls = new Set<string>();
+    const addProof = (rawVal: any, proofName: string, staff: string, eventName?: string, ts?: string) => {
+      const resolved = resolveStorageUrl(rawVal) || (typeof rawVal === 'string' ? rawVal.trim() : '');
+      if (!resolved || seenUrls.has(resolved)) return;
+      seenUrls.add(resolved);
 
-      allStaffAssignments.forEach((sa, idx) => {
-        const rawPhoto = sa.event_start_photo;
-        const resolved = resolveStorageUrl(rawPhoto);
-        if (resolved && !seenUrls.has(resolved)) {
-          seenUrls.add(resolved);
-          images.push({
-            id: `es_photo_${sa.assignment_id || idx}`,
-            url: resolved,
-            caption: 'Event Start Proof',
-            staffName: cleanStaffName(sa.staff_name),
-            staffRole: sa.staff_role || 'Photographer',
-            eventName: sa.event_name || 'Event Session',
-            timestamp: sa.event_start_time || sa.assignment_date || sa.created_at || timestamp,
-            stageName: 'Event Start'
+      const isImg = isImageUrl(resolved);
+      const islnk = isLinkUrl(resolved);
+
+      if (isImg || islnk) {
+        items.push({
+          id: `proof_${items.length}_${Math.random().toString(36).slice(2, 7)}`,
+          type: isImg ? 'image' : 'link',
+          url: resolved,
+          rawUrl: resolved,
+          proofName,
+          uploadedBy: cleanStaffName(staff),
+          eventName: eventName || '',
+          timestamp: ts || timestamp,
+          stageName: statusText
+        });
+      }
+    };
+
+    // 1. ASSIGNED CREW / OPERATIONS ASSIGNED
+    if (s.includes('assigned crew') || s.includes('operation assigned') || s.includes('scheduled')) {
+      allStaffAssignments.forEach(sa => {
+        if (sa.raw_footage_link) addProof(sa.raw_footage_link, 'Raw Footage / Schedule Link', sa.staff_name, sa.event_name, sa.created_at);
+        if (sa.equipment_details && Array.isArray(sa.equipment_details)) {
+          sa.equipment_details.forEach((eq: any) => {
+            if (eq?.photo_url) addProof(eq.photo_url, `Equipment Proof (${eq.name || 'Gear'})`, sa.staff_name, sa.event_name, sa.created_at);
           });
         }
       });
-
-      // Also check equipment history for event start photos
-      dbEquipmentHistory.forEach((eq, idx) => {
-        const eqStatus = (eq.equipment_status || '').toLowerCase();
-        if (eqStatus.includes('start') && eq.photo_url) {
-          const resolved = resolveStorageUrl(eq.photo_url);
-          if (resolved && !seenUrls.has(resolved)) {
-            seenUrls.add(resolved);
-            images.push({
-              id: `eq_start_${eq.id || idx}`,
-              url: resolved,
-              caption: `Gear Verification (${eq.equipment_name || 'Equipment'})`,
-              staffName: cleanStaffName(eq.returned_by || 'Operations Staff'),
-              staffRole: 'Equipment Staff',
-              eventName: eq.remarks || 'Event Start Inspection',
-              timestamp: eq.created_at || timestamp,
-              stageName: 'Event Start'
-            });
-          }
-        }
-      });
-
-      return {
-        type: 'proof' as const,
-        stageName: 'Event Start',
-        images
-      };
     }
 
-    // 2. EVENT END
-    if (s.includes('event end') || s.includes('event ended') || s.includes('event complete') || s.includes('event completed')) {
-      const images: ProofImageItem[] = [];
-      const seenUrls = new Set<string>();
-
-      allStaffAssignments.forEach((sa, idx) => {
-        const rawPhoto = sa.event_end_photo;
-        const resolved = resolveStorageUrl(rawPhoto);
-        if (resolved && !seenUrls.has(resolved)) {
-          seenUrls.add(resolved);
-          images.push({
-            id: `ee_photo_${sa.assignment_id || idx}`,
-            url: resolved,
-            caption: 'Event End Proof',
-            staffName: cleanStaffName(sa.staff_name),
-            staffRole: sa.staff_role || 'Photographer',
-            eventName: sa.event_name || 'Event Wrap-up',
-            timestamp: sa.event_end_time || sa.updated_at || sa.created_at || timestamp,
-            stageName: 'Event End'
-          });
+    // 2. EVENT STARTED
+    if (s.includes('event start') || s.includes('event started') || s.includes('started event')) {
+      allStaffAssignments.forEach(sa => {
+        if (sa.event_start_photo) addProof(sa.event_start_photo, 'Event Start Photo Proof', sa.staff_name, sa.event_name, sa.event_start_time || sa.created_at);
+      });
+      dbEquipmentHistory.forEach(eq => {
+        if ((eq.equipment_status || '').toLowerCase().includes('start') && eq.photo_url) {
+          addProof(eq.photo_url, `Gear Verification (${eq.equipment_name || 'Equipment'})`, eq.returned_by || 'Operations Staff', eq.event_name, eq.created_at);
         }
       });
+    }
 
-      // Also check equipment history for event complete photos
-      dbEquipmentHistory.forEach((eq, idx) => {
+    // 3. EVENT ENDED
+    if (s.includes('event end') || s.includes('event ended') || s.includes('event complete') || s.includes('event completed')) {
+      allStaffAssignments.forEach(sa => {
+        if (sa.event_end_photo) addProof(sa.event_end_photo, 'Event End Photo Proof', sa.staff_name, sa.event_name, sa.event_end_time || sa.updated_at);
+      });
+      dbEquipmentHistory.forEach(eq => {
         const eqStatus = (eq.equipment_status || '').toLowerCase();
         if ((eqStatus.includes('end') || eqStatus.includes('complete')) && eq.photo_url) {
-          const resolved = resolveStorageUrl(eq.photo_url);
-          if (resolved && !seenUrls.has(resolved)) {
-            seenUrls.add(resolved);
-            images.push({
-              id: `eq_end_${eq.id || idx}`,
-              url: resolved,
-              caption: `Gear Return Verification (${eq.equipment_name || 'Equipment'})`,
-              staffName: cleanStaffName(eq.returned_by || 'Operations Staff'),
-              staffRole: 'Equipment Staff',
-              eventName: eq.remarks || 'Event End Gear Verification',
-              timestamp: eq.created_at || timestamp,
-              stageName: 'Event End'
-            });
-          }
+          addProof(eq.photo_url, `Gear Return Verification (${eq.equipment_name || 'Equipment'})`, eq.returned_by || 'Operations Staff', eq.event_name, eq.created_at);
         }
       });
-
-      return {
-        type: 'proof' as const,
-        stageName: 'Event End',
-        images
-      };
     }
 
-    // 3. FOOTAGE HANDOVER
+    // 4. FOOTAGE HANDOVER / RAW FOOTAGE / EQUIPMENT HANDOVER
     if (s.includes('footage handover') || s.includes('raw footage') || s.includes('equipment handover') || s.includes('verified footage') || s.includes('handover')) {
-      const images: ProofImageItem[] = [];
-      const seenUrls = new Set<string>();
-
-      allStaffAssignments.forEach((sa, idx) => {
-        const rawHandover = sa.equipment_handover_photo;
-        const resolvedHandover = resolveStorageUrl(rawHandover);
-        if (resolvedHandover && !seenUrls.has(resolvedHandover)) {
-          seenUrls.add(resolvedHandover);
-          images.push({
-            id: `eh_photo_${sa.assignment_id || idx}`,
-            url: resolvedHandover,
-            caption: 'Footage & Equipment Handover Proof',
-            staffName: cleanStaffName(sa.equipment_handover_to || sa.staff_name),
-            staffRole: sa.staff_role || 'Operations Staff',
-            eventName: sa.event_name || 'Footage Ingestion',
-            timestamp: sa.updated_at || sa.created_at || timestamp,
-            stageName: 'Footage Handover'
-          });
-        }
-
-        const rawReceived = sa.equipment_received_photo;
-        const resolvedReceived = resolveStorageUrl(rawReceived);
-        if (resolvedReceived && !seenUrls.has(resolvedReceived)) {
-          seenUrls.add(resolvedReceived);
-          images.push({
-            id: `er_photo_${sa.assignment_id || idx}`,
-            url: resolvedReceived,
-            caption: 'Equipment & Asset Receipt Proof',
-            staffName: cleanStaffName(sa.staff_name),
-            staffRole: sa.staff_role || 'Operations Staff',
-            eventName: sa.event_name || 'Asset Verification',
-            timestamp: sa.updated_at || sa.created_at || timestamp,
-            stageName: 'Footage Handover'
-          });
-        }
+      allStaffAssignments.forEach(sa => {
+        if (sa.equipment_handover_photo) addProof(sa.equipment_handover_photo, 'Equipment Handover Proof', sa.equipment_handover_to || sa.staff_name, sa.event_name, sa.updated_at);
+        if (sa.equipment_received_photo) addProof(sa.equipment_received_photo, 'Asset Collection Proof', sa.staff_name, sa.event_name, sa.updated_at);
+        if (sa.raw_footage_link) addProof(sa.raw_footage_link, 'Raw Footage Link', sa.staff_name, sa.event_name, sa.updated_at);
       });
-
-      // Equipment handover/return photos in lead_equipment_history
-      dbEquipmentHistory.forEach((eq, idx) => {
+      dbEquipmentHistory.forEach(eq => {
         const eqStatus = (eq.equipment_status || '').toLowerCase();
-        if ((eqStatus.includes('handover') || eqStatus.includes('return')) && eq.photo_url) {
-          const resolved = resolveStorageUrl(eq.photo_url);
-          if (resolved && !seenUrls.has(resolved)) {
-            seenUrls.add(resolved);
-            images.push({
-              id: `eq_handover_${eq.id || idx}`,
-              url: resolved,
-              caption: `Handover Return Proof (${eq.equipment_name || 'Equipment'})`,
-              staffName: cleanStaffName(eq.returned_by || 'Operations Staff'),
-              staffRole: 'Equipment Staff',
-              eventName: eq.remarks || 'Handover Verification',
-              timestamp: eq.returned_at || eq.created_at || timestamp,
-              stageName: 'Footage Handover'
-            });
-          }
+        if ((eqStatus.includes('handover') || eqStatus.includes('return') || eqStatus.includes('received')) && eq.photo_url) {
+          addProof(eq.photo_url, `Handover Return Proof (${eq.equipment_name || 'Equipment'})`, eq.returned_by || 'Operations Staff', eq.event_name, eq.returned_at);
         }
       });
-
-      return {
-        type: 'proof' as const,
-        stageName: 'Footage Handover',
-        images
-      };
+      dbRawFootage.forEach(rf => {
+        if (rf.drive_link) addProof(rf.drive_link, 'Raw Footage Drive Link', rf.uploaded_by || 'Operations Staff', rf.event_name, rf.created_at);
+        if (rf.server_path) addProof(rf.server_path, 'Raw Footage Server Link', rf.uploaded_by || 'Operations Staff', rf.event_name, rf.created_at);
+      });
     }
 
-    // 4. CLIENT ACCEPTANCE CHECKLIST
+    // 5. EVENT CANCELLED
+    if (s.includes('cancelled') || s.includes('cancel')) {
+      // Check cancellation records if any
+    }
+
+    // 6. CLIENT ACCEPTANCE CHECKLIST
     if (s.includes('client acceptance') || s.includes('client accepted') || s.includes('client approval') || s.includes('customer acceptance') || s.includes('customer approval') || s.includes('client communication')) {
       const prod = activeProductionRecord;
       const cav = activeClientAcceptanceVerif;
 
-      // Persisted 5 checklist flags
-      const isCustAccepted = prod?.checklist_customer_acceptance ?? (s.includes('accepted') || s.includes('approval') || true);
-      const isContentUsage = prod?.checklist_content_usage ?? Boolean(prod?.checklist_customer_acceptance);
-      const isFootageDeleted = prod?.checklist_footage_deleted_7_days ?? Boolean(prod?.checklist_customer_acceptance);
-      const isPaymentCleared = prod?.checklist_payment_from_sales ?? Boolean(prod?.checklist_customer_acceptance);
-      const isEditedUploaded = prod?.checklist_edited_files_uploaded ?? Boolean(prod?.final_consolidated_drive_link || cav?.final_edited_footage_link || prod?.server_upload_confirmed);
+      const consentProof = cav?.client_communication_consent_proof || prod?.client_communication_consent_proof || prod?.customer_communication_proof || prod?.customer_review_image || prod?.confirmation_proof;
+      if (consentProof) addProof(consentProof, 'Client Acceptance Consent Proof', 'Production Team', 'Client Acceptance', cav?.updated_at || prod?.updated_at);
 
-      const deliveryMethod = 
-        prod?.delivery_method || 
-        prod?.validated_server_uploads?.delivery_method || 
-        (cav?.upload_link_path ? 'server_link' : cav?.folder_name ? 'physical_drive' : 'server_link');
-
-      const serverLink = 
-        prod?.server_link || 
-        prod?.final_consolidated_drive_link || 
-        prod?.final_edited_footage_link || 
-        prod?.delivery_link || 
-        cav?.final_edited_footage_link || 
-        cav?.upload_link_path || 
-        '';
-
-      const physicalDriveDetails = 
-        prod?.physical_drive_details || 
-        prod?.folder_name || 
-        cav?.folder_name || 
-        '';
-
-      const consentProof = 
-        cav?.client_communication_consent_proof || 
-        prod?.client_communication_consent_proof || 
-        prod?.customer_communication_proof || 
-        prod?.customer_review_image || 
-        prod?.confirmation_proof || 
-        null;
+      const serverLink = prod?.server_link || prod?.final_consolidated_drive_link || prod?.final_edited_footage_link || prod?.delivery_link || cav?.final_edited_footage_link || cav?.upload_link_path;
+      if (serverLink) addProof(serverLink, 'Master Deliverables Server Link', 'Production Team', 'Client Acceptance', prod?.updated_at);
 
       const checklistItems: ClientAcceptanceChecklistItem[] = [
         {
@@ -1013,9 +910,9 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         orderId: primaryOrderId || primaryLeadId || 'ORDER',
         customerName: customerName || 'Valued Client',
         checklistItems,
-        deliveryMethod,
+        deliveryMethod: prod?.delivery_method || 'server_link',
         serverLink: resolveStorageUrl(serverLink) || serverLink,
-        physicalDriveDetails,
+        physicalDriveDetails: prod?.physical_drive_details || prod?.folder_name || '',
         consentProofUrl: resolveStorageUrl(consentProof),
         consentProofFileName: cav?.proof_file_name || prod?.proof_file_name || 'Customer_Approval_Consent.jpg',
         isVerified: cav?.consent_proof_verified ?? true,
@@ -1023,14 +920,19 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         verifiedBy: 'Production Team'
       };
 
+      const imageItems = items.filter(i => i.type === 'image');
+      const linkItems = items.filter(i => i.type === 'link');
+
       return {
         type: 'checklist' as const,
-        stageName: 'Client Acceptance',
+        stageName: statusText,
+        images: imageItems,
+        links: linkItems,
         checklistData
       };
     }
 
-    // 5. PRODUCTION (Assigned Editor, Editing Started, In Progress, Customer Review, Revision, Completed, Final Approval, Order Closed)
+    // 7. PRODUCTION STAGES
     const isProductionStage = 
       s.includes('editor') || 
       s.includes('editing') || 
@@ -1048,80 +950,37 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       s.includes('closed');
 
     if (isProductionStage) {
-      const images: ProofImageItem[] = [];
-      const seenUrls = new Set<string>();
-
-      // Check all editor assignments
-      allEditorAssignments.forEach((ea, idx) => {
-        const candidates = [
-          { url: ea.customer_review_image, caption: 'Customer Approved Image Proof' },
-          { url: ea.confirmation_proof, caption: 'Confirmation Proof' },
-          { url: ea.customer_communication_proof, caption: 'Client Communication Proof' },
-          { url: ea.proof_url, caption: 'Editor Deliverable Proof' },
-          { url: ea.proof_image, caption: 'Deliverable Preview' },
-          { url: ea.uploaded_proof, caption: 'Uploaded Proof Document' },
-          { url: ea.client_confirmation_img, caption: 'Client Approval Screen' }
-        ];
-
-        candidates.forEach(cand => {
-          const resolved = resolveStorageUrl(cand.url);
-          if (resolved && !seenUrls.has(resolved)) {
-            seenUrls.add(resolved);
-            images.push({
-              id: `ea_proof_${ea.assignment_id || idx}_${images.length}`,
-              url: resolved,
-              caption: cand.caption,
-              staffName: cleanStaffName(ea.staff_name),
-              staffRole: ea.speciality || 'Editor',
-              eventName: ea.deliverable_id || 'Production Deliverable',
-              timestamp: ea.updated_at || ea.customer_confirmation_time || ea.created_at || timestamp,
-              stageName: 'Production'
-            });
-          }
-        });
+      allEditorAssignments.forEach(ea => {
+        if (ea.customer_review_image) addProof(ea.customer_review_image, 'Customer Approved Image Proof', ea.staff_name, ea.deliverable_id, ea.updated_at);
+        if (ea.confirmation_proof) addProof(ea.confirmation_proof, 'Confirmation Proof', ea.staff_name, ea.deliverable_id, ea.updated_at);
+        if (ea.customer_communication_proof) addProof(ea.customer_communication_proof, 'Client Communication Proof', ea.staff_name, ea.deliverable_id, ea.updated_at);
+        if (ea.proof_url) addProof(ea.proof_url, 'Editor Deliverable Proof', ea.staff_name, ea.deliverable_id, ea.updated_at);
+        if (ea.proof_image) addProof(ea.proof_image, 'Deliverable Preview', ea.staff_name, ea.deliverable_id, ea.updated_at);
+        if (ea.uploaded_proof) addProof(ea.uploaded_proof, 'Uploaded Proof Document', ea.staff_name, ea.deliverable_id, ea.updated_at);
+        if (ea.edited_drive_link) addProof(ea.edited_drive_link, 'Edited Drive Link', ea.staff_name, ea.deliverable_id, ea.updated_at);
+        if (ea.final_edited_footage_link) addProof(ea.final_edited_footage_link, 'Final Edited Footage Link', ea.staff_name, ea.deliverable_id, ea.updated_at);
       });
 
-      // Check production record
       const prod = activeProductionRecord;
       if (prod) {
-        const prodCandidates = [
-          { url: prod.customer_review_image, caption: 'Customer Approved Image Proof' },
-          { url: prod.confirmation_proof, caption: 'Client Approval Confirmation' },
-          { url: prod.customer_communication_proof, caption: 'Customer Communication Proof' },
-          { url: prod.client_communication_consent_proof, caption: 'Client Acceptance Consent Proof' },
-          { url: prod.proof_url, caption: 'Production Master Proof' }
-        ];
-
-        prodCandidates.forEach(cand => {
-          const resolved = resolveStorageUrl(cand.url);
-          if (resolved && !seenUrls.has(resolved)) {
-            seenUrls.add(resolved);
-            images.push({
-              id: `prod_proof_${images.length}`,
-              url: resolved,
-              caption: cand.caption,
-              staffName: cleanStaffName(prod.editor_assigned || 'Production Staff'),
-              staffRole: 'Production Team',
-              eventName: prod.deliverable_id || 'Production Deliverable',
-              timestamp: prod.updated_at || prod.created_at || timestamp,
-              stageName: 'Production'
-            });
-          }
-        });
+        if (prod.customer_review_image) addProof(prod.customer_review_image, 'Customer Approved Image Proof', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
+        if (prod.confirmation_proof) addProof(prod.confirmation_proof, 'Client Approval Confirmation', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
+        if (prod.customer_communication_proof) addProof(prod.customer_communication_proof, 'Customer Communication Proof', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
+        if (prod.client_communication_consent_proof) addProof(prod.client_communication_consent_proof, 'Client Acceptance Consent Proof', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
+        if (prod.proof_url) addProof(prod.proof_url, 'Production Master Proof', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
+        if (prod.server_link) addProof(prod.server_link, 'Production Server Delivery Link', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
+        if (prod.final_consolidated_drive_link) addProof(prod.final_consolidated_drive_link, 'Final Consolidated Drive Link', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
       }
-
-      return {
-        type: 'proof' as const,
-        stageName: 'Production',
-        images
-      };
     }
 
-    // Default for early stages or non-proof stages
+    const imageItems = items.filter(i => i.type === 'image');
+    const linkItems = items.filter(i => i.type === 'link');
+
     return {
-      type: 'none' as const,
+      type: (imageItems.length > 0 || linkItems.length > 0) ? 'proof' as const : 'none' as const,
       stageName: statusText,
-      images: []
+      images: imageItems,
+      links: linkItems
     };
   };
 
@@ -1149,7 +1008,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     >
       <div 
         id="business_owner_order_history_modal"
-        className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-3xl sm:max-w-4xl shadow-2xl relative flex flex-col max-h-[88vh] overflow-hidden animate-in zoom-in-95 duration-150"
+        className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-4xl sm:max-w-5xl shadow-2xl relative flex flex-col max-h-[88vh] overflow-hidden animate-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         
@@ -1223,7 +1082,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
           {isLoading && filteredStatusHistory.length === 0 ? (
             <div className="py-16 text-center text-zinc-500 text-xs font-mono flex flex-col items-center justify-center gap-2">
               <Loader2 className="w-5 h-5 text-amber-400 animate-spin" />
-              <span>Fetching complete status history and proofs...</span>
+              <span>Fetching complete status history and stage-wise proofs...</span>
             </div>
           ) : filteredStatusHistory.length === 0 ? (
             <div className="py-16 text-center text-zinc-500 text-xs font-mono">
@@ -1234,10 +1093,10 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
               <table className="w-full text-left text-xs font-mono border-collapse">
                 <thead className="bg-zinc-900/90 sticky top-0 z-10 border-b border-zinc-800 text-zinc-400 uppercase tracking-wider text-[11px]">
                   <tr>
-                    <th className="py-2.5 px-3 sm:px-4 font-bold whitespace-nowrap text-left w-[24%]">Date</th>
-                    <th className="py-2.5 px-3 sm:px-4 font-bold whitespace-nowrap text-left w-[28%]">Stage/Status</th>
-                    <th className="py-2.5 px-3 sm:px-4 font-bold whitespace-nowrap text-left w-[24%]">Staff Name</th>
-                    <th className="py-2.5 px-3 sm:px-4 font-bold whitespace-nowrap text-left w-[24%]">Proof</th>
+                    <th className="py-2.5 px-3 sm:px-4 font-bold whitespace-nowrap text-left w-[20%]">Date</th>
+                    <th className="py-2.5 px-3 sm:px-4 font-bold whitespace-nowrap text-left w-[24%]">Stage/Status</th>
+                    <th className="py-2.5 px-3 sm:px-4 font-bold whitespace-nowrap text-left w-[20%]">Staff Name</th>
+                    <th className="py-2.5 px-3 sm:px-4 font-bold whitespace-nowrap text-left w-[36%]">Proof</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-850">
@@ -1256,7 +1115,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                         </td>
 
                         {/* 2. Stage/Status */}
-                        <td className="py-2.5 px-3 sm:px-4 whitespace-nowrap text-amber-400 font-medium">
+                        <td className="py-2.5 px-3 sm:px-4 whitespace-nowrap text-amber-400 font-medium truncate max-w-[200px]" title={item.new_status}>
                           {item.new_status || '—'}
                         </td>
 
@@ -1266,32 +1125,64 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                         </td>
 
                         {/* 4. Proof Column */}
-                        <td className="py-2.5 px-3 sm:px-4 whitespace-nowrap">
+                        <td className="py-2.5 px-3 sm:px-4">
                           {proofData.type === 'checklist' ? (
-                            <button
-                              type="button"
-                              onClick={() => setSelectedChecklist(proofData.checklistData)}
-                              className="px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-purple-950/40 text-purple-300 border border-purple-700/50 hover:bg-purple-900/60 hover:text-purple-200 hover:border-purple-600 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
-                              title="Open and view client acceptance checklist"
-                            >
-                              <ClipboardCheck className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                              <span>View Checklist</span>
-                            </button>
-                          ) : proofData.type === 'proof' && proofData.images.length > 0 ? (
-                            <button
-                              type="button"
-                              onClick={() => setSelectedGallery({ stageName: proofData.stageName, images: proofData.images })}
-                              className="px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 hover:border-amber-500/50 hover:text-amber-300 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
-                              title={`View ${proofData.images.length} proof image${proofData.images.length > 1 ? 's' : ''}`}
-                            >
-                              <Eye className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                              <span>View Proof</span>
-                              {proofData.images.length > 1 && (
-                                <span className="px-1.5 py-0.2 bg-amber-500/25 text-amber-300 rounded-full text-[10px] font-mono font-semibold">
-                                  {proofData.images.length}
-                                </span>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedChecklist((proofData as any).checklistData)}
+                                className="px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-purple-950/40 text-purple-300 border border-purple-700/50 hover:bg-purple-900/60 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                              >
+                                <ClipboardCheck className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                                <span>View Checklist</span>
+                              </button>
+                              {proofData.links.map((lnk, lIdx) => (
+                                <a
+                                  key={lIdx}
+                                  href={lnk.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium bg-sky-950/40 text-sky-300 border border-sky-700/50 hover:bg-sky-900/60 transition-all flex items-center gap-1.5"
+                                  title={lnk.proofName}
+                                >
+                                  <ExternalLink className="w-3 h-3 text-sky-400 shrink-0" />
+                                  <span className="truncate max-w-[120px]">{lnk.proofName}</span>
+                                </a>
+                              ))}
+                            </div>
+                          ) : proofData.type === 'proof' ? (
+                            <div className="flex flex-wrap items-center gap-2">
+                              {proofData.images.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedGallery({ stageName: proofData.stageName, images: proofData.images, links: proofData.links })}
+                                  className="px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                                  title={`View ${proofData.images.length} proof image(s)`}
+                                >
+                                  <Eye className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                  <span>View Proof</span>
+                                  {proofData.images.length > 1 && (
+                                    <span className="px-1.5 py-0.2 bg-amber-500/25 text-amber-300 rounded-full text-[10px] font-mono font-semibold">
+                                      {proofData.images.length}
+                                    </span>
+                                  )}
+                                </button>
                               )}
-                            </button>
+
+                              {proofData.links.map((lnk, lIdx) => (
+                                <a
+                                  key={lIdx}
+                                  href={lnk.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium bg-sky-950/40 text-sky-300 border border-sky-700/50 hover:bg-sky-900/60 transition-all flex items-center gap-1.5"
+                                  title={lnk.proofName}
+                                >
+                                  <ExternalLink className="w-3 h-3 text-sky-400 shrink-0" />
+                                  <span className="truncate max-w-[140px]">{lnk.proofName}</span>
+                                </a>
+                              ))}
+                            </div>
                           ) : (
                             <span className="text-zinc-600 font-mono text-[11px] italic">
                               No Proof Uploaded
@@ -1344,6 +1235,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                   </h4>
                   <span className="px-2 py-0.5 rounded-full text-xs font-mono font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
                     {selectedGallery.images.length} {selectedGallery.images.length === 1 ? 'Photo' : 'Photos'}
+                    {selectedGallery.links.length > 0 && ` • ${selectedGallery.links.length} Link(s)`}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 mt-1 text-xs text-zinc-400 font-mono">
@@ -1366,72 +1258,98 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
               </button>
             </div>
 
-            {/* Gallery Grid */}
-            <div className="p-5 overflow-y-auto flex-1 custom-scrollbar">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {selectedGallery.images.map((img, idx) => {
-                  const dt = parseDateTime(img.timestamp);
-                  return (
-                    <div 
-                      key={img.id || idx}
-                      className="bg-zinc-900/70 border border-zinc-800 hover:border-zinc-700 rounded-xl overflow-hidden transition-all flex flex-col shadow-lg group"
-                    >
-                      {/* Image Preview with click to open full size */}
-                      <div 
-                        onClick={() => setLightboxImageIndex(idx)}
-                        className="relative h-48 bg-zinc-950 overflow-hidden cursor-pointer flex items-center justify-center border-b border-zinc-850"
+            {/* Gallery Grid & Links List */}
+            <div className="p-5 overflow-y-auto flex-1 custom-scrollbar space-y-4">
+              {selectedGallery.links.length > 0 && (
+                <div className="space-y-2 pb-3 border-b border-zinc-855">
+                  <div className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider font-bold">Uploaded Links & Documents</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {selectedGallery.links.map((lnk, lIdx) => (
+                      <a
+                        key={lIdx}
+                        href={lnk.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-3 bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 rounded-xl flex items-center justify-between gap-3 text-xs font-mono text-sky-300 hover:text-sky-200 transition-all"
                       >
-                        <SafeProofImage
-                          url={img.url}
-                          alt={img.caption || 'Stage Proof'}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                          containerClassName="w-full h-full relative"
-                          showExternalLink={false}
-                        />
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 text-white text-xs font-medium backdrop-blur-xs">
-                          <Maximize2 className="w-4 h-4 text-amber-400" />
-                          <span>Click to View Full Size</span>
-                        </div>
-                      </div>
-
-                      {/* Metadata Details */}
-                      <div className="p-3 text-xs space-y-1.5 flex-1 flex flex-col justify-between">
-                        <div>
-                          <div className="font-semibold text-zinc-200 flex items-center justify-between gap-2">
-                            <span className="truncate">{img.caption}</span>
-                            <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-amber-400 border border-zinc-700 shrink-0">
-                              {img.stageName}
-                            </span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <ExternalLink className="w-4 h-4 text-sky-400 shrink-0" />
+                          <div className="min-w-0">
+                            <div className="font-bold truncate text-zinc-200">{lnk.proofName}</div>
+                            <div className="text-[10px] text-zinc-400 truncate">{lnk.uploadedBy}</div>
                           </div>
-                          
-                          {img.eventName && (
-                            <div className="text-zinc-400 text-[11px] truncate mt-0.5">
-                              {img.eventName}
-                            </div>
-                          )}
                         </div>
+                        <span className="px-2 py-1 bg-sky-500/15 text-sky-300 rounded-lg text-[10px] shrink-0 font-bold">Open Link ↗</span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-                        <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[11px] font-mono text-zinc-400">
-                          <div className="flex items-center gap-1.5 truncate">
-                            <User className="w-3 h-3 text-zinc-500 shrink-0" />
-                            <span className="text-zinc-300 truncate">{img.staffName}</span>
-                            {img.staffRole && (
-                              <span className="text-zinc-500 text-[10px]">({img.staffRole})</span>
-                            )}
+              {selectedGallery.images.length > 0 && (
+                <div>
+                  <div className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider font-bold mb-3">Uploaded Image Proofs</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {selectedGallery.images.map((img, idx) => {
+                      const dt = parseDateTime(img.timestamp);
+                      return (
+                        <div 
+                          key={img.id || idx}
+                          className="bg-zinc-900/70 border border-zinc-800 hover:border-zinc-700 rounded-xl overflow-hidden transition-all flex flex-col shadow-lg group"
+                        >
+                          <div 
+                            onClick={() => setLightboxImageIndex(idx)}
+                            className="relative h-48 bg-zinc-950 overflow-hidden cursor-pointer flex items-center justify-center border-b border-zinc-850"
+                          >
+                            <SafeProofImage
+                              url={img.url}
+                              alt={img.proofName || 'Stage Proof'}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              containerClassName="w-full h-full relative"
+                              showExternalLink={false}
+                            />
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 text-white text-xs font-medium backdrop-blur-xs">
+                              <Maximize2 className="w-4 h-4 text-amber-400" />
+                              <span>Click to View Full Size</span>
+                            </div>
                           </div>
 
-                          {dt.date !== '—' && (
-                            <div className="flex items-center gap-1 text-zinc-500 shrink-0">
-                              <Calendar className="w-3 h-3" />
-                              <span>{dt.date}</span>
+                          <div className="p-3 text-xs space-y-1.5 flex-1 flex flex-col justify-between">
+                            <div>
+                              <div className="font-semibold text-zinc-200 flex items-center justify-between gap-2">
+                                <span className="truncate" title={img.proofName}>{img.proofName}</span>
+                                <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-amber-400 border border-zinc-700 shrink-0">
+                                  {img.stageName}
+                                </span>
+                              </div>
+                              
+                              {img.eventName && (
+                                <div className="text-zinc-400 text-[11px] truncate mt-0.5" title={img.eventName}>
+                                  Event: {img.eventName}
+                                </div>
+                              )}
                             </div>
-                          )}
+
+                            <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[11px] font-mono text-zinc-400">
+                              <div className="flex items-center gap-1.5 truncate">
+                                <User className="w-3 h-3 text-zinc-500 shrink-0" />
+                                <span className="text-zinc-300 truncate">{img.uploadedBy}</span>
+                              </div>
+
+                              {dt.date !== '—' && (
+                                <div className="flex items-center gap-1 text-zinc-500 shrink-0">
+                                  <Calendar className="w-3 h-3" />
+                                  <span>{dt.date}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Footer */}
@@ -1449,22 +1367,21 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       )}
 
       {/* POPUP 2: FULL-SCREEN LIGHTBOX MODAL */}
-      {lightboxImageIndex !== null && selectedGallery && (
+      {lightboxImageIndex !== null && selectedGallery && selectedGallery.images[lightboxImageIndex] && (
         <div 
           className="fixed inset-0 bg-black/95 backdrop-blur-lg z-[2000100] flex flex-col items-center justify-between p-4 sm:p-6 animate-in fade-in duration-150"
           onClick={() => setLightboxImageIndex(null)}
         >
-          {/* Lightbox Topbar */}
           <div 
             className="w-full max-w-5xl flex items-center justify-between text-white shrink-0 py-2"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="min-w-0">
               <h5 className="font-bold text-sm sm:text-base text-zinc-200 truncate">
-                {selectedGallery.images[lightboxImageIndex]?.caption || 'Proof Image'}
+                {selectedGallery.images[lightboxImageIndex]?.proofName || 'Proof Image'}
               </h5>
               <div className="text-xs font-mono text-zinc-400 flex items-center gap-2 mt-0.5">
-                <span>By: <strong className="text-zinc-300">{selectedGallery.images[lightboxImageIndex]?.staffName}</strong></span>
+                <span>Uploaded By: <strong className="text-zinc-300">{selectedGallery.images[lightboxImageIndex]?.uploadedBy}</strong></span>
                 <span className="text-zinc-600">·</span>
                 <span>{lightboxImageIndex + 1} of {selectedGallery.images.length}</span>
               </div>
@@ -1494,12 +1411,10 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
             </div>
           </div>
 
-          {/* Lightbox Main Image & Nav */}
           <div 
             className="relative flex-1 w-full flex items-center justify-center p-2 sm:p-4 min-h-0 overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Prev Button */}
             {selectedGallery.images.length > 1 && (
               <button
                 type="button"
@@ -1511,16 +1426,14 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
               </button>
             )}
 
-            {/* Main Preview */}
             <div className="max-h-full max-w-full flex items-center justify-center rounded-xl overflow-hidden shadow-2xl">
               <img
                 src={selectedGallery.images[lightboxImageIndex]?.url}
-                alt={selectedGallery.images[lightboxImageIndex]?.caption || 'Full size proof'}
+                alt={selectedGallery.images[lightboxImageIndex]?.proofName || 'Full size proof'}
                 className="max-h-[75vh] max-w-[85vw] object-contain rounded-xl border border-zinc-800 shadow-2xl"
               />
             </div>
 
-            {/* Next Button */}
             {selectedGallery.images.length > 1 && (
               <button
                 type="button"
@@ -1533,7 +1446,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
             )}
           </div>
 
-          {/* Lightbox Bottom caption bar */}
           <div 
             className="w-full max-w-3xl text-center text-xs font-mono text-zinc-400 shrink-0 py-2 border-t border-zinc-850"
             onClick={(e) => e.stopPropagation()}
@@ -1726,11 +1638,14 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                           stageName: 'Client Acceptance Consent',
                           images: [{
                             id: 'ca_consent_proof',
+                            type: 'image',
                             url: selectedChecklist.consentProofUrl!,
-                            caption: 'Customer Consent & Final Approval Proof',
-                            staffName: 'Client Acceptance',
+                            rawUrl: selectedChecklist.consentProofUrl!,
+                            proofName: 'Customer Consent & Final Approval Proof',
+                            uploadedBy: 'Client Acceptance',
                             stageName: 'Client Acceptance'
-                          }]
+                          }],
+                          links: []
                         });
                         setLightboxImageIndex(0);
                       }}
