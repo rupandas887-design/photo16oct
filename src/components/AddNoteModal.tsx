@@ -21,14 +21,25 @@ interface AddNoteModalProps {
   leadId: string;
   orderId?: string;
   customerName: string;
+  initialMode?: 'view' | 'add' | 'all';
 }
 
-export const AddNoteModal: React.FC<AddNoteModalProps> = ({ isOpen, onClose, leadId, orderId, customerName }) => {
+export const AddNoteModal: React.FC<AddNoteModalProps> = ({ 
+  isOpen, 
+  onClose, 
+  leadId, 
+  orderId, 
+  customerName,
+  initialMode = 'add'
+}) => {
   const { currentRole, currentUser, staff, productionStaff } = useRole();
   const [note, setNote] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [history, setHistory] = useState<NoteHistory[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'view' | 'add' | 'all'>(initialMode || 'add');
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const historyRef = React.useRef<HTMLDivElement>(null);
 
   // Compute author name
   let resolvedName = currentUser?.name;
@@ -44,6 +55,17 @@ export const AddNoteModal: React.FC<AddNoteModalProps> = ({ isOpen, onClose, lea
     if (isOpen) {
       setNote('');
       fetchHistory();
+      setActiveTab(initialMode || 'add');
+      
+      if (initialMode === 'add') {
+        setTimeout(() => {
+          textareaRef.current?.focus();
+        }, 120);
+      } else if (initialMode === 'view') {
+        setTimeout(() => {
+          historyRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 120);
+      }
       
       // Prevent background scrolling while modal is open
       const originalOverflow = document.body.style.overflow;
@@ -52,7 +74,7 @@ export const AddNoteModal: React.FC<AddNoteModalProps> = ({ isOpen, onClose, lea
         document.body.style.overflow = originalOverflow;
       };
     }
-  }, [isOpen, leadId, orderId]);
+  }, [isOpen, leadId, orderId, initialMode]);
 
   // Handle ESC key to close modal
   useEffect(() => {
@@ -74,12 +96,13 @@ export const AddNoteModal: React.FC<AddNoteModalProps> = ({ isOpen, onClose, lea
         .select('*')
         .eq('new_status', 'NOTE');
 
-      // Filter notes strictly to this specific order (or the lead generally if no order exists)
-      query = query.eq('lead_id', leadId);
-      if (orderId) {
-        query = query.or(`order_id.eq.${orderId},order_id.is.null`);
-      } else {
-        query = query.is('order_id', null);
+      // Filter notes strictly to this specific order or lead
+      if (leadId && orderId) {
+        query = query.or(`lead_id.eq.${leadId},order_id.eq.${orderId}`);
+      } else if (leadId) {
+        query = query.eq('lead_id', leadId);
+      } else if (orderId) {
+        query = query.eq('order_id', orderId);
       }
 
       const { data, error } = await query.order('created_at', { ascending: false });
@@ -104,13 +127,14 @@ export const AddNoteModal: React.FC<AddNoteModalProps> = ({ isOpen, onClose, lea
         old_status: 'NOTE',
         new_status: 'NOTE',
         changed_by: authorName,
-        changed_by_role: currentRole,
+        changed_by_role: currentRole || 'Business Owner',
         remarks: note.trim()
       }).select().single();
 
       if (!error && data) {
         setNote('');
         setHistory(prev => [data, ...prev]);
+        setActiveTab('view');
       }
     } catch (e) {
       console.error(e);
@@ -141,27 +165,75 @@ export const AddNoteModal: React.FC<AddNoteModalProps> = ({ isOpen, onClose, lea
         style={{ maxHeight: 'min(90vh, 90dvh)' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-3.5 sm:p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/90 shrink-0 sticky top-0 z-10">
+        <div className="p-3.5 sm:p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/90 shrink-0 sticky top-0 z-10 gap-3">
           <div className="min-w-0 pr-2">
             <h3 className="text-sm font-bold text-white uppercase font-mono tracking-wider flex items-center gap-2 truncate">
-              <FileText className="w-4 h-4 text-amber-500 shrink-0" />
-              <span>Add Note</span>
+              {activeTab === 'view' ? (
+                <>
+                  <FileText className="w-4 h-4 text-sky-400 shrink-0" />
+                  <span>View Notes</span>
+                </>
+              ) : (
+                <>
+                  <FileText className="w-4 h-4 text-amber-500 shrink-0" />
+                  <span>Add Note</span>
+                </>
+              )}
             </h3>
             <p className="text-[11px] text-zinc-400 mt-0.5 truncate">For {customerName} {orderId ? `(${orderId})` : `(${leadId})`}</p>
           </div>
-          <button 
-            type="button"
-            onClick={onClose} 
-            className="p-1.5 hover:bg-zinc-800 rounded-lg transition-colors text-zinc-400 hover:text-white shrink-0 cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center bg-zinc-950 border border-zinc-800 rounded-lg p-0.5 text-xs font-mono">
+              <button
+                type="button"
+                onClick={() => setActiveTab('view')}
+                className={`px-2.5 py-1 rounded-md transition-colors font-bold cursor-pointer flex items-center gap-1 ${
+                  activeTab === 'view' ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40' : 'text-zinc-400 hover:text-white'
+                }`}
+                title="View Note History"
+              >
+                <span>History ({history.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('add');
+                  setTimeout(() => textareaRef.current?.focus(), 80);
+                }}
+                className={`px-2.5 py-1 rounded-md transition-colors font-bold cursor-pointer flex items-center gap-1 ${
+                  activeTab === 'add' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40' : 'text-zinc-400 hover:text-white'
+                }`}
+                title="Add New Note"
+              >
+                <span>+ Add Note</span>
+              </button>
+            </div>
+            <button 
+              type="button"
+              onClick={onClose} 
+              className="p-1.5 hover:bg-zinc-800 rounded-lg transition-colors text-zinc-400 hover:text-white shrink-0 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         <div className="p-3.5 sm:p-4 flex flex-col gap-4 overflow-y-auto custom-scrollbar flex-1 min-h-0">
           {/* Add Note Section */}
-          <div className="space-y-2 shrink-0">
-            <label className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block">New Note</label>
+          <div className={`space-y-2 shrink-0 ${activeTab === 'view' && history.length > 0 ? 'bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-3' : ''}`}>
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block">New Note</label>
+              {activeTab === 'view' && (
+                <span className="text-[10px] text-amber-400/80 font-mono">Quick Add</span>
+              )}
+            </div>
+            <textarea
+              ref={textareaRef}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Enter note..."
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-amber-500/50 min-h-[85px] sm:min-h-[100px] resize-y"
+            />
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}

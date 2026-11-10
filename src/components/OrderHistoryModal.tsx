@@ -334,15 +334,42 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     const fetchHistoryAndProofs = async () => {
       setIsLoading(true);
       try {
-        const orConditionsLeadAndOrder = allMatchingIds
+        // Collect comprehensive set of IDs (resolve missing order_id <-> lead_id cross-references from DB)
+        const resolvedIds = new Set<string>(allMatchingIds);
+
+        if (primaryOrderId && !primaryLeadId) {
+          const { data: ordRow } = await supabaseClient
+            .from('orders')
+            .select('lead_id')
+            .eq('order_id', primaryOrderId)
+            .maybeSingle();
+          if (ordRow?.lead_id) {
+            const cleanLead = sanitizeId(ordRow.lead_id);
+            if (cleanLead) resolvedIds.add(cleanLead);
+          }
+        } else if (primaryLeadId && !primaryOrderId) {
+          const { data: ldRow } = await supabaseClient
+            .from('leads')
+            .select('order_id')
+            .eq('lead_id', primaryLeadId)
+            .maybeSingle();
+          if (ldRow?.order_id) {
+            const cleanOrd = sanitizeId(ldRow.order_id);
+            if (cleanOrd) resolvedIds.add(cleanOrd);
+          }
+        }
+
+        const idsArray = Array.from(resolvedIds);
+
+        const orConditionsLeadAndOrder = idsArray
           .flatMap(id => [`order_id.eq.${id}`, `lead_id.eq.${id}`])
           .join(',');
 
-        const orConditionsOrderOnly = allMatchingIds
+        const orConditionsOrderOnly = idsArray
           .map(id => `order_id.eq.${id}`)
           .join(',');
 
-        // 1. Fetch Status History
+        // 1. Fetch Status History (Chronological by created_at)
         if (orConditionsLeadAndOrder) {
           const { data: histData } = await supabaseClient
             .from('lead_status_history')
@@ -441,9 +468,9 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, allMatchingIds]);
+  }, [isOpen, allMatchingIds, primaryOrderId, primaryLeadId]);
 
-  // Combine database records with fallback/in-memory records to guarantee full stage progression
+  // Build authentic chronological workflow stages strictly from actual database activity records
   const fullStatusHistory = useMemo<StatusHistoryItem[]>(() => {
     if (!isOpen || !order) return [];
 
@@ -455,11 +482,12 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     });
 
     const combinedRaw = [...dbHistory];
-    const seenIds = new Set<string>(dbHistory.map(r => String(r.id || '')));
+    const seenDbIds = new Set<string>(dbHistory.map(r => String(r.id || '')));
+
     inMemoryStatusHistory.forEach((r: any) => {
       const idKey = r.id ? String(r.id) : `${r.created_at || r.timestamp}_${r.new_status}`;
-      if (!seenIds.has(idKey)) {
-        seenIds.add(idKey);
+      if (!seenDbIds.has(idKey)) {
+        seenDbIds.add(idKey);
         combinedRaw.push(r);
       }
     });
@@ -469,8 +497,8 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       if (recId && allMatchingIds.some(id => id.toLowerCase() === recId.toLowerCase())) {
         if (lg.new_stage && typeof lg.new_stage === 'string' && lg.new_stage.trim()) {
           const idKey = `log_${lg.id || lg.timestamp}_${lg.new_stage}`;
-          if (!seenIds.has(idKey)) {
-            seenIds.add(idKey);
+          if (!seenDbIds.has(idKey)) {
+            seenDbIds.add(idKey);
             combinedRaw.push({
               id: idKey,
               created_at: lg.timestamp,
@@ -482,13 +510,14 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     });
 
-    const cleanDbList: StatusHistoryItem[] = [];
+    const rawHistoryItems: StatusHistoryItem[] = [];
     for (const r of combinedRaw) {
       const statusText = (r.new_status || r.status || '').trim();
+      // Exclude NOTE records (notes belong in the Notes popup)
       if (!statusText || statusText.toUpperCase() === 'NOTE') continue;
 
-      cleanDbList.push({
-        id: r.id ? String(r.id) : `hist_${cleanDbList.length}`,
+      rawHistoryItems.push({
+        id: r.id ? String(r.id) : `hist_${rawHistoryItems.length}`,
         created_at: r.created_at || r.timestamp || new Date().toISOString(),
         new_status: statusText,
         changed_by: cleanStaffName(r.changed_by || r.staff_name || r.created_by),
@@ -496,7 +525,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       });
     }
 
-    // Guarantee initial lead date & stages
+    // Include initial lead creation stage if not already in the history
     const initialLeadDate = matchedLead?.created_at || matchedLead?.created_date || matchedOrder?.created_at;
     const initialSalesPerson = cleanStaffName(
       matchedLead?.sales_person || 
@@ -516,13 +545,13 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     }
 
-    const hasInitialStatus = cleanDbList.some(item => {
+    const hasInitialStatus = rawHistoryItems.some(item => {
       const st = item.new_status.toLowerCase();
       return st === initialStatus.toLowerCase() || st === 'new lead' || st === 'create quote' || st === 'new';
     });
 
     if (!hasInitialStatus && initialLeadDate) {
-      cleanDbList.push({
+      rawHistoryItems.push({
         id: `initial_lead_${primaryLeadId || primaryOrderId}`,
         created_at: initialLeadDate,
         new_status: initialStatus,
@@ -531,15 +560,16 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       });
     }
 
+    // Include Order Confirmed if order exists but wasn't logged in lead_status_history
     if (matchedOrder && matchedOrder.order_id) {
-      const hasOrderConfirmed = cleanDbList.some(item => {
+      const hasOrderConfirmed = rawHistoryItems.some(item => {
         const st = item.new_status.toLowerCase();
         return st.includes('confirm') || st === 'order confirmed';
       });
 
       if (!hasOrderConfirmed) {
         const orderDate = matchedOrder.created_at || matchedOrder.order_date || initialLeadDate || new Date().toISOString();
-        cleanDbList.push({
+        rawHistoryItems.push({
           id: `ord_confirm_${primaryOrderId}`,
           created_at: orderDate,
           new_status: 'Order Confirmed',
@@ -549,111 +579,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     }
 
-    if (matchedOp || (matchedOrder && matchedOrder.assigned_crew && matchedOrder.assigned_crew !== 'Unassigned')) {
-      const hasAssignedCrew = cleanDbList.some(item => {
-        const st = item.new_status.toLowerCase();
-        return st.includes('assigned crew') || st.includes('event scheduled') || st.includes('operation assigned');
-      });
-
-      if (!hasAssignedCrew) {
-        const opTime = matchedOp?.created_at || matchedOrder?.created_at || new Date().toISOString();
-        cleanDbList.push({
-          id: `ops_assign_${primaryOrderId}`,
-          created_at: opTime,
-          new_status: 'Assigned Crew',
-          changed_by: cleanStaffName(matchedOp?.photographer_assigned || 'Operations Team'),
-          timestamp: opTime
-        });
-      }
-
-      const opStatus = (matchedOp?.event_status || matchedOrder?.current_stage || '').toLowerCase();
-      const hasEventEnded = cleanDbList.some(item => item.new_status.toLowerCase().includes('event end'));
-      if (!hasEventEnded && (opStatus.includes('event end') || opStatus.includes('completed') || order?.event_end_status)) {
-        const eventDate = matchedOrder?.event_date || matchedOp?.event_date || new Date().toISOString();
-        cleanDbList.push({
-          id: `ops_event_end_${primaryOrderId}`,
-          created_at: eventDate,
-          new_status: 'Event Ended',
-          changed_by: cleanStaffName(matchedOp?.photographer_assigned || 'Operations Team'),
-          timestamp: eventDate
-        });
-      }
-
-      const hasVerifiedFootage = cleanDbList.some(item => item.new_status.toLowerCase().includes('verified footage'));
-      if (!hasVerifiedFootage && (opStatus.includes('footage') || matchedProd || opStatus.includes('production') || opStatus.includes('closed'))) {
-        const footageTime = matchedOrder?.updated_at || matchedProd?.created_at || new Date().toISOString();
-        cleanDbList.push({
-          id: `ops_verified_footage_${primaryOrderId}`,
-          created_at: footageTime,
-          new_status: 'Verified Footage',
-          changed_by: 'Operations Team',
-          timestamp: footageTime
-        });
-      }
-    }
-
-    if (matchedProd) {
-      const prodEditingStatus = (matchedProd.editing_status || matchedProd.production_status || '').trim();
-
-      if (matchedProd.editor_assigned && matchedProd.editor_assigned !== 'Unassigned') {
-        const hasEditorAssigned = cleanDbList.some(item => item.new_status.toLowerCase().includes('editor'));
-        if (!hasEditorAssigned) {
-          const editorTime = matchedProd.created_at || new Date().toISOString();
-          cleanDbList.push({
-            id: `prod_editor_${primaryOrderId}`,
-            created_at: editorTime,
-            new_status: 'Assigned Editor',
-            changed_by: cleanStaffName(matchedProd.editor_assigned),
-            timestamp: editorTime
-          });
-        }
-      }
-
-      const hasEditingStarted = cleanDbList.some(item => item.new_status.toLowerCase().includes('editing'));
-      if (!hasEditingStarted && prodEditingStatus) {
-        const editTime = matchedProd.created_at || matchedProd.updated_at || new Date().toISOString();
-        cleanDbList.push({
-          id: `prod_editing_start_${primaryOrderId}`,
-          created_at: editTime,
-          new_status: prodEditingStatus.includes('Started') ? 'Editing Started' : 'Editing In Progress',
-          changed_by: cleanStaffName(matchedProd.editor_assigned || 'Production Staff'),
-          timestamp: editTime
-        });
-      }
-
-      const hasClientAcceptance = cleanDbList.some(item => item.new_status.toLowerCase().includes('acceptance') || item.new_status.toLowerCase().includes('accepted'));
-      if (!hasClientAcceptance && (prodEditingStatus.toLowerCase().includes('acceptance') || prodEditingStatus.toLowerCase().includes('accepted') || (matchedProd as any).client_acceptance)) {
-        const acceptTime = matchedProd.updated_at || new Date().toISOString();
-        cleanDbList.push({
-          id: `prod_acceptance_${primaryOrderId}`,
-          created_at: acceptTime,
-          new_status: 'Client Accepted',
-          changed_by: 'Production Team',
-          timestamp: acceptTime
-        });
-      }
-    }
-
-    const isOrderClosed = 
-      (matchedOrder?.current_stage || '').toLowerCase().includes('closed') ||
-      (matchedOrder?.order_status || '').toLowerCase().includes('closed') ||
-      (matchedProd?.editing_status || '').toLowerCase().includes('closed') ||
-      order?.isClosed === true;
-
-    if (isOrderClosed) {
-      const hasClosed = cleanDbList.some(item => item.new_status.toLowerCase().includes('closed'));
-      if (!hasClosed) {
-        const closedTime = matchedOrder?.updated_at || matchedProd?.updated_at || new Date().toISOString();
-        cleanDbList.push({
-          id: `order_closed_${primaryOrderId}`,
-          created_at: closedTime,
-          new_status: 'Order Closed',
-          changed_by: 'Business Owner',
-          timestamp: closedTime
-        });
-      }
-    }
-
+    // Include current active status if not already logged (e.g. recent status transition)
     const currentActiveStatus = 
       order?.prod_status || 
       order?.event_end_status || 
@@ -669,10 +595,10 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
 
     if (currentActiveStatus && typeof currentActiveStatus === 'string' && currentActiveStatus.trim()) {
       const normalizedCurrent = currentActiveStatus.trim();
-      const hasCurrent = cleanDbList.some(item => item.new_status.toLowerCase() === normalizedCurrent.toLowerCase());
+      const hasCurrent = rawHistoryItems.some(item => item.new_status.toLowerCase() === normalizedCurrent.toLowerCase());
       if (!hasCurrent) {
         const latestTime = matchedOrder?.updated_at || matchedLead?.updated_at || matchedProd?.updated_at || new Date().toISOString();
-        cleanDbList.push({
+        rawHistoryItems.push({
           id: `current_stage_${primaryOrderId || primaryLeadId}`,
           created_at: latestTime,
           new_status: normalizedCurrent,
@@ -682,28 +608,41 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     }
 
-    cleanDbList.sort((a, b) => {
-      const rankA = getStageWorkflowRank(a.new_status);
-      const rankB = getStageWorkflowRank(b.new_status);
-      
-      if (rankA !== rankB) {
-        return rankA - rankB;
-      }
-
+    // 1. Sort strictly in true chronological workflow sequence by timestamp
+    rawHistoryItems.sort((a, b) => {
       const timeA = new Date(a.created_at || a.timestamp || 0).getTime() || 0;
       const timeB = new Date(b.created_at || b.timestamp || 0).getTime() || 0;
-      return timeA - timeB;
+      
+      if (timeA !== timeB) {
+        return timeA - timeB;
+      }
+
+      // Tie-breaker for identical millisecond: logical workflow progression rank
+      return getStageWorkflowRank(a.new_status) - getStageWorkflowRank(b.new_status);
     });
 
+    // 2. Cleanly deduplicate rapid consecutive duplicate status logs
+    // (e.g. multiple events logged within seconds from both CRM and dashboard)
     const deduplicatedList: StatusHistoryItem[] = [];
-    for (const item of cleanDbList) {
+    for (const item of rawHistoryItems) {
       const prev = deduplicatedList[deduplicatedList.length - 1];
       if (prev && prev.new_status.toLowerCase().trim() === item.new_status.toLowerCase().trim()) {
-        continue;
+        const timeDiff = Math.abs(
+          (new Date(item.created_at || item.timestamp).getTime() || 0) -
+          (new Date(prev.created_at || prev.timestamp).getTime() || 0)
+        );
+        // If consecutive with same status within 5 minutes or same author, merge and keep the best staff name
+        if (timeDiff < 300000 || prev.changed_by === item.changed_by || prev.changed_by === 'System') {
+          if (prev.changed_by === 'System' && item.changed_by !== 'System') {
+            prev.changed_by = item.changed_by;
+          }
+          continue;
+        }
       }
       deduplicatedList.push(item);
     }
 
+    // 3. User sort order toggle (default asc: oldest first, workflow progression)
     if (sortOrder === 'desc') {
       deduplicatedList.reverse();
     }
@@ -718,10 +657,8 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     matchedOrder,
     matchedLead,
     matchedProd,
-    matchedOp,
     primaryOrderId,
     primaryLeadId,
-    primaryProdId,
     allMatchingIds,
     sortOrder
   ]);
@@ -767,10 +704,10 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
   }, [dbClientAcceptanceVerifs]);
 
   /**
-   * Stage-Wise Proof Matcher (Operations & Production Stages)
-   * Extracts accurate Proof Name, Uploaded By, and File Type (Image vs Link).
+   * Stage-Wise Proof Matcher (Sales, Operations, Editing, Customer Review, Production)
+   * Connects each stage strictly to its original workflow activity and uploaded proofs.
    */
-  const getStageProofData = (statusText: string, timestamp?: string) => {
+  const getStageProofData = (statusText: string, timestamp?: string, rawHistoryItem?: any) => {
     const s = (statusText || '').trim().toLowerCase();
     const items: ProofItem[] = [];
     const seenUrls = new Set<string>();
@@ -798,10 +735,169 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       }
     };
 
-    // 1. ASSIGNED CREW / OPERATIONS ASSIGNED
-    if (s.includes('assigned crew') || s.includes('operation assigned') || s.includes('scheduled')) {
+    // 0. Direct proof_url on the history item itself if present
+    if (rawHistoryItem && rawHistoryItem.proof_url) {
+      addProof(rawHistoryItem.proof_url, `${statusText} Proof`, rawHistoryItem.changed_by, undefined, rawHistoryItem.created_at);
+    }
+
+    // 1. EVENT STARTED (Event Start Photos from crew & gear check)
+    if (s.includes('event start') || s.includes('event started') || s.includes('started event')) {
       allStaffAssignments.forEach(sa => {
-        if (sa.raw_footage_link) addProof(sa.raw_footage_link, 'Raw Footage / Schedule Link', sa.staff_name, sa.event_name, sa.created_at);
+        if (sa.event_start_photo) {
+          addProof(
+            sa.event_start_photo, 
+            `Event Start Photo Proof${sa.event_name ? ` (${sa.event_name})` : ''}`, 
+            sa.staff_name, 
+            sa.event_name, 
+            sa.event_start_time || sa.created_at
+          );
+        }
+      });
+      dbEquipmentHistory.forEach(eq => {
+        const eqStatus = (eq.equipment_status || '').toLowerCase();
+        const proofType = (eq.proof_type || '').toLowerCase();
+        if (eqStatus.includes('start') || proofType.includes('start')) {
+          if (eq.photo_url) {
+            addProof(
+              eq.photo_url, 
+              `Event Start Gear Verification (${eq.equipment_name || 'Equipment'})${eq.event_name ? ` - ${eq.event_name}` : ''}`, 
+              eq.returned_by || eq.assigned_to_name || 'Operations Staff', 
+              eq.event_name, 
+              eq.created_at
+            );
+          }
+          if (eq.remarks && typeof eq.remarks === 'string' && eq.remarks.trim().startsWith('{')) {
+            try {
+              const parsed = JSON.parse(eq.remarks);
+              if (parsed.photo_url) {
+                addProof(parsed.photo_url, `Event Start Photo Proof${parsed.event_name ? ` (${parsed.event_name})` : ''}`, parsed.staff_name || parsed.uploaded_by || 'Operations Staff', parsed.event_name, parsed.uploaded_at);
+              }
+            } catch (_) {}
+          }
+        }
+      });
+    }
+
+    // 2. EVENT ENDED / EVENT COMPLETED (Event End Photos & Gear Return Proofs)
+    else if (s.includes('event end') || s.includes('event ended') || s.includes('event complete') || s.includes('event completed')) {
+      allStaffAssignments.forEach(sa => {
+        if (sa.event_end_photo) {
+          addProof(
+            sa.event_end_photo, 
+            `Event End Photo Proof${sa.event_name ? ` (${sa.event_name})` : ''}`, 
+            sa.staff_name, 
+            sa.event_name, 
+            sa.event_end_time || sa.updated_at
+          );
+        }
+      });
+      dbEquipmentHistory.forEach(eq => {
+        const eqStatus = (eq.equipment_status || '').toLowerCase();
+        const proofType = (eq.proof_type || '').toLowerCase();
+        if (eqStatus.includes('end') || eqStatus.includes('complete') || proofType.includes('end') || proofType.includes('complete')) {
+          if (eq.photo_url) {
+            addProof(
+              eq.photo_url, 
+              `Event End Photo Proof (${eq.equipment_name || 'Equipment'})${eq.event_name ? ` - ${eq.event_name}` : ''}`, 
+              eq.returned_by || eq.assigned_to_name || 'Operations Staff', 
+              eq.event_name, 
+              eq.created_at || eq.returned_at
+            );
+          }
+          if (eq.remarks && typeof eq.remarks === 'string' && eq.remarks.trim().startsWith('{')) {
+            try {
+              const parsed = JSON.parse(eq.remarks);
+              if (parsed.photo_url) {
+                addProof(parsed.photo_url, `Event End Photo Proof${parsed.event_name ? ` (${parsed.event_name})` : ''}`, parsed.staff_name || parsed.uploaded_by || 'Operations Staff', parsed.event_name, parsed.uploaded_at);
+              }
+            } catch (_) {}
+          }
+        }
+      });
+    }
+
+    // 3. FOOTAGE HANDOVER / EQUIPMENT HANDOVER
+    else if (s.includes('footage handover') || s.includes('raw footage') || s.includes('equipment handover') || s.includes('asset collection')) {
+      allStaffAssignments.forEach(sa => {
+        if (sa.equipment_handover_photo) {
+          addProof(
+            sa.equipment_handover_photo, 
+            `Equipment Handover Proof${sa.event_name ? ` (${sa.event_name})` : ''}`, 
+            sa.equipment_handover_to || sa.staff_name, 
+            sa.event_name, 
+            sa.updated_at
+          );
+        }
+        if (sa.equipment_received_photo) {
+          addProof(
+            sa.equipment_received_photo, 
+            `Asset Collection Proof${sa.event_name ? ` (${sa.event_name})` : ''}`, 
+            sa.staff_name, 
+            sa.event_name, 
+            sa.updated_at
+          );
+        }
+        if (sa.raw_footage_link) {
+          addProof(
+            sa.raw_footage_link, 
+            `Raw Footage Link${sa.event_name ? ` (${sa.event_name})` : ''}`, 
+            sa.staff_name, 
+            sa.event_name, 
+            sa.updated_at
+          );
+        }
+      });
+      dbEquipmentHistory.forEach(eq => {
+        const eqStatus = (eq.equipment_status || '').toLowerCase();
+        const proofType = (eq.proof_type || '').toLowerCase();
+        if (eqStatus.includes('handover') || eqStatus.includes('return') || proofType.includes('handover')) {
+          if (eq.photo_url) {
+            addProof(
+              eq.photo_url, 
+              `Handover Return Proof (${eq.equipment_name || 'Equipment'})${eq.event_name ? ` - ${eq.event_name}` : ''}`, 
+              eq.returned_by || 'Operations Staff', 
+              eq.event_name, 
+              eq.returned_at || eq.created_at
+            );
+          }
+          if (eq.remarks && typeof eq.remarks === 'string' && eq.remarks.trim().startsWith('{')) {
+            try {
+              const parsed = JSON.parse(eq.remarks);
+              if (parsed.photo_url) {
+                addProof(parsed.photo_url, `Handover Proof (${parsed.proof_type || 'Gear'})${parsed.event_name ? ` - ${parsed.event_name}` : ''}`, parsed.staff_name || parsed.uploaded_by || 'Operations Staff', parsed.event_name, parsed.uploaded_at);
+              }
+              if (parsed.raw_footage_link) {
+                addProof(parsed.raw_footage_link, `Raw Footage Link${parsed.event_name ? ` (${parsed.event_name})` : ''}`, parsed.staff_name || parsed.uploaded_by || 'Operations Staff', parsed.event_name, parsed.uploaded_at);
+              }
+            } catch (_) {}
+          }
+        }
+      });
+      dbRawFootage.forEach(rf => {
+        if (rf.drive_link) addProof(rf.drive_link, `Raw Footage Drive Link${rf.event_name ? ` (${rf.event_name})` : ''}`, rf.uploaded_by || 'Operations Staff', rf.event_name, rf.created_at);
+        if (rf.server_path) addProof(rf.server_path, `Raw Footage Server Link${rf.event_name ? ` (${rf.event_name})` : ''}`, rf.uploaded_by || 'Operations Staff', rf.event_name, rf.created_at);
+      });
+    }
+
+    // 4. VERIFIED FOOTAGE (Consolidated Master Drive & Server Links)
+    else if (s.includes('verified footage') || s.includes('footage handover verified')) {
+      const prod = activeProductionRecord;
+      if (prod) {
+        if (prod.final_consolidated_drive_link) {
+          addProof(prod.final_consolidated_drive_link, 'Consolidated Raw Footage Drive Link', prod.editor_assigned || 'Operations Team', undefined, prod.updated_at);
+        }
+        if (prod.server_link) {
+          addProof(prod.server_link, 'Production Server Footage Link', prod.editor_assigned || 'Operations Team', undefined, prod.updated_at);
+        }
+      }
+      dbRawFootage.forEach(rf => {
+        if (rf.drive_link) addProof(rf.drive_link, `Raw Footage Drive Link${rf.event_name ? ` (${rf.event_name})` : ''}`, rf.uploaded_by || 'Operations Staff', rf.event_name, rf.created_at);
+      });
+    }
+
+    // 5. ASSIGNED CREW / OPERATIONS ASSIGNED
+    else if (s.includes('assigned crew') || s.includes('operation assigned') || s.includes('scheduled')) {
+      allStaffAssignments.forEach(sa => {
         if (sa.equipment_details && Array.isArray(sa.equipment_details)) {
           sa.equipment_details.forEach((eq: any) => {
             if (eq?.photo_url) addProof(eq.photo_url, `Equipment Proof (${eq.name || 'Gear'})`, sa.staff_name, sa.event_name, sa.created_at);
@@ -810,65 +906,136 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       });
     }
 
-    // 2. EVENT STARTED
-    if (s.includes('event start') || s.includes('event started') || s.includes('started event')) {
-      allStaffAssignments.forEach(sa => {
-        if (sa.event_start_photo) addProof(sa.event_start_photo, 'Event Start Photo Proof', sa.staff_name, sa.event_name, sa.event_start_time || sa.created_at);
-      });
-      dbEquipmentHistory.forEach(eq => {
-        if ((eq.equipment_status || '').toLowerCase().includes('start') && eq.photo_url) {
-          addProof(eq.photo_url, `Gear Verification (${eq.equipment_name || 'Equipment'})`, eq.returned_by || 'Operations Staff', eq.event_name, eq.created_at);
+    // 6. CUSTOMER REVIEW / CLIENT REVIEW (Customer Approved Image & Communication Proofs)
+    else if (s.includes('customer review') || s.includes('client review')) {
+      allEditorAssignments.forEach(ea => {
+        if (ea.customer_review_image) {
+          addProof(
+            ea.customer_review_image, 
+            `Customer Approved Image Proof${ea.deliverable_id ? ` (${ea.deliverable_id})` : ''}`, 
+            ea.staff_name || 'Editor', 
+            ea.deliverable_id, 
+            ea.customer_review_image_time || ea.updated_at
+          );
+        }
+        if (ea.customer_communication_proof) {
+          addProof(
+            ea.customer_communication_proof, 
+            `Customer Communication Proof${ea.deliverable_id ? ` (${ea.deliverable_id})` : ''}`, 
+            ea.staff_name || 'Editor', 
+            ea.deliverable_id, 
+            ea.updated_at
+          );
+        }
+        if (ea.client_confirmation_img) {
+          addProof(
+            ea.client_confirmation_img, 
+            `Client Confirmation Image${ea.deliverable_id ? ` (${ea.deliverable_id})` : ''}`, 
+            ea.staff_name || 'Editor', 
+            ea.deliverable_id, 
+            ea.customer_confirmation_time || ea.updated_at
+          );
         }
       });
+      const prod = activeProductionRecord;
+      if (prod) {
+        if (prod.customer_review_image) {
+          addProof(prod.customer_review_image, 'Customer Approved Image Proof', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
+        }
+        if (prod.customer_communication_proof) {
+          addProof(prod.customer_communication_proof, 'Customer Communication Proof', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
+        }
+      }
     }
 
-    // 3. EVENT ENDED
-    if (s.includes('event end') || s.includes('event ended') || s.includes('event complete') || s.includes('event completed')) {
-      allStaffAssignments.forEach(sa => {
-        if (sa.event_end_photo) addProof(sa.event_end_photo, 'Event End Photo Proof', sa.staff_name, sa.event_name, sa.event_end_time || sa.updated_at);
-      });
-      dbEquipmentHistory.forEach(eq => {
-        const eqStatus = (eq.equipment_status || '').toLowerCase();
-        if ((eqStatus.includes('end') || eqStatus.includes('complete')) && eq.photo_url) {
-          addProof(eq.photo_url, `Gear Return Verification (${eq.equipment_name || 'Equipment'})`, eq.returned_by || 'Operations Staff', eq.event_name, eq.created_at);
+    // 7. EDITING COMPLETED / PROOF UPLOADED / INTERNAL QC / REVISION
+    else if (s.includes('editing completed') || s.includes('proof uploaded') || s.includes('internal qc') || s.includes('revision')) {
+      allEditorAssignments.forEach(ea => {
+        if (ea.confirmation_proof) {
+          addProof(
+            ea.confirmation_proof, 
+            `Confirmation Proof${ea.deliverable_id ? ` (${ea.deliverable_id})` : ''}`, 
+            ea.staff_name || 'Editor', 
+            ea.deliverable_id, 
+            ea.updated_at
+          );
+        }
+        if (ea.proof_url) {
+          addProof(
+            ea.proof_url, 
+            `Deliverable Proof${ea.deliverable_id ? ` (${ea.deliverable_id})` : ''}`, 
+            ea.staff_name || 'Editor', 
+            ea.deliverable_id, 
+            ea.updated_at
+          );
+        }
+        if (ea.proof_image) {
+          addProof(
+            ea.proof_image, 
+            `Deliverable Preview Image${ea.deliverable_id ? ` (${ea.deliverable_id})` : ''}`, 
+            ea.staff_name || 'Editor', 
+            ea.deliverable_id, 
+            ea.updated_at
+          );
+        }
+        if (ea.uploaded_proof) {
+          addProof(
+            ea.uploaded_proof, 
+            `Uploaded Proof Document${ea.deliverable_id ? ` (${ea.deliverable_id})` : ''}`, 
+            ea.staff_name || 'Editor', 
+            ea.deliverable_id, 
+            ea.updated_at
+          );
         }
       });
-    }
-
-    // 4. FOOTAGE HANDOVER / RAW FOOTAGE / EQUIPMENT HANDOVER
-    if (s.includes('footage handover') || s.includes('raw footage') || s.includes('equipment handover') || s.includes('verified footage') || s.includes('handover')) {
-      allStaffAssignments.forEach(sa => {
-        if (sa.equipment_handover_photo) addProof(sa.equipment_handover_photo, 'Equipment Handover Proof', sa.equipment_handover_to || sa.staff_name, sa.event_name, sa.updated_at);
-        if (sa.equipment_received_photo) addProof(sa.equipment_received_photo, 'Asset Collection Proof', sa.staff_name, sa.event_name, sa.updated_at);
-        if (sa.raw_footage_link) addProof(sa.raw_footage_link, 'Raw Footage Link', sa.staff_name, sa.event_name, sa.updated_at);
-      });
-      dbEquipmentHistory.forEach(eq => {
-        const eqStatus = (eq.equipment_status || '').toLowerCase();
-        if ((eqStatus.includes('handover') || eqStatus.includes('return') || eqStatus.includes('received')) && eq.photo_url) {
-          addProof(eq.photo_url, `Handover Return Proof (${eq.equipment_name || 'Equipment'})`, eq.returned_by || 'Operations Staff', eq.event_name, eq.returned_at);
+      const prod = activeProductionRecord;
+      if (prod) {
+        if (prod.confirmation_proof) {
+          addProof(prod.confirmation_proof, 'Client Approval Confirmation Proof', prod.editor_assigned || 'Production Team', prod.deliverable_id, prod.updated_at);
         }
-      });
-      dbRawFootage.forEach(rf => {
-        if (rf.drive_link) addProof(rf.drive_link, 'Raw Footage Drive Link', rf.uploaded_by || 'Operations Staff', rf.event_name, rf.created_at);
-        if (rf.server_path) addProof(rf.server_path, 'Raw Footage Server Link', rf.uploaded_by || 'Operations Staff', rf.event_name, rf.created_at);
-      });
+        if (prod.proof_url) {
+          addProof(prod.proof_url, 'Production Master Proof', prod.editor_assigned || 'Production Team', prod.deliverable_id, prod.updated_at);
+        }
+      }
     }
 
-    // 5. EVENT CANCELLED
-    if (s.includes('cancelled') || s.includes('cancel')) {
-      // Check cancellation records if any
-    }
-
-    // 6. CLIENT ACCEPTANCE CHECKLIST
-    if (s.includes('client acceptance') || s.includes('client accepted') || s.includes('client approval') || s.includes('customer acceptance') || s.includes('customer approval') || s.includes('client communication')) {
+    // 8. CLIENT ACCEPTANCE / CLIENT ACCEPTED / CLIENT APPROVAL
+    let checklistData: ClientAcceptanceChecklistData | null = null;
+    if (s.includes('client acceptance') || s.includes('client accepted') || s.includes('client approval') || s.includes('customer acceptance') || s.includes('customer approval')) {
       const prod = activeProductionRecord;
       const cav = activeClientAcceptanceVerif;
 
-      const consentProof = cav?.client_communication_consent_proof || prod?.client_communication_consent_proof || prod?.customer_communication_proof || prod?.customer_review_image || prod?.confirmation_proof;
-      if (consentProof) addProof(consentProof, 'Client Acceptance Consent Proof', 'Production Team', 'Client Acceptance', cav?.updated_at || prod?.updated_at);
+      const consentProof = 
+        cav?.client_communication_consent_proof || 
+        prod?.client_communication_consent_proof || 
+        prod?.client_communication_proof || 
+        prod?.customer_communication_proof;
 
-      const serverLink = prod?.server_link || prod?.final_consolidated_drive_link || prod?.final_edited_footage_link || prod?.delivery_link || cav?.final_edited_footage_link || cav?.upload_link_path;
-      if (serverLink) addProof(serverLink, 'Master Deliverables Server Link', 'Production Team', 'Client Acceptance', prod?.updated_at);
+      if (consentProof) {
+        addProof(
+          consentProof, 
+          `Client Acceptance Consent Proof${cav?.proof_file_name ? ` (${cav.proof_file_name})` : ''}`, 
+          cav?.verified_by || 'Production Team', 
+          'Client Acceptance', 
+          cav?.updated_at || prod?.updated_at
+        );
+      }
+
+      const serverLink = 
+        cav?.upload_link_path || 
+        cav?.final_edited_footage_link || 
+        prod?.server_link || 
+        prod?.final_consolidated_drive_link || 
+        prod?.final_edited_footage_link || 
+        prod?.delivery_link;
+
+      if (serverLink) {
+        addProof(serverLink, 'Master Deliverables Server Link', 'Production Team', 'Client Acceptance', cav?.updated_at || prod?.updated_at);
+      }
+
+      if (prod?.final_consolidated_drive_link && prod.final_consolidated_drive_link !== serverLink) {
+        addProof(prod.final_consolidated_drive_link, 'Consolidated Delivery Drive Link', 'Production Team', 'Client Acceptance', prod?.updated_at);
+      }
 
       const checklistItems: ClientAcceptanceChecklistItem[] = [
         {
@@ -903,7 +1070,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         }
       ];
 
-      const checklistData: ClientAcceptanceChecklistData = {
+      checklistData = {
         orderId: primaryOrderId || primaryLeadId || 'ORDER',
         customerName: customerName || 'Valued Client',
         checklistItems,
@@ -916,61 +1083,26 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         verifiedAt: cav?.updated_at || prod?.updated_at || timestamp,
         verifiedBy: 'Production Team'
       };
-
-      const imageItems = items.filter(i => i.type === 'image');
-      const linkItems = items.filter(i => i.type === 'link');
-
-      return {
-        type: 'checklist' as const,
-        stageName: statusText,
-        images: imageItems,
-        links: linkItems,
-        checklistData
-      };
     }
 
-    // 7. PRODUCTION STAGES (Strict stage-wise separation)
-    const editorName = activeProductionRecord?.editor_assigned || allEditorAssignments[0]?.staff_name || 'Assigned Editor';
-
-    if (s.includes('assigned editor') || s.includes('editor assigned')) {
-      // Assigned Editor stage: display editor assignment activity
-    } else if (s.includes('editing started') || s.includes('production started') || s.includes('editing in progress')) {
-      // Editing started stage: display editing start notes/proofs if any
-    } else if (s.includes('customer review') || s.includes('client review')) {
-      // ONLY Customer Review proofs
+    // 9. DELIVERED / ORDER CLOSED
+    else if (s.includes('delivered') || s.includes('order closed') || s.includes('project closed')) {
       allEditorAssignments.forEach(ea => {
-        if (ea.customer_review_image) addProof(ea.customer_review_image, 'Customer Approved Image Proof', ea.staff_name || editorName, ea.deliverable_id, ea.customer_review_image_time || ea.updated_at);
-        if (ea.customer_communication_proof) addProof(ea.customer_communication_proof, 'Customer Communication Proof', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
+        if (ea.edited_drive_link) {
+          addProof(ea.edited_drive_link, `Final Edited Drive Link${ea.deliverable_id ? ` (${ea.deliverable_id})` : ''}`, ea.staff_name || 'Editor', ea.deliverable_id, ea.updated_at);
+        }
+        if (ea.final_edited_footage_link) {
+          addProof(ea.final_edited_footage_link, `Final Delivery Footage Link${ea.deliverable_id ? ` (${ea.deliverable_id})` : ''}`, ea.staff_name || 'Editor', ea.deliverable_id, ea.updated_at);
+        }
       });
       const prod = activeProductionRecord;
       if (prod) {
-        if (prod.customer_review_image) addProof(prod.customer_review_image, 'Customer Approved Image Proof', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
-        if (prod.customer_communication_proof) addProof(prod.customer_communication_proof, 'Customer Communication Proof', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
-      }
-    } else if (s.includes('editing completed') || s.includes('proof uploaded') || s.includes('internal qc') || s.includes('revision')) {
-      // ONLY Editing Completed / Confirmation / Proof Uploaded proofs
-      allEditorAssignments.forEach(ea => {
-        if (ea.confirmation_proof) addProof(ea.confirmation_proof, 'Confirmation Proof', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
-        if (ea.proof_url) addProof(ea.proof_url, 'Editor Deliverable Proof', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
-        if (ea.proof_image) addProof(ea.proof_image, 'Deliverable Preview', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
-        if (ea.uploaded_proof) addProof(ea.uploaded_proof, 'Uploaded Proof Document', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
-      });
-      const prod = activeProductionRecord;
-      if (prod) {
-        if (prod.confirmation_proof) addProof(prod.confirmation_proof, 'Client Approval Confirmation', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
-        if (prod.proof_url) addProof(prod.proof_url, 'Production Master Proof', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
-      }
-    } else if (s.includes('verified footage') || s.includes('delivered') || s.includes('ready for delivery') || s.includes('final approval') || s.includes('business owner review') || s.includes('closed')) {
-      // ONLY Delivery & Final Links
-      allEditorAssignments.forEach(ea => {
-        if (ea.edited_drive_link) addProof(ea.edited_drive_link, 'Edited Drive Link', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
-        if (ea.final_edited_footage_link) addProof(ea.final_edited_footage_link, 'Final Edited Footage Link', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
-      });
-      const prod = activeProductionRecord;
-      if (prod) {
-        if (prod.edited_drive_link) addProof(prod.edited_drive_link, 'Edited Drive Link', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
-        if (prod.server_link) addProof(prod.server_link, 'Production Server Delivery Link', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
-        if (prod.final_consolidated_drive_link) addProof(prod.final_consolidated_drive_link, 'Final Consolidated Drive Link', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
+        if (prod.delivery_link) {
+          addProof(prod.delivery_link, 'Final Project Delivery Link', prod.editor_assigned || 'Production Team', undefined, prod.updated_at);
+        }
+        if (prod.server_link) {
+          addProof(prod.server_link, 'Final Server Delivery Link', prod.editor_assigned || 'Production Team', undefined, prod.updated_at);
+        }
       }
     }
 
@@ -978,10 +1110,10 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
     const linkItems = items.filter(i => i.type === 'link');
 
     return {
-      type: (imageItems.length > 0 || linkItems.length > 0) ? 'proof' as const : 'none' as const,
       stageName: statusText,
       images: imageItems,
-      links: linkItems
+      links: linkItems,
+      checklistData
     };
   };
 
@@ -1103,7 +1235,9 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                 <tbody className="divide-y divide-zinc-850">
                   {filteredStatusHistory.map((item, idx) => {
                     const dt = parseDateTime(item.created_at || item.timestamp);
-                    const proofData = getStageProofData(item.new_status, item.created_at || item.timestamp);
+                    const proofData = getStageProofData(item.new_status, item.created_at || item.timestamp, item);
+                    const hasProofs = proofData.images.length > 0 || proofData.links.length > 0;
+                    const hasChecklist = Boolean(proofData.checklistData);
 
                     return (
                       <tr key={item.id || idx} className="hover:bg-zinc-900/40 transition-colors">
@@ -1127,47 +1261,31 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
 
                         {/* 4. Proof Column */}
                         <td className="py-2.5 px-3 sm:px-4">
-                          {proofData.type === 'checklist' ? (
+                          {hasProofs || hasChecklist ? (
                             <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedChecklist((proofData as any).checklistData)}
-                                className="px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-purple-950/40 text-purple-300 border border-purple-700/50 hover:bg-purple-900/60 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
-                              >
-                                <ClipboardCheck className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                                <span>View Checklist</span>
-                              </button>
-                              {proofData.links.map((lnk, lIdx) => (
-                                <a
-                                  key={lIdx}
-                                  href={lnk.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium bg-sky-950/40 text-sky-300 border border-sky-700/50 hover:bg-sky-900/60 transition-all flex items-center gap-1.5"
-                                  title={lnk.proofName}
+                              {/* View Proof Button: displays uploaded images and links for this stage */}
+                              {hasProofs && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedGallery({ 
+                                    stageName: proofData.stageName, 
+                                    images: proofData.images, 
+                                    links: proofData.links 
+                                  })}
+                                  className="px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                                  title={`View proof files for ${proofData.stageName}`}
                                 >
-                                  <ExternalLink className="w-3 h-3 text-sky-400 shrink-0" />
-                                  <span className="truncate max-w-[120px]">{lnk.proofName}</span>
-                                </a>
-                              ))}
-                            </div>
-                           ) : (proofData.images.length > 0 || proofData.links.length > 0) ? (
-                            <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedGallery({ stageName: proofData.stageName, images: proofData.images, links: proofData.links })}
-                                className="px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
-                                title={`View proof files for ${proofData.stageName}`}
-                              >
-                                <Eye className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                                <span>View Proof</span>
-                                {(proofData.images.length + proofData.links.length) > 0 && (
-                                  <span className="px-1.5 py-0.2 bg-amber-500/25 text-amber-300 rounded-full text-[10px] font-mono font-semibold">
-                                    {proofData.images.length + proofData.links.length}
-                                  </span>
-                                )}
-                              </button>
+                                  <Eye className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                  <span>View Proof</span>
+                                  {(proofData.images.length + proofData.links.length) > 0 && (
+                                    <span className="px-1.5 py-0.2 bg-amber-500/25 text-amber-300 rounded-full text-[10px] font-mono font-semibold">
+                                      {proofData.images.length + proofData.links.length}
+                                    </span>
+                                  )}
+                                </button>
+                              )}
 
+                              {/* Direct links preview for fast access */}
                               {proofData.links.map((lnk, lIdx) => (
                                 <a
                                   key={lIdx}
@@ -1178,9 +1296,22 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                                   title={lnk.proofName}
                                 >
                                   <ExternalLink className="w-3 h-3 text-sky-400 shrink-0" />
-                                  <span className="truncate max-w-[140px]">{lnk.proofName}</span>
+                                  <span className="truncate max-w-[130px]">{lnk.proofName}</span>
                                 </a>
                               ))}
+
+                              {/* View Checklist Button for Client Acceptance verification */}
+                              {hasChecklist && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedChecklist(proofData.checklistData)}
+                                  className="px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-purple-950/40 text-purple-300 border border-purple-700/50 hover:bg-purple-900/60 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                                  title="View Client Acceptance Checklist"
+                                >
+                                  <ClipboardCheck className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                                  <span>View Checklist</span>
+                                </button>
+                              )}
                             </div>
                           ) : (
                             <span className="text-zinc-600 font-mono text-[11px] italic">
