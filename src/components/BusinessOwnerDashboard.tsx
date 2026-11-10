@@ -1683,11 +1683,17 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
 
           <button
             type="button"
-            onClick={() => setNoteModalOrder({
-              lead_id: item.lead_id || item.rawLead?.lead_id || item.order_id,
-              order_id: item.order_id || item.rawOrder?.order_id,
-              customer_name: item.customer_name || item.rawOrder?.customer_name || item.rawLead?.customer_name || 'Customer'
-            })}
+            onClick={(e) => {
+              e.stopPropagation();
+              const leadId = item.lead_id || item.rawLead?.lead_id || item.order_id || item.rawOrder?.lead_id || '';
+              const orderId = item.order_id || item.rawOrder?.order_id || (item.rawLead?.order_id && item.rawLead.order_id !== 'N/A' && !item.rawLead.order_id.startsWith('TRK-') ? item.rawLead.order_id : '') || '';
+              const customerName = item.customer_name || item.rawOrder?.customer_name || item.rawLead?.customer_name || 'Customer';
+              setNoteModalOrder({
+                lead_id: leadId || orderId,
+                order_id: orderId || undefined,
+                customer_name: customerName
+              });
+            }}
             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
             title="View Notes & Add Note"
           >
@@ -1759,35 +1765,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         }`}>
           {item.current_status || item.sales_status || 'Pending'}
         </span>
-      )},
-      { key: 'notes', label: 'Notes', render: (item: any) => {
-        const notes = extractLeadNotes(item, leads, orders, statusHistory);
-        if (notes.length === 0) {
-          return <span className="text-zinc-600 font-mono text-[11px] italic">No Notes</span>;
-        }
-        const latest = notes[notes.length - 1];
-        return (
-          <div className="space-y-1 max-w-[200px]">
-            <div className="text-xs text-zinc-200 font-sans truncate" title={latest.text}>
-              {latest.text}
-            </div>
-            <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-zinc-400">
-              <span className="truncate">{latest.staff}</span>
-              <span className="shrink-0">{latest.formattedDate}</span>
-            </div>
-            {notes.length > 1 && (
-              <button
-                type="button"
-                onClick={() => setSelectedNotesModal({ customerName: item.customer_name || 'Lead', notes })}
-                className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 text-[10px] font-mono font-bold transition-all cursor-pointer flex items-center gap-1 mt-1"
-              >
-                <FileText className="w-3 h-3" />
-                <span>View Notes ({notes.length})</span>
-              </button>
-            )}
-          </div>
-        );
-      }}
+      )}
     ];
 
     const baseOpsCols = [
@@ -1961,6 +1939,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
   const [reviewModalOrder, setReviewModalOrder] = useState<Order | null>(null);
   const [selectedHistoryOrder, setSelectedHistoryOrder] = useState<Order | null>(null);
   const [selectedNotesModal, setSelectedNotesModal] = useState<{ customerName: string; notes: NoteRecord[] } | null>(null);
+  const [noteModalOrder, setNoteModalOrder] = useState<any | null>(null);
   const [approvalFeedback, setApprovalFeedback] = useState<string | null>(null);
 
   // Calendar Event Selection Modal State
@@ -2758,11 +2737,14 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
                               <div className="flex items-center justify-end gap-1.5 flex-wrap">
                                 <button
                                   type="button"
-                                  onClick={() => setNoteModalOrder({
-                                    lead_id: leadId !== '-' ? leadId : orderId,
-                                    order_id: orderId !== '-' ? orderId : undefined,
-                                    customer_name: customerName
-                                  })}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setNoteModalOrder({
+                                      lead_id: leadId !== '-' ? leadId : orderId,
+                                      order_id: orderId !== '-' ? orderId : undefined,
+                                      customer_name: customerName
+                                    });
+                                  }}
                                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
                                   title="View Notes & Add Note"
                                 >
@@ -2901,11 +2883,14 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setNoteModalOrder({
-                                    lead_id: order.lead_id || order.order_id,
-                                    order_id: order.order_id,
-                                    customer_name: order.customer_name || 'Customer'
-                                  })}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setNoteModalOrder({
+                                      lead_id: order.lead_id || order.order_id,
+                                      order_id: order.order_id,
+                                      customer_name: order.customer_name || 'Customer'
+                                    });
+                                  }}
                                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
                                   title="View Notes & Add Note"
                                 >
@@ -2965,7 +2950,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
 
       {/* SECTION: LEADS REPORT */}
       {currentSection === 'leads_report' && (
-        <LeadsReportSection leads={leads} />
+        <LeadsReportSection leads={leads} onOpenNoteModal={setNoteModalOrder} />
       )}
 
       {/* SECTION 6: PASSWORD RESET */}
@@ -3030,6 +3015,17 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         onClose={() => setSelectedHistoryOrder(null)}
         order={selectedHistoryOrder}
       />
+
+      {/* VIEW / ADD NOTE MODAL */}
+      {noteModalOrder && (
+        <AddNoteModal
+          isOpen={noteModalOrder !== null}
+          onClose={() => setNoteModalOrder(null)}
+          leadId={noteModalOrder.lead_id || noteModalOrder.order_id}
+          orderId={noteModalOrder.order_id}
+          customerName={noteModalOrder.customer_name || 'Customer'}
+        />
+      )}
 
     </div>
   );
@@ -3584,9 +3580,11 @@ const BusinessOwnerCalendarView: React.FC<BusinessOwnerCalendarViewProps> = ({
    ============================================================================ */
 interface LeadsReportSectionProps {
   leads: Lead[];
+  onOpenNoteModal?: (orderData: any) => void;
 }
 
-const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
+const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads, onOpenNoteModal }) => {
+  const [localNoteModalOrder, setLocalNoteModalOrder] = useState<any | null>(null);
   const [leadsStartDate, setLeadsStartDate] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 6);
@@ -4151,11 +4149,19 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
 
                           <button
                             type="button"
-                            onClick={() => setNoteModalOrder({
-                              lead_id: l.lead_id,
-                              order_id: l.order_id || '',
-                              customer_name: l.customer_name || 'Customer'
-                            })}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const noteData = {
+                                lead_id: l.lead_id,
+                                order_id: l.order_id || '',
+                                customer_name: l.customer_name || 'Customer'
+                              };
+                              if (onOpenNoteModal) {
+                                onOpenNoteModal(noteData);
+                              } else {
+                                setLocalNoteModalOrder(noteData);
+                              }
+                            }}
                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
                             title="View Notes & Add Note"
                           >
@@ -4172,6 +4178,17 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
           </table>
         </div>
       </div>
+
+      {/* VIEW / ADD NOTE MODAL FOR LEADS REPORT */}
+      {localNoteModalOrder && (
+        <AddNoteModal
+          isOpen={localNoteModalOrder !== null}
+          onClose={() => setLocalNoteModalOrder(null)}
+          leadId={localNoteModalOrder.lead_id || localNoteModalOrder.order_id}
+          orderId={localNoteModalOrder.order_id}
+          customerName={localNoteModalOrder.customer_name || 'Customer'}
+        />
+      )}
 
     </div>
   );
