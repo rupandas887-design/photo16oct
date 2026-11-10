@@ -979,33 +979,33 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       const checklistItems: ClientAcceptanceChecklistItem[] = [
         {
           key: 'customer_acceptance',
-          title: 'Customer Formal Acceptance',
-          description: "Customer reviewed and confirmed satisfaction with final edited outputs.",
-          isCompleted: Boolean(isCustAccepted)
+          title: 'Client Approval & WhatsApp Exit',
+          description: "Client approval and WhatsApp exit verification.",
+          isCompleted: Boolean(prod?.checklist_customer_acceptance ?? true)
         },
         {
           key: 'content_usage',
-          title: 'Content Usage & Portfolio Release',
-          description: "Customer agreed to promotional and portfolio usage guidelines.",
-          isCompleted: Boolean(isContentUsage)
+          title: 'Content Usage Confirmation',
+          description: "Confirming that the agreed content usage rights include social media and advertising/paid ads.",
+          isCompleted: Boolean(prod?.checklist_content_usage ?? false)
         },
         {
           key: 'footage_deleted_7_days',
-          title: '7-Day Raw Footage Deletion Policy',
-          description: "Client notified regarding 7-day retention window before raw archive deletion.",
-          isCompleted: Boolean(isFootageDeleted)
+          title: 'Footage Deleted in 7 Days',
+          description: "Confirmation that raw footage is scheduled or processed for deletion within 7 days.",
+          isCompleted: Boolean(prod?.checklist_footage_deleted_7_days ?? false)
         },
         {
           key: 'payment_clearance',
-          title: 'Payment & Balance Clearance',
+          title: 'Verify Payment from Sales',
           description: "Sales team verified 100% full payment settlement for this order.",
-          isCompleted: Boolean(isPaymentCleared)
+          isCompleted: Boolean(prod?.checklist_payment_from_sales ?? false)
         },
         {
           key: 'edited_files_uploaded',
-          title: 'Master Deliverables Uploaded',
-          description: "All high-resolution photos and video deliverables uploaded to storage.",
-          isCompleted: Boolean(isEditedUploaded)
+          title: 'Validate Edited Files Uploaded to Server',
+          description: "All high-resolution photos and video deliverables validated and uploaded to server.",
+          isCompleted: Boolean(prod?.checklist_edited_files_uploaded ?? prod?.server_upload_validated ?? false)
         }
       ];
 
