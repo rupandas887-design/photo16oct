@@ -1206,68 +1206,124 @@ async function startServer() {
     if (table === 'equipment_categories') {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       const item = Array.isArray(payload) ? payload[0] : payload;
-      const targetName = item?.category_name || item?.name;
-      const oldName = item?.old_category_name || (operation === 'update' ? matchVal : null);
+      const targetName = (item?.category_name || item?.name || '').trim();
+      const oldName = (item?.old_category_name || (operation === 'update' ? matchVal : '') || '').trim();
 
-      if (operation === 'update') {
+      if (operation === 'update' || operation === 'upsert') {
         let foundRow: any = null;
+        let matchedByTargetName = false;
+
+        // 1. Try finding by UUID matchVal
         if (matchVal && uuidRegex.test(String(matchVal))) {
           const { data: byId } = await db.from('equipment_categories').select('*').eq('id', matchVal).maybeSingle();
           if (byId) foundRow = byId;
         }
 
+        // 2. Try finding by oldName
         if (!foundRow && oldName) {
-          const { data: byOldName } = await db.from('equipment_categories').select('*').ilike('category_name', String(oldName).trim()).maybeSingle();
+          const { data: byOldName } = await db.from('equipment_categories').select('*').ilike('category_name', oldName).maybeSingle();
           if (byOldName) foundRow = byOldName;
         }
 
-        if (!foundRow && targetName) {
-          const { data: byName } = await db.from('equipment_categories').select('*').ilike('category_name', String(targetName).trim()).maybeSingle();
-          if (byName) foundRow = byName;
+        // 3. Try finding by targetName (already exists in database)
+        if (targetName) {
+          const { data: byName } = await db.from('equipment_categories').select('*').ilike('category_name', targetName).maybeSingle();
+          if (byName) {
+            if (!foundRow || foundRow.id === byName.id) {
+              foundRow = byName;
+              matchedByTargetName = true;
+            } else {
+              // Both oldRow and targetRow exist: merge oldRow into existing targetRow
+              try {
+                await db.from('equipment_categories').delete().eq('id', foundRow.id);
+              } catch (_) {}
+              foundRow = byName;
+              matchedByTargetName = true;
+            }
+          }
         }
 
+        // 4. Fallback search across all equipment categories
         if (!foundRow) {
           const { data: allCats } = await db.from('equipment_categories').select('*');
           if (Array.isArray(allCats)) {
             foundRow = allCats.find((c: any) => 
               (c.id && String(c.id) === String(matchVal)) ||
-              (oldName && c.category_name && String(c.category_name).trim().toLowerCase() === String(oldName).trim().toLowerCase()) ||
-              (targetName && c.category_name && String(c.category_name).trim().toLowerCase() === String(targetName).trim().toLowerCase())
+              (oldName && c.category_name && String(c.category_name).trim().toLowerCase() === oldName.toLowerCase()) ||
+              (targetName && c.category_name && String(c.category_name).trim().toLowerCase() === targetName.toLowerCase())
             );
           }
         }
 
-        if (foundRow) {
-          const { data: updData, error: updErr } = await db.from('equipment_categories').update({
-            category_name: targetName || foundRow.category_name,
-            updated_at: new Date().toISOString()
-          }).eq('id', foundRow.id).select();
+        const now = new Date().toISOString();
 
-          if (!updErr && updData && updData.length > 0) {
-            return { success: true, data: updData };
+        if (foundRow) {
+          let updatedRow = foundRow;
+          if (!matchedByTargetName && targetName && targetName.toLowerCase() !== foundRow.category_name.toLowerCase()) {
+            const { data: updData, error: updErr } = await db.from('equipment_categories').update({
+              category_name: targetName,
+              updated_at: now
+            }).eq('id', foundRow.id).select();
+
+            if (!updErr && updData && updData.length > 0) {
+              updatedRow = updData[0];
+            } else if (updErr && updErr.code !== '23505') {
+              console.error('[Server DB equipment_categories update error]:', updErr);
+              return { success: false, error: updErr.message || String(updErr) };
+            }
           }
-          if (updErr) {
-            console.error('[Server DB equipment_categories update error]:', updErr);
-            return { success: false, error: updErr.message || String(updErr) };
+
+          // Cascade update to equipment table so all items are accurately categorized
+          if (targetName) {
+            try {
+              if (oldName && oldName.toLowerCase() !== targetName.toLowerCase()) {
+                await db.from('equipment').update({
+                  equipment_type: targetName,
+                  Equipment_Category: targetName,
+                  updated_at: now
+                }).or(`equipment_type.ilike.${oldName},Equipment_Category.ilike.${oldName}`);
+              }
+            } catch (cascadeErr) {
+              console.warn('[Server DB equipment category cascade warning]:', cascadeErr);
+            }
           }
-          return { success: true, data: [{ ...foundRow, category_name: targetName || foundRow.category_name }] };
+
+          return { success: true, data: [updatedRow] };
         } else {
+          // If neither old nor target row exists, insert new category
           const newId = crypto.randomUUID ? crypto.randomUUID() : 'cat-' + Date.now();
           const { data: insData, error: insErr } = await db.from('equipment_categories').insert({
             id: newId,
             category_name: targetName || 'Category',
             status: 'Active',
-            created_at: new Date().toISOString()
+            created_at: now,
+            updated_at: now
           }).select();
 
-          if (!insErr && insData && insData.length > 0) {
-            return { success: true, data: insData };
-          }
+          let resultRow = insData && insData.length > 0 ? insData[0] : { id: newId, category_name: targetName };
           if (insErr) {
-            console.error('[Server DB equipment_categories insert fallback error]:', insErr);
-            return { success: false, error: insErr.message || String(insErr) };
+            if (insErr.code === '23505') {
+              // Already exists, fetch it
+              const { data: existing } = await db.from('equipment_categories').select('*').ilike('category_name', targetName).maybeSingle();
+              if (existing) resultRow = existing;
+            } else {
+              console.error('[Server DB equipment_categories insert fallback error]:', insErr);
+              return { success: false, error: insErr.message || String(insErr) };
+            }
           }
-          return { success: true, data: [{ id: newId, category_name: targetName }] };
+
+          // Cascade update to equipment table if oldName was provided
+          if (targetName && oldName && oldName.toLowerCase() !== targetName.toLowerCase()) {
+            try {
+              await db.from('equipment').update({
+                equipment_type: targetName,
+                Equipment_Category: targetName,
+                updated_at: now
+              }).or(`equipment_type.ilike.${oldName},Equipment_Category.ilike.${oldName}`);
+            } catch (_) {}
+          }
+
+          return { success: true, data: [resultRow] };
         }
       }
     }
