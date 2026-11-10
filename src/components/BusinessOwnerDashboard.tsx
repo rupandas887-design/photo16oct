@@ -165,6 +165,87 @@ export const formatReportDate = (dateInput?: string | null | Date | number): str
 // Backwards-compatible alias for report download handlers and external imports
 export const formatToDDMMYYYY = formatReportDate;
 
+export interface NoteRecord {
+  id: string;
+  text: string;
+  staff: string;
+  timestamp: string;
+  formattedDate?: string;
+}
+
+export const getLeadNotesRecords = (leadObj: any, orderObj: any, statusHistoryList: any[] = []): NoteRecord[] => {
+  const map = new Map<string, NoteRecord>();
+
+  const add = (text?: string, staff?: string, ts?: string) => {
+    if (!text || typeof text !== 'string') return;
+    const clean = text.trim();
+    if (!clean || ['n/a', 'na', '-', '—', 'none'].includes(clean.toLowerCase())) return;
+    const key = `${clean}_${staff || 'System'}`;
+    if (!map.has(key)) {
+      const timestamp = ts || new Date().toISOString();
+      map.set(key, {
+        id: `note_${Math.random().toString(36).slice(2, 7)}`,
+        text: clean,
+        staff: staff ? staff.split('|')[0].trim() : 'System',
+        timestamp,
+        formattedDate: `${formatDateDDMMYY(timestamp)} ${formatTime12Hour(timestamp)}`
+      });
+    }
+  };
+
+  if (leadObj) {
+    add(leadObj.remarks, leadObj.sales_person || leadObj.created_by, leadObj.updated_at || leadObj.created_at);
+    add(leadObj.notes, leadObj.sales_person || leadObj.created_by, leadObj.updated_at || leadObj.created_at);
+    add(leadObj.follow_up_notes, leadObj.sales_person || leadObj.created_by, leadObj.updated_at);
+    add(leadObj.Lost_Notes || leadObj.lost_notes, leadObj.sales_person || leadObj.created_by, leadObj.updated_at);
+
+    if (leadObj.notes_special_customizations) {
+      try {
+        const parsed = deserializeLeadEvents(leadObj.notes_special_customizations);
+        if (parsed.notes) add(parsed.notes, 'Sales Staff', leadObj.updated_at);
+        if (Array.isArray(parsed.events)) {
+          parsed.events.forEach((ev: any) => {
+            if (ev.notes || ev.remarks) add(ev.notes || ev.remarks, ev.staff_name || 'Staff', ev.created_at || leadObj.updated_at);
+          });
+        }
+      } catch (e) {}
+    }
+  }
+
+  if (orderObj) {
+    add(orderObj.remarks, orderObj.sales_person || orderObj.created_by, orderObj.updated_at || orderObj.created_at);
+    add(orderObj.notes, orderObj.sales_person || orderObj.created_by, orderObj.updated_at || orderObj.created_at);
+    if (orderObj.notes_special_customizations) {
+      try {
+        const parsed = deserializeLeadEvents(orderObj.notes_special_customizations);
+        if (parsed.notes) add(parsed.notes, 'Staff', orderObj.updated_at);
+      } catch (e) {}
+    }
+  }
+
+  const matchingIds = getAllMatchingOrderIds(orderObj?.order_id, leadObj?.lead_id, [], []);
+  (statusHistoryList || []).forEach((sh: any) => {
+    const shOrd = String(sh.order_id || '').trim();
+    const shLd = String(sh.lead_id || '').trim();
+    if ((shOrd && matchingIds.includes(shOrd)) || (shLd && matchingIds.includes(shLd))) {
+      if (sh.remarks || sh.notes) {
+        add(sh.remarks || sh.notes, sh.changed_by || sh.staff_name || 'System', sh.created_at || sh.timestamp);
+      }
+    }
+  });
+
+  const list = Array.from(map.values());
+  list.sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+  return list;
+};
+
+export const extractLeadNotes = (item: any, leadsList: any[] = [], ordersList: any[] = [], statusHistoryList: any[] = []) => {
+  const leadObj = item?.rawLead || leadsList.find(l => l.lead_id === item?.lead_id || (item?.order_id && l.order_id === item?.order_id)) || item;
+  const orderObj = item?.rawOrder || ordersList.find(o => (item?.order_id && o.order_id === item?.order_id) || (item?.lead_id && o.lead_id === item?.lead_id)) || item;
+  
+  return getLeadNotesRecords(leadObj, orderObj, statusHistoryList);
+};
+
 export function getOrderRemainingPendingAmount(
   order: any, 
   ordersList: any[] = [], 
@@ -1575,29 +1656,45 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       key: 'actions', 
       label: 'Action', 
       render: (item: any) => (
-        <button
-          type="button"
-          onClick={() => setSelectedHistoryOrder({
-            ...item,
-            ...(item.rawLead || {}),
-            ...(item.rawOrder || {}),
-            ...(item.rawProd || {}),
-            order_id: item.order_id || item.rawOrder?.order_id || item.rawLead?.order_id || '',
-            lead_id: item.lead_id || item.rawLead?.lead_id || item.rawOrder?.lead_id || '',
-            customer_name: item.customer_name || item.rawOrder?.customer_name || item.rawLead?.customer_name || '',
-            current_stage: item.prod_status || item.current_status || item.event_end_status || item.sales_status || item.ops_status || item.rawOrder?.current_stage || item.rawLead?.status,
-            production_id: item.production_id || item.rawProd?.production_id,
-            rawOrder: item.rawOrder,
-            rawLead: item.rawLead,
-            rawProd: item.rawProd,
-            rawOps: item.rawOps
-          })}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
-          title="View Project History & Timeline"
-        >
-          <History className="w-3.5 h-3.5" />
-          <span>History</span>
-        </button>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setSelectedHistoryOrder({
+              ...item,
+              ...(item.rawLead || {}),
+              ...(item.rawOrder || {}),
+              ...(item.rawProd || {}),
+              order_id: item.order_id || item.rawOrder?.order_id || item.rawLead?.order_id || '',
+              lead_id: item.lead_id || item.rawLead?.lead_id || item.rawOrder?.lead_id || '',
+              customer_name: item.customer_name || item.rawOrder?.customer_name || item.rawLead?.customer_name || '',
+              current_stage: item.prod_status || item.current_status || item.event_end_status || item.sales_status || item.ops_status || item.rawOrder?.current_stage || item.rawLead?.status,
+              production_id: item.production_id || item.rawProd?.production_id,
+              rawOrder: item.rawOrder,
+              rawLead: item.rawLead,
+              rawProd: item.rawProd,
+              rawOps: item.rawOps
+            })}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+            title="View Project History & Timeline"
+          >
+            <History className="w-3.5 h-3.5" />
+            <span>History</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setNoteModalOrder({
+              lead_id: item.lead_id || item.rawLead?.lead_id || item.order_id,
+              order_id: item.order_id || item.rawOrder?.order_id,
+              customer_name: item.customer_name || item.rawOrder?.customer_name || item.rawLead?.customer_name || 'Customer'
+            })}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+            title="View Notes & Add Note"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>View / Add Note</span>
+          </button>
+        </div>
       )
     };
 
@@ -1662,7 +1759,35 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         }`}>
           {item.current_status || item.sales_status || 'Pending'}
         </span>
-      )}
+      )},
+      { key: 'notes', label: 'Notes', render: (item: any) => {
+        const notes = extractLeadNotes(item, leads, orders, statusHistory);
+        if (notes.length === 0) {
+          return <span className="text-zinc-600 font-mono text-[11px] italic">No Notes</span>;
+        }
+        const latest = notes[notes.length - 1];
+        return (
+          <div className="space-y-1 max-w-[200px]">
+            <div className="text-xs text-zinc-200 font-sans truncate" title={latest.text}>
+              {latest.text}
+            </div>
+            <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-zinc-400">
+              <span className="truncate">{latest.staff}</span>
+              <span className="shrink-0">{latest.formattedDate}</span>
+            </div>
+            {notes.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setSelectedNotesModal({ customerName: item.customer_name || 'Lead', notes })}
+                className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 text-[10px] font-mono font-bold transition-all cursor-pointer flex items-center gap-1 mt-1"
+              >
+                <FileText className="w-3 h-3" />
+                <span>View Notes ({notes.length})</span>
+              </button>
+            )}
+          </div>
+        );
+      }}
     ];
 
     const baseOpsCols = [
@@ -1835,6 +1960,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
   // Review & Close Modal State
   const [reviewModalOrder, setReviewModalOrder] = useState<Order | null>(null);
   const [selectedHistoryOrder, setSelectedHistoryOrder] = useState<Order | null>(null);
+  const [selectedNotesModal, setSelectedNotesModal] = useState<{ customerName: string; notes: NoteRecord[] } | null>(null);
   const [approvalFeedback, setApprovalFeedback] = useState<string | null>(null);
 
   // Calendar Event Selection Modal State
@@ -2632,19 +2758,16 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
                               <div className="flex items-center justify-end gap-1.5 flex-wrap">
                                 <button
                                   type="button"
-                                  onClick={() => setNoteModalOrder({ lead_id: leadId, order_id: orderId, customer_name: customerName })}
-                                  className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono cursor-pointer transition-colors"
-                                  title="View Note"
+                                  onClick={() => setNoteModalOrder({
+                                    lead_id: leadId !== '-' ? leadId : orderId,
+                                    order_id: orderId !== '-' ? orderId : undefined,
+                                    customer_name: customerName
+                                  })}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+                                  title="View Notes & Add Note"
                                 >
-                                  View Note
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setNoteModalOrder({ lead_id: leadId, order_id: orderId, customer_name: customerName })}
-                                  className="px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 text-[11px] font-mono cursor-pointer border border-amber-500/30 transition-colors"
-                                  title="Add Note"
-                                >
-                                  Add Note
+                                  <FileText className="w-3.5 h-3.5" />
+                                  <span>View / Add Note</span>
                                 </button>
                                 <button
                                   onClick={() => setUnlockRequestModal({
@@ -2766,23 +2889,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
                               </span>
                             </td>
                             <td className="py-3.5 px-4 text-right">
-                              <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                                <button
-                                  type="button"
-                                  onClick={() => setNoteModalOrder({ lead_id: order.lead_id || order.order_id, order_id: order.order_id, customer_name: order.customer_name })}
-                                  className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono cursor-pointer transition-colors"
-                                  title="View Note"
-                                >
-                                  View Note
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setNoteModalOrder({ lead_id: order.lead_id || order.order_id, order_id: order.order_id, customer_name: order.customer_name })}
-                                  className="px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 text-[11px] font-mono cursor-pointer border border-amber-500/30 transition-colors"
-                                  title="Add Note"
-                                >
-                                  Add Note
-                                </button>
+                              <div className="flex items-center justify-end gap-2 flex-wrap">
                                 <button
                                   type="button"
                                   onClick={() => setSelectedHistoryOrder(order)}
@@ -2791,6 +2898,19 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
                                 >
                                   <History className="w-3.5 h-3.5" />
                                   <span>History</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setNoteModalOrder({
+                                    lead_id: order.lead_id || order.order_id,
+                                    order_id: order.order_id,
+                                    customer_name: order.customer_name || 'Customer'
+                                  })}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+                                  title="View Notes & Add Note"
+                                >
+                                  <FileText className="w-3.5 h-3.5" />
+                                  <span>View / Add Note</span>
                                 </button>
                                 <button
                                   type="button"
@@ -2845,7 +2965,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
 
       {/* SECTION: LEADS REPORT */}
       {currentSection === 'leads_report' && (
-        <LeadsReportSection leads={leads} onOpenNoteModal={setNoteModalOrder} />
+        <LeadsReportSection leads={leads} />
       )}
 
       {/* SECTION 6: PASSWORD RESET */}
@@ -3464,10 +3584,9 @@ const BusinessOwnerCalendarView: React.FC<BusinessOwnerCalendarViewProps> = ({
    ============================================================================ */
 interface LeadsReportSectionProps {
   leads: Lead[];
-  onOpenNoteModal?: (lead: any) => void;
 }
 
-const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads, onOpenNoteModal }) => {
+const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
   const [leadsStartDate, setLeadsStartDate] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 6);
@@ -3962,7 +4081,7 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads, onOpenNo
                 <th className="py-3 px-4 font-bold">Event Type</th>
                 <th className="py-3 px-4 font-bold">Event Date</th>
                 <th className="py-3 px-4 font-bold">Assigned Sales / Staff</th>
-                <th className="py-3 px-4 font-bold text-right">Action</th>
+                <th className="py-3 px-4 text-right font-bold">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
@@ -3976,6 +4095,7 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads, onOpenNo
                 filteredLeadsReport.map((l) => {
                   const createdDateStr = (l.created_date || l.created_at || '').split('T')[0];
                   const stage = l.status || l.current_status || 'New';
+
                   return (
                     <tr key={l.lead_id} className="hover:bg-zinc-850/50 transition-colors">
                       <td className="py-3 px-4 whitespace-nowrap">
@@ -4011,22 +4131,36 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads, onOpenNo
                         <div className="text-zinc-200">{l.sales_person || l.sales_staff_name || 'Unassigned'}</div>
                       </td>
                       <td className="py-3 px-4 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5">
+                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
                           <button
                             type="button"
-                            onClick={() => onOpenNoteModal && onOpenNoteModal({ lead_id: l.lead_id, order_id: l.order_id, customer_name: l.customer_name })}
-                            className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono cursor-pointer transition-colors"
-                            title="View Note"
+                            onClick={() => setSelectedHistoryOrder({
+                              ...l,
+                              order_id: l.order_id || '',
+                              lead_id: l.lead_id || '',
+                              customer_name: l.customer_name || '',
+                              current_stage: l.status || l.current_status || 'New',
+                              rawLead: l
+                            })}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+                            title="View Project History & Timeline"
                           >
-                            View Note
+                            <History className="w-3.5 h-3.5" />
+                            <span>History</span>
                           </button>
+
                           <button
                             type="button"
-                            onClick={() => onOpenNoteModal && onOpenNoteModal({ lead_id: l.lead_id, order_id: l.order_id, customer_name: l.customer_name })}
-                            className="px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 text-[11px] font-mono cursor-pointer border border-amber-500/30 transition-colors"
-                            title="Add Note"
+                            onClick={() => setNoteModalOrder({
+                              lead_id: l.lead_id,
+                              order_id: l.order_id || '',
+                              customer_name: l.customer_name || 'Customer'
+                            })}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+                            title="View Notes & Add Note"
                           >
-                            Add Note
+                            <FileText className="w-3.5 h-3.5" />
+                            <span>View / Add Note</span>
                           </button>
                         </div>
                       </td>
@@ -5298,7 +5432,7 @@ const RevenuePaymentSummarySection: React.FC<RevenuePaymentSummarySectionProps> 
                       </span>
                     </td>
                     <td className="py-3.5 px-4 text-center">
-                      <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                      <div className="flex items-center justify-center gap-1.5">
                         <button
                           type="button"
                           onClick={() => {
@@ -5311,28 +5445,25 @@ const RevenuePaymentSummarySection: React.FC<RevenuePaymentSummarySectionProps> 
                           <History className="w-3.5 h-3.5" />
                           <span>View/Details</span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => {
+                        <select
+                          onChange={(e) => {
+                            const val = e.target.value;
                             const fullOrder = orders.find(o => o.order_id === r.orderId || o.lead_id === r.leadId) || r;
-                            setNoteModalOrder(fullOrder);
+                            if (val === 'payment_history') {
+                              setSelectedPaymentHistoryOrder(fullOrder);
+                            } else if (val === 'add_note') {
+                              setNoteModalOrder(fullOrder);
+                            }
+                            e.target.value = "";
                           }}
-                          className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono cursor-pointer transition-colors"
-                          title="View Note"
+                          defaultValue=""
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer shadow-sm focus:outline-none bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800"
+                          title="More Actions"
                         >
-                          View Note
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const fullOrder = orders.find(o => o.order_id === r.orderId || o.lead_id === r.leadId) || r;
-                            setNoteModalOrder(fullOrder);
-                          }}
-                          className="px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 text-[11px] font-mono cursor-pointer border border-amber-500/30 transition-colors"
-                          title="Add Note"
-                        >
-                          Add Note
-                        </button>
+                          <option value="" disabled>More ▾</option>
+                          <option value="payment_history">Payment Details</option>
+                          <option value="add_note">VIEW/ADD NOTE</option>
+                        </select>
                       </div>
                     </td>
                   </tr>
@@ -5387,6 +5518,62 @@ const RevenuePaymentSummarySection: React.FC<RevenuePaymentSummarySectionProps> 
           orderId={noteModalOrder.order_id}
           customerName={noteModalOrder.customer_name || 'Customer'}
         />
+      )}
+
+      {/* NOTES HISTORY MODAL */}
+      {selectedNotesModal && (
+        <div 
+          className="fixed inset-0 bg-black/85 backdrop-blur-md z-[2000200] flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-150"
+          onClick={() => setSelectedNotesModal(null)}
+        >
+          <div 
+            className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-zinc-800 bg-zinc-900/90 flex items-center justify-between gap-3 shrink-0">
+              <div>
+                <h4 className="text-base font-bold text-white font-sans flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-amber-400" />
+                  <span>Notes History — {selectedNotesModal.customerName}</span>
+                </h4>
+                <p className="text-xs text-zinc-400 font-mono mt-0.5">
+                  Complete chronological history of notes entered by Sales, Operations, and Production staff.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedNotesModal(null)}
+                className="p-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer border-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto flex-1 custom-scrollbar space-y-3">
+              {selectedNotesModal.notes.map((n, idx) => (
+                <div key={n.id || idx} className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-amber-400 font-bold">{n.staff}</span>
+                    <span className="text-zinc-500 text-[11px]">{n.formattedDate}</span>
+                  </div>
+                  <p className="text-xs text-zinc-200 font-sans leading-relaxed whitespace-pre-wrap">
+                    {n.text}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="px-5 py-3 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-end shrink-0">
+              <button
+                type="button"
+                onClick={() => setSelectedNotesModal(null)}
+                className="px-4 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-white font-medium text-xs cursor-pointer transition-colors border-0"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>
@@ -6353,23 +6540,7 @@ const CalendarEventDetailModal: React.FC<CalendarEventDetailModalProps> = ({
 
                       {/* 10. Actions */}
                       <td className="p-3.5 pr-4 align-middle text-center whitespace-nowrap min-w-[130px]">
-                        <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                          <button
-                            type="button"
-                            onClick={() => setNoteModalOrder({ lead_id: ev.rawLead?.lead_id || ev.leadId || ev.rawOrder?.lead_id, order_id: ev.rawOrder?.order_id || ev.orderId, customer_name: ev.customerName })}
-                            className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono cursor-pointer transition-colors"
-                            title="View Note"
-                          >
-                            View Note
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setNoteModalOrder({ lead_id: ev.rawLead?.lead_id || ev.leadId || ev.rawOrder?.lead_id, order_id: ev.rawOrder?.order_id || ev.orderId, customer_name: ev.customerName })}
-                            className="px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 text-[11px] font-mono cursor-pointer border border-amber-500/30 transition-colors"
-                            title="Add Note"
-                          >
-                            Add Note
-                          </button>
+                        <div className="flex items-center justify-center gap-1.5 flex-nowrap">
                           <AssignedStaffDropdown 
                             orderId={ev.rawOrder?.order_id || ev.orderId || ev.rawLead?.lead_id || ev.leadId} 
                             leadId={ev.rawLead?.lead_id || ev.leadId || ev.rawOrder?.lead_id} 
