@@ -7431,9 +7431,15 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
               let targetAuthUserId = currentStaff?.auth_user_id;
               if (!targetAuthUserId && typeof currentStaff?.notes === 'string') {
                 try {
-                  const parsed = JSON.parse(currentStaff.notes);
+                  let parsed = JSON.parse(currentStaff.notes);
+                  if (typeof parsed === 'string') parsed = JSON.parse(parsed);
                   if (parsed.auth_user_id) targetAuthUserId = parsed.auth_user_id;
                 } catch (e) {}
+              }
+              const staffEmail = (currentStaff?.email || email || '').trim().toLowerCase();
+              if (staffEmail) {
+                const userMatch = users?.find(u => u.email?.trim().toLowerCase() === staffEmail);
+                if (userMatch?.id) targetAuthUserId = userMatch.id;
               }
 
               // Update password securely in the authentication provider if provided
@@ -7455,7 +7461,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                     mobile: currentStaff?.mobile || mobile,
                     password: cleanPwd,
                     name,
-                    role: 'Production Staff',
+                    role: 'Production Team',
                   })
                 });
 

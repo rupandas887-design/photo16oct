@@ -214,9 +214,14 @@ export const ProductionStaffDirectoryModule: React.FC = () => {
           let targetAuthId = editingStaff.auth_user_id;
           if (!targetAuthId && typeof editingStaff.notes === 'string') {
             try {
-              const parsed = JSON.parse(editingStaff.notes);
+              let parsed = JSON.parse(editingStaff.notes);
+              if (typeof parsed === 'string') parsed = JSON.parse(parsed);
               if (parsed.auth_user_id) targetAuthId = parsed.auth_user_id;
             } catch (e) {}
+          }
+          if (editingStaff.email) {
+            const userMatch = users?.find(u => u.email?.trim().toLowerCase() === editingStaff.email?.trim().toLowerCase());
+            if (userMatch?.id) targetAuthId = userMatch.id;
           }
 
           const updateAuthRes = await fetch('/api/auth/update-user', {
@@ -229,7 +234,7 @@ export const ProductionStaffDirectoryModule: React.FC = () => {
                mobile: formMobile.trim() || editingStaff.mobile,
                password: newPasswordValue,
                name: formName.trim(),
-               role: 'Production Staff',
+               role: 'Production Team',
                active: formStatus === 'Active'
             })
           });

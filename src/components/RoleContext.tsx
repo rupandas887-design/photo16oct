@@ -9080,28 +9080,31 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         const targetEmail = (existing?.email || '').trim().toLowerCase();
         try {
           if (targetMobile) {
-            await pushUpdate('users', 'mobile', targetMobile, { password: pwd, role: 'Production Staff' });
+            await pushUpdate('users', 'mobile', targetMobile, { password: pwd, role: 'Production Team' });
           }
           if (targetEmail) {
-            await pushUpdate('users', 'email', targetEmail, { password: pwd, role: 'Production Staff' });
+            await pushUpdate('users', 'email', targetEmail, { password: pwd, role: 'Production Team' });
           }
           // Also sync to auth if auth_user_id exists
-          const authId = (existing as any)?.auth_user_id || (existing?.notes && existing.notes.includes('auth_user_id') ? JSON.parse(existing.notes).auth_user_id : null);
-          if (authId) {
+          const authId = (existing as any)?.auth_user_id || (existing?.notes && existing.notes.includes('auth_user_id') ? (typeof existing.notes === 'string' ? JSON.parse(existing.notes).auth_user_id : existing.notes.auth_user_id) : null);
+          if (authId || targetEmail) {
             await fetch('/api/auth/update-user', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 auth_id: authId,
+                email: targetEmail,
+                mobile: targetMobile,
+                staff_id: staffId,
                 password: pwd,
-                role: 'Production Staff'
+                role: 'Production Team'
               })
             }).catch(() => null);
           }
           setUsers((prev) => prev.map(u => {
             const cleanM = cleanPhone(targetMobile);
             if ((cleanM && cleanPhone(u.mobile) === cleanM) || (targetEmail && u.email && u.email.toLowerCase() === targetEmail)) {
-              return { ...u, password: pwd, role: 'Production Staff' };
+              return { ...u, password: pwd, role: 'Production Team' };
             }
             return u;
           }));

@@ -2458,7 +2458,8 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Service Role Key not configured' });
       }
       
-      const isStaffRole = role && ['Operation Staff', 'production staff', 'Editor', 'Sales Team'].some(r => role.toLowerCase().includes(r.toLowerCase()));
+      const roleStr = String(role || '').trim().toLowerCase();
+      const isStaffRole = ['staff', 'team', 'editor', 'operation', 'production', 'sales'].some(r => roleStr.includes(r));
       let cleanMobile: string | undefined = mobile ? cleanPhone(mobile) : undefined;
       let cleanEmail: string | undefined = email ? (typeof email === 'string' ? email.trim().toLowerCase() : undefined) : undefined;
       const cleanMobileStr = cleanMobile;
@@ -2506,31 +2507,63 @@ async function startServer() {
         }
       }
 
-      // Determine auth user ID
+      // Determine auth user ID with strict email/mobile verification
       let targetAuthId: string | null = auth_id || null;
       let targetAuthUser: any = null;
 
+      // 1. If auth_id provided, inspect user and verify email match
       if (targetAuthId) {
         try {
           const { data: uData, error: uErr } = await db.auth.admin.getUserById(targetAuthId);
           if (!uErr && uData?.user) {
-            targetAuthUser = uData.user;
+            // Verify if cleanEmail matches; if auth_id belongs to a foreign user, discard it
+            if (cleanEmail && uData.user.email && uData.user.email.trim().toLowerCase() !== cleanEmail) {
+              console.warn('[Server Auth] Provided auth_id belongs to a different email:', uData.user.email, 'expected:', cleanEmail);
+              targetAuthUser = null;
+              targetAuthId = null;
+            } else {
+              targetAuthUser = uData.user;
+            }
+          } else {
+            targetAuthUser = null;
+            targetAuthId = null;
+          }
+        } catch (e) {
+          targetAuthUser = null;
+          targetAuthId = null;
+        }
+      }
+
+      // 2. Look up matching user in public.users table to get their true auth ID
+      if (!targetAuthUser && cleanEmail) {
+        try {
+          const { data: uRow } = await db.from('users').select('id, email, mobile').ilike('email', cleanEmail).maybeSingle();
+          if (uRow?.id) {
+            const { data: uAuth, error: uAuthErr } = await db.auth.admin.getUserById(uRow.id);
+            if (!uAuthErr && uAuth?.user) {
+              targetAuthUser = uAuth.user;
+              targetAuthId = uAuth.user.id;
+            }
           }
         } catch (e) {}
       }
 
-      // If not directly found in auth by ID, check if staff_id has auth_user_id in notes
+      // 3. If not found yet and staff_id provided, check production_staff notes and email
       if (!targetAuthUser && staff_id) {
         try {
           const { data: psRec } = await db.from('production_staff').select('notes, email, mobile').eq('staff_id', staff_id).maybeSingle();
           if (psRec?.notes) {
             try {
-              const parsed = JSON.parse(psRec.notes);
+              let parsed = typeof psRec.notes === 'string' ? JSON.parse(psRec.notes) : psRec.notes;
+              if (typeof parsed === 'string') parsed = JSON.parse(parsed);
               if (parsed.auth_user_id) {
                 const { data: psAuth, error: psAuthErr } = await db.auth.admin.getUserById(parsed.auth_user_id);
                 if (!psAuthErr && psAuth?.user) {
-                  targetAuthUser = psAuth.user;
-                  targetAuthId = psAuth.user.id;
+                  const psEmail = cleanEmail || (psRec.email ? psRec.email.trim().toLowerCase() : null);
+                  if (!psEmail || psAuth.user.email?.trim().toLowerCase() === psEmail) {
+                    targetAuthUser = psAuth.user;
+                    targetAuthId = psAuth.user.id;
+                  }
                 }
               }
             } catch (e) {}
@@ -2540,22 +2573,29 @@ async function startServer() {
         } catch (e) {}
       }
 
-      // If target auth user still not found, search auth.users by email or phone/mobile
+      // 4. If target auth user still not found, search paginated auth.users by email or phone/mobile
       if (!targetAuthUser && (cleanEmail || cleanMobile)) {
         try {
-          const { data: listData } = await db.auth.admin.listUsers({ page: 1, perPage: 1000 });
-          const found = (listData?.users || []).find((u: any) =>
-            (cleanEmail && u.email?.trim().toLowerCase() === cleanEmail) ||
-            (cleanMobile && (cleanPhone(u.phone) === cleanMobile || cleanPhone(u.user_metadata?.mobile) === cleanMobile))
-          );
-          if (found) {
-            targetAuthUser = found;
-            targetAuthId = found.id;
+          let page = 1;
+          while (page <= 5) {
+            const { data: listData } = await db.auth.admin.listUsers({ page, perPage: 50 });
+            const usersList = listData?.users || [];
+            const found = usersList.find((u: any) =>
+              (cleanEmail && u.email?.trim().toLowerCase() === cleanEmail) ||
+              (cleanMobile && (cleanPhone(u.phone) === cleanMobile || cleanPhone(u.user_metadata?.mobile) === cleanMobile))
+            );
+            if (found) {
+              targetAuthUser = found;
+              targetAuthId = found.id;
+              break;
+            }
+            if (usersList.length < 50) break;
+            page++;
           }
         } catch (e) {}
       }
 
-      // If user doesn't exist in Supabase Auth yet and password is provided, create the auth user
+      // 5. If user doesn't exist in Supabase Auth yet and password is provided, create the auth user
       if (!targetAuthUser && password) {
         if (!cleanEmail && !cleanMobile) {
           return res.status(404).json({ success: false, error: 'Staff authentication account not found' });
@@ -2578,8 +2618,18 @@ async function startServer() {
       // Prepare updates for Supabase Auth
       const updates: any = {};
       if (password) updates.password = password;
-      if (cleanEmail && !isStaffRole) updates.email = cleanEmail;
-      if (name || role || cleanMobile) updates.user_metadata = { name, role, mobile: cleanMobile || mobile };
+      // Never attempt to re-set email if it already matches targetAuthUser or for locked staff records
+      if (cleanEmail && !isStaffRole && targetAuthUser?.email?.trim().toLowerCase() !== cleanEmail) {
+        updates.email = cleanEmail;
+      }
+      if (name || role || cleanMobile) {
+        updates.user_metadata = {
+          ...(targetAuthUser?.user_metadata || {}),
+          ...(name ? { name } : {}),
+          ...(role ? { role } : {}),
+          ...(cleanMobile ? { mobile: cleanMobile } : {})
+        };
+      }
       
       // Update Supabase Auth credentials securely and verify success
       if (targetAuthId) {
@@ -2607,13 +2657,10 @@ async function startServer() {
         const r = String(role).trim().toLowerCase();
         if (r.includes('owner') || r.includes('business')) userUpdates.role = 'Business Owner';
         else if (r.includes('sales')) userUpdates.role = 'Sales Team';
-        else if (r.includes('prod') && r.includes('staff')) userUpdates.role = 'Production Team'; // users table constraint allows Production Team
-        else if (r.includes('editor')) userUpdates.role = 'Production Team';
-        else if (r.includes('prod') && r.includes('team')) userUpdates.role = 'Production Team';
+        else if (r.includes('prod') || r.includes('editor')) userUpdates.role = 'Production Team'; // users table constraint allows Production Team
         else if (r.includes('op') && r.includes('staff')) userUpdates.role = 'Operation Staff';
         else if (r.includes('op') && r.includes('team')) userUpdates.role = 'Operations Team';
-        else if (r.includes('prod')) userUpdates.role = 'Production Team';
-        else userUpdates.role = role;
+        else userUpdates.role = 'Production Team';
       }
       if (cleanMobile !== undefined) userUpdates.mobile = cleanMobile;
       if (active !== undefined) userUpdates.active = active;
@@ -2653,10 +2700,16 @@ async function startServer() {
           if (psRows && psRows.length > 0) {
             for (const row of psRows) {
               let notesObj: any = {};
-              try { if (row.notes) notesObj = JSON.parse(row.notes); } catch (e) {}
+              try {
+                if (row.notes) {
+                  notesObj = typeof row.notes === 'string' ? JSON.parse(row.notes) : row.notes;
+                  if (typeof notesObj === 'string') notesObj = JSON.parse(notesObj);
+                }
+              } catch (e) {}
               if (targetAuthId) {
                 notesObj.auth_user_id = targetAuthId;
               }
+              if (notesObj.notes) delete notesObj.notes; // clean any doubly stringified notes
               const psUpdates: any = { notes: JSON.stringify(notesObj) };
               if (password) {
                 // Securely hash password using SHA-256 before saving to production_staff.Password
