@@ -1656,29 +1656,45 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       key: 'actions', 
       label: 'Action', 
       render: (item: any) => (
-        <button
-          type="button"
-          onClick={() => setSelectedHistoryOrder({
-            ...item,
-            ...(item.rawLead || {}),
-            ...(item.rawOrder || {}),
-            ...(item.rawProd || {}),
-            order_id: item.order_id || item.rawOrder?.order_id || item.rawLead?.order_id || '',
-            lead_id: item.lead_id || item.rawLead?.lead_id || item.rawOrder?.lead_id || '',
-            customer_name: item.customer_name || item.rawOrder?.customer_name || item.rawLead?.customer_name || '',
-            current_stage: item.prod_status || item.current_status || item.event_end_status || item.sales_status || item.ops_status || item.rawOrder?.current_stage || item.rawLead?.status,
-            production_id: item.production_id || item.rawProd?.production_id,
-            rawOrder: item.rawOrder,
-            rawLead: item.rawLead,
-            rawProd: item.rawProd,
-            rawOps: item.rawOps
-          })}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
-          title="View Project History & Timeline"
-        >
-          <History className="w-3.5 h-3.5" />
-          <span>History</span>
-        </button>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setSelectedHistoryOrder({
+              ...item,
+              ...(item.rawLead || {}),
+              ...(item.rawOrder || {}),
+              ...(item.rawProd || {}),
+              order_id: item.order_id || item.rawOrder?.order_id || item.rawLead?.order_id || '',
+              lead_id: item.lead_id || item.rawLead?.lead_id || item.rawOrder?.lead_id || '',
+              customer_name: item.customer_name || item.rawOrder?.customer_name || item.rawLead?.customer_name || '',
+              current_stage: item.prod_status || item.current_status || item.event_end_status || item.sales_status || item.ops_status || item.rawOrder?.current_stage || item.rawLead?.status,
+              production_id: item.production_id || item.rawProd?.production_id,
+              rawOrder: item.rawOrder,
+              rawLead: item.rawLead,
+              rawProd: item.rawProd,
+              rawOps: item.rawOps
+            })}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+            title="View Project History & Timeline"
+          >
+            <History className="w-3.5 h-3.5" />
+            <span>History</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setNoteModalOrder({
+              lead_id: item.lead_id || item.rawLead?.lead_id || item.order_id,
+              order_id: item.order_id || item.rawOrder?.order_id,
+              customer_name: item.customer_name || item.rawOrder?.customer_name || item.rawLead?.customer_name || 'Customer'
+            })}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+            title="View Notes & Add Note"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Notes</span>
+          </button>
+        </div>
       )
     };
 
@@ -4037,7 +4053,7 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
                 <th className="py-3 px-4 font-bold">Event Type</th>
                 <th className="py-3 px-4 font-bold">Event Date</th>
                 <th className="py-3 px-4 font-bold">Assigned Sales / Staff</th>
-                <th className="py-3 px-4 font-bold">Notes</th>
+                <th className="py-3 px-4 text-right font-bold">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
@@ -4051,8 +4067,6 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
                 filteredLeadsReport.map((l) => {
                   const createdDateStr = (l.created_date || l.created_at || '').split('T')[0];
                   const stage = l.status || l.current_status || 'New';
-                  const notes = extractLeadNotes(l, leads, orders, statusHistory);
-                  const latestNote = notes.length > 0 ? notes[notes.length - 1] : null;
 
                   return (
                     <tr key={l.lead_id} className="hover:bg-zinc-850/50 transition-colors">
@@ -4088,30 +4102,39 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads }) => {
                       <td className="py-3 px-4">
                         <div className="text-zinc-200">{l.sales_person || l.sales_staff_name || 'Unassigned'}</div>
                       </td>
-                      <td className="py-3 px-4">
-                        {notes.length === 0 ? (
-                          <span className="text-zinc-600 font-mono text-[11px] italic">No Notes</span>
-                        ) : (
-                          <div className="space-y-1 max-w-[200px]">
-                            <div className="text-xs text-zinc-200 font-sans truncate" title={latestNote?.text}>
-                              {latestNote?.text}
-                            </div>
-                            <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-zinc-400">
-                              <span className="truncate">{latestNote?.staff}</span>
-                              <span className="shrink-0">{latestNote?.formattedDate}</span>
-                            </div>
-                            {notes.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={() => setSelectedNotesModal({ customerName: l.customer_name || 'Lead', notes })}
-                                className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 text-[10px] font-mono font-bold transition-all cursor-pointer flex items-center gap-1 mt-1"
-                              >
-                                <FileText className="w-3 h-3" />
-                                <span>View Notes ({notes.length})</span>
-                              </button>
-                            )}
-                          </div>
-                        )}
+                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedHistoryOrder({
+                              ...l,
+                              order_id: l.order_id || '',
+                              lead_id: l.lead_id || '',
+                              customer_name: l.customer_name || '',
+                              current_stage: l.status || l.current_status || 'New',
+                              rawLead: l
+                            })}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+                            title="View Project History & Timeline"
+                          >
+                            <History className="w-3.5 h-3.5" />
+                            <span>History</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setNoteModalOrder({
+                              lead_id: l.lead_id,
+                              order_id: l.order_id || '',
+                              customer_name: l.customer_name || 'Customer'
+                            })}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-mono font-bold transition-all cursor-pointer shadow-sm"
+                            title="View Notes & Add Note"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            <span>Notes</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
