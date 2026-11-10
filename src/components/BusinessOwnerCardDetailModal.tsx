@@ -48,7 +48,7 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
   onDownloadCSV
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [eventEndFilter, setEventEndFilter] = useState<'all' | 'uploaded' | 'not_uploaded'>('all');
+  const [eventEndFilter, setEventEndFilter] = useState<'all' | 'uploaded' | 'not_uploaded'>('not_uploaded');
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
 
   const filterBtnRef = useRef<HTMLButtonElement>(null);
@@ -70,10 +70,10 @@ export const BusinessOwnerCardDetailModal: React.FC<BusinessOwnerCardDetailModal
   useEffect(() => {
     if (isOpen) {
       setSearchTerm('');
-      setEventEndFilter('all');
+      setEventEndFilter(isEventEndModal ? 'not_uploaded' : 'all');
       setFilterMenuOpen(false);
     }
-  }, [isOpen]);
+  }, [isOpen, isEventEndModal]);
 
   const hasFootageLink = (item: any): boolean => {
     const link = item?.footage_link;
