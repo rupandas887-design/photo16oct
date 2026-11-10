@@ -58,11 +58,12 @@ export const AddNoteModal: React.FC<AddNoteModalProps> = ({ isOpen, onClose, lea
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
+        e.stopPropagation();
         onClose();
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [isOpen, onClose]);
 
   const fetchHistory = async () => {
@@ -123,7 +124,8 @@ export const AddNoteModal: React.FC<AddNoteModalProps> = ({ isOpen, onClose, lea
 
   const modalContent = (
     <div 
-      className="fixed inset-0 z-[999999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/80 backdrop-blur-sm overflow-y-auto overflow-x-hidden"
+      className="fixed inset-0 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/80 backdrop-blur-sm overflow-y-auto overflow-x-hidden"
+      style={{ zIndex: 99999999, isolation: 'isolate' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           onClose();
@@ -135,7 +137,8 @@ export const AddNoteModal: React.FC<AddNoteModalProps> = ({ isOpen, onClose, lea
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 10 }}
         transition={{ duration: 0.15, ease: 'easeOut' }}
-        className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-[calc(100vw-24px)] sm:max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh] sm:max-h-[85vh] my-auto relative z-10"
+        className="bg-zinc-950 border border-zinc-800 rounded-2xl w-full max-w-[calc(100vw-24px)] sm:max-w-lg shadow-2xl overflow-hidden flex flex-col my-auto relative z-10"
+        style={{ maxHeight: 'min(90vh, 90dvh)' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-3.5 sm:p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/90 shrink-0 sticky top-0 z-10">
@@ -155,9 +158,9 @@ export const AddNoteModal: React.FC<AddNoteModalProps> = ({ isOpen, onClose, lea
           </button>
         </div>
 
-        <div className="p-3.5 sm:p-4 flex flex-col gap-4 overflow-y-auto custom-scrollbar flex-1">
+        <div className="p-3.5 sm:p-4 flex flex-col gap-4 overflow-y-auto custom-scrollbar flex-1 min-h-0">
           {/* Add Note Section */}
-          <div className="space-y-2">
+          <div className="space-y-2 shrink-0">
             <label className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block">New Note</label>
             <textarea
               value={note}
