@@ -1285,21 +1285,6 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                                 </button>
                               )}
 
-                              {/* Direct links preview for fast access */}
-                              {proofData.links.map((lnk, lIdx) => (
-                                <a
-                                  key={lIdx}
-                                  href={lnk.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium bg-sky-950/40 text-sky-300 border border-sky-700/50 hover:bg-sky-900/60 transition-all flex items-center gap-1.5"
-                                  title={lnk.proofName}
-                                >
-                                  <ExternalLink className="w-3 h-3 text-sky-400 shrink-0" />
-                                  <span className="truncate max-w-[130px]">{lnk.proofName}</span>
-                                </a>
-                              ))}
-
                               {/* View Checklist Button for Client Acceptance verification */}
                               {hasChecklist && (
                                 <button
