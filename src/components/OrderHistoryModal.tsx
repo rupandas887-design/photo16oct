@@ -932,44 +932,48 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
       };
     }
 
-    // 7. PRODUCTION STAGES
-    const isProductionStage = 
-      s.includes('editor') || 
-      s.includes('editing') || 
-      s.includes('production') || 
-      s.includes('customer review') || 
-      s.includes('client review') || 
-      s.includes('revision') || 
-      s.includes('internal qc') || 
-      s.includes('proof') || 
-      s.includes('ready for delivery') || 
-      s.includes('final approval') || 
-      s.includes('business owner review') || 
-      s.includes('order closed') || 
-      s.includes('project closed') || 
-      s.includes('closed');
+    // 7. PRODUCTION STAGES (Strict stage-wise separation)
+    const editorName = activeProductionRecord?.editor_assigned || allEditorAssignments[0]?.staff_name || 'Assigned Editor';
 
-    if (isProductionStage) {
+    if (s.includes('assigned editor') || s.includes('editor assigned')) {
+      // Assigned Editor stage: display editor assignment activity
+    } else if (s.includes('editing started') || s.includes('production started') || s.includes('editing in progress')) {
+      // Editing started stage: display editing start notes/proofs if any
+    } else if (s.includes('customer review') || s.includes('client review')) {
+      // ONLY Customer Review proofs
       allEditorAssignments.forEach(ea => {
-        if (ea.customer_review_image) addProof(ea.customer_review_image, 'Customer Approved Image Proof', ea.staff_name, ea.deliverable_id, ea.updated_at);
-        if (ea.confirmation_proof) addProof(ea.confirmation_proof, 'Confirmation Proof', ea.staff_name, ea.deliverable_id, ea.updated_at);
-        if (ea.customer_communication_proof) addProof(ea.customer_communication_proof, 'Client Communication Proof', ea.staff_name, ea.deliverable_id, ea.updated_at);
-        if (ea.proof_url) addProof(ea.proof_url, 'Editor Deliverable Proof', ea.staff_name, ea.deliverable_id, ea.updated_at);
-        if (ea.proof_image) addProof(ea.proof_image, 'Deliverable Preview', ea.staff_name, ea.deliverable_id, ea.updated_at);
-        if (ea.uploaded_proof) addProof(ea.uploaded_proof, 'Uploaded Proof Document', ea.staff_name, ea.deliverable_id, ea.updated_at);
-        if (ea.edited_drive_link) addProof(ea.edited_drive_link, 'Edited Drive Link', ea.staff_name, ea.deliverable_id, ea.updated_at);
-        if (ea.final_edited_footage_link) addProof(ea.final_edited_footage_link, 'Final Edited Footage Link', ea.staff_name, ea.deliverable_id, ea.updated_at);
+        if (ea.customer_review_image) addProof(ea.customer_review_image, 'Customer Approved Image Proof', ea.staff_name || editorName, ea.deliverable_id, ea.customer_review_image_time || ea.updated_at);
+        if (ea.customer_communication_proof) addProof(ea.customer_communication_proof, 'Customer Communication Proof', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
       });
-
       const prod = activeProductionRecord;
       if (prod) {
-        if (prod.customer_review_image) addProof(prod.customer_review_image, 'Customer Approved Image Proof', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
-        if (prod.confirmation_proof) addProof(prod.confirmation_proof, 'Client Approval Confirmation', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
-        if (prod.customer_communication_proof) addProof(prod.customer_communication_proof, 'Customer Communication Proof', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
-        if (prod.client_communication_consent_proof) addProof(prod.client_communication_consent_proof, 'Client Acceptance Consent Proof', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
-        if (prod.proof_url) addProof(prod.proof_url, 'Production Master Proof', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
-        if (prod.server_link) addProof(prod.server_link, 'Production Server Delivery Link', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
-        if (prod.final_consolidated_drive_link) addProof(prod.final_consolidated_drive_link, 'Final Consolidated Drive Link', prod.editor_assigned || 'Production Staff', prod.deliverable_id, prod.updated_at);
+        if (prod.customer_review_image) addProof(prod.customer_review_image, 'Customer Approved Image Proof', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
+        if (prod.customer_communication_proof) addProof(prod.customer_communication_proof, 'Customer Communication Proof', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
+      }
+    } else if (s.includes('editing completed') || s.includes('proof uploaded') || s.includes('internal qc') || s.includes('revision')) {
+      // ONLY Editing Completed / Confirmation / Proof Uploaded proofs
+      allEditorAssignments.forEach(ea => {
+        if (ea.confirmation_proof) addProof(ea.confirmation_proof, 'Confirmation Proof', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
+        if (ea.proof_url) addProof(ea.proof_url, 'Editor Deliverable Proof', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
+        if (ea.proof_image) addProof(ea.proof_image, 'Deliverable Preview', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
+        if (ea.uploaded_proof) addProof(ea.uploaded_proof, 'Uploaded Proof Document', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
+      });
+      const prod = activeProductionRecord;
+      if (prod) {
+        if (prod.confirmation_proof) addProof(prod.confirmation_proof, 'Client Approval Confirmation', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
+        if (prod.proof_url) addProof(prod.proof_url, 'Production Master Proof', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
+      }
+    } else if (s.includes('verified footage') || s.includes('delivered') || s.includes('ready for delivery') || s.includes('final approval') || s.includes('business owner review') || s.includes('closed')) {
+      // ONLY Delivery & Final Links
+      allEditorAssignments.forEach(ea => {
+        if (ea.edited_drive_link) addProof(ea.edited_drive_link, 'Edited Drive Link', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
+        if (ea.final_edited_footage_link) addProof(ea.final_edited_footage_link, 'Final Edited Footage Link', ea.staff_name || editorName, ea.deliverable_id, ea.updated_at);
+      });
+      const prod = activeProductionRecord;
+      if (prod) {
+        if (prod.edited_drive_link) addProof(prod.edited_drive_link, 'Edited Drive Link', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
+        if (prod.server_link) addProof(prod.server_link, 'Production Server Delivery Link', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
+        if (prod.final_consolidated_drive_link) addProof(prod.final_consolidated_drive_link, 'Final Consolidated Drive Link', prod.editor_assigned || editorName, prod.deliverable_id, prod.updated_at);
       }
     }
 
