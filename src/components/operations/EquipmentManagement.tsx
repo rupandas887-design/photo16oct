@@ -578,38 +578,48 @@ export const EquipmentManagement: React.FC = () => {
       return;
     }
 
-    if (trimmedNew.toLowerCase() === currentName.toLowerCase()) {
+    if (trimmedNew === currentName) {
       setEditCategoryError('New category name is identical to the current name.');
       return;
     }
 
-    // Check if target name matches an existing category for merge/standardization
+    // Resolve target ID and check for duplicate category names belonging to other categories
+    const now = new Date().toISOString();
+    const oldCatLower = currentName.toLowerCase();
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    let targetId = (editingCategoryId && uuidRegex.test(editingCategoryId)) ? editingCategoryId : null;
+    if (!targetId) {
+      targetId = dbCategoryMap[oldCatLower] || 
+                 dbCategories.find(c => c.category_name && c.category_name.trim().toLowerCase() === oldCatLower)?.id ||
+                 null;
+    }
+    if (targetId && !uuidRegex.test(targetId)) {
+      targetId = null;
+    }
+
     const existingTargetCat = dbCategories.find(
       c => c.category_name && c.category_name.trim().toLowerCase() === trimmedNew.toLowerCase()
     );
+
+    const effectiveId = targetId || (existingTargetCat ? existingTargetCat.id : null);
+
+    // Prevent duplicate category names belonging to other different categories
+    const isDuplicate = dbCategories.some(
+      c => c.id !== effectiveId && 
+           c.category_name && 
+           c.category_name.trim().toLowerCase() === trimmedNew.toLowerCase() &&
+           c.category_name.trim().toLowerCase() !== oldCatLower
+    );
+    if (isDuplicate) {
+      setEditCategoryError(`A category with the name "${trimmedNew}" already exists.`);
+      return;
+    }
 
     setIsUpdatingCategory(true);
     setEditCategoryError('');
 
     try {
-      const now = new Date().toISOString();
-      const oldCatLower = currentName.toLowerCase();
-
-      // Resolve target ID: check if editingCategoryId is a UUID, or find by name in dbCategories/dbCategoryMap
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      let targetId = (editingCategoryId && uuidRegex.test(editingCategoryId)) ? editingCategoryId : null;
-      if (!targetId) {
-        targetId = dbCategoryMap[oldCatLower] || 
-                   dbCategories.find(c => c.category_name && c.category_name.trim().toLowerCase() === oldCatLower)?.id ||
-                   null;
-      }
-      if (targetId && !uuidRegex.test(targetId)) {
-        targetId = null;
-      }
-
-      // If merging into an existing category, target the existing category's canonical ID
-      const effectiveId = targetId || (existingTargetCat ? existingTargetCat.id : null);
-
       // 1. UPDATE or MERGE existing database record using its permanent unique UUID or category name
       const updateRes = await fetch('/api/db/update', {
         method: 'POST',
@@ -627,7 +637,6 @@ export const EquipmentManagement: React.FC = () => {
       });
       const updateJson = await updateRes.json().catch(() => null);
       if (!updateJson || !updateJson.success) {
-        // If not already resolved by self-healing server handler, log and only throw if genuine failure
         console.warn('Equipment category update response:', updateJson?.error);
         if (!existingTargetCat && updateJson?.error) {
           throw new Error(updateJson.error);
@@ -669,39 +678,13 @@ export const EquipmentManagement: React.FC = () => {
       if (matchingEqItems.length > 0) {
         await Promise.allSettled(
           matchingEqItems.map(eq =>
-            fetch('/api/db/update', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                table: 'equipment',
-                matchColumn: 'equipment_id',
-                matchValue: eq.equipment_id,
-                updates: {
-                  equipment_type: trimmedNew,
-                  Equipment_Category: trimmedNew,
-                  updated_at: now,
-                  updated_by: currentUserName || 'Operations Team'
-                }
-              })
+            updateEquipment(eq.equipment_id, {
+              equipment_type: trimmedNew,
+              Equipment_Category: trimmedNew
             })
           )
         );
       }
-
-      // Update local in-memory equipment list immediately
-      setEquipment(prev => prev.map(eq => {
-        const eqCat = getEquipmentCategory(eq);
-        if (eqCat.toLowerCase() === oldCatLower ||
-            (eq.equipment_type && eq.equipment_type.toLowerCase() === oldCatLower) ||
-            (eq.Equipment_Category && eq.Equipment_Category.toLowerCase() === oldCatLower)) {
-          return {
-            ...eq,
-            equipment_type: trimmedNew,
-            Equipment_Category: trimmedNew
-          };
-        }
-        return eq;
-      }));
 
       // 3. Update persistent local storage and category rename mappings
       const updatedCategories = updateStoredEquipmentCategory(currentName, trimmedNew);
