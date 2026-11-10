@@ -234,12 +234,6 @@ export const AddNoteModal: React.FC<AddNoteModalProps> = ({
               placeholder="Enter note..."
               className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-amber-500/50 min-h-[85px] sm:min-h-[100px] resize-y"
             />
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Enter note..."
-              className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-amber-500/50 min-h-[100px] resize-y"
-            />
             <div className="flex justify-end pt-1">
               <button
                 type="button"
