@@ -5662,7 +5662,7 @@ export const OperationsLeads: React.FC = () => {
                                 View Image
                               </button>
                             ) : (
-                              <span className="text-zinc-600 italic text-[11px]">Pending</span>
+                              <span className="text-zinc-600 italic text-[11px] whitespace-nowrap">Pending</span>
                             )}
                           </td>
                           <td className="py-3 px-3 text-center font-mono text-zinc-300">{recDate && recDate !== '-' ? (formatDateDDMMYY(recDate) || recDate) : '-'}</td>
@@ -5679,7 +5679,7 @@ export const OperationsLeads: React.FC = () => {
                                 View Image
                               </button>
                             ) : (
-                              <span className="text-zinc-600 italic text-[11px]">Pending</span>
+                              <span className="text-zinc-600 italic text-[11px] whitespace-nowrap">Pending</span>
                             )}
                           </td>
                           <td className="py-3 px-3 text-center font-mono text-zinc-300">{handDate && handDate !== '-' ? (formatDateDDMMYY(handDate) || handDate) : '-'}</td>
@@ -5765,7 +5765,7 @@ export const OperationsLeads: React.FC = () => {
                                 View Image
                               </button>
                             ) : (
-                              <span className="text-zinc-600 italic text-[11px]">Pending</span>
+                              <span className="text-zinc-600 italic text-[11px] whitespace-nowrap">Pending</span>
                             )}
                           </td>
                           <td className="py-3 px-3 text-center font-mono text-zinc-300">{startMeta.date && startMeta.date !== '-' ? (formatDateDDMMYY(startMeta.date) || startMeta.date) : '-'}</td>
@@ -5782,7 +5782,7 @@ export const OperationsLeads: React.FC = () => {
                                 View Image
                               </button>
                             ) : (
-                              <span className="text-zinc-600 italic text-[11px]">Pending</span>
+                              <span className="text-zinc-600 italic text-[11px] whitespace-nowrap">Pending</span>
                             )}
                           </td>
                           <td className="py-3 px-3 text-center font-mono text-zinc-300">{endMeta.date && endMeta.date !== '-' ? (formatDateDDMMYY(endMeta.date) || endMeta.date) : '-'}</td>
@@ -6878,7 +6878,7 @@ export const OperationsLeads: React.FC = () => {
                                           evStart, 
                                           evEnd 
                                         })}
-                                        className="cursor-pointer text-indigo-400 hover:text-indigo-300 underline font-bold text-xs"
+                                        className="cursor-pointer text-indigo-400 hover:text-indigo-300 underline font-bold text-xs whitespace-nowrap"
                                       >
                                         {eventImageStatusText}
                                       </button>
@@ -6903,7 +6903,7 @@ export const OperationsLeads: React.FC = () => {
                                           </div>
                                         </div>
                                       ) : (
-                                        <span className="text-zinc-600 font-bold text-[11px]">❌ Pending</span>
+                                        <span className="text-zinc-600 font-bold text-[11px] whitespace-nowrap">❌ Pending</span>
                                       )}
                                     </td>
                                   </tr>

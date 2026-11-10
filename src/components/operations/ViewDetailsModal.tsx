@@ -914,7 +914,7 @@ export const ViewDetailsModal: React.FC<ViewDetailsModalProps> = ({
                                               <Check className="w-3 h-3" /> Returned
                                             </span>
                                           ) : (
-                                            <span className="text-amber-400/80 font-mono text-[9px] ml-1">
+                                            <span className="text-amber-400/80 font-mono text-[9px] ml-1 whitespace-nowrap">
                                               Pending
                                             </span>
                                           )}
