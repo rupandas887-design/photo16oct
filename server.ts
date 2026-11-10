@@ -2542,24 +2542,44 @@ async function startServer() {
         }
       }
 
-      // Check global uniqueness when updating mobile or email
+      // Check global uniqueness when updating mobile or email (skip if unchanged for existing staff member)
       if (cleanMobileStr || cleanEmailStr) {
-        const uniqueCheck = await checkGlobalUniquenessInDb(
-          db, 
-          cleanMobileStr || existingMobileFound, 
-          cleanEmailStr || existingEmailFound, 
-          auth_id, 
-          existingEmailFound || cleanEmailStr, 
-          existingMobileFound || cleanMobileStr, 
-          staff_id
-        );
-        if (!uniqueCheck.isUnique) {
-          return res.status(400).json({ 
-            success: false, 
-            error: uniqueCheck.error,
-            isMobileDuplicate: uniqueCheck.isMobileDuplicate,
-            isEmailDuplicate: uniqueCheck.isEmailDuplicate 
-          });
+        let isEmailUnchanged = false;
+        let isMobileUnchanged = false;
+
+        if (staff_id) {
+          const { data: currentProd } = await db.from('production_staff').select('email, mobile').eq('staff_id', staff_id).maybeSingle();
+          if (currentProd) {
+            if (cleanEmailStr && currentProd.email && currentProd.email.trim().toLowerCase() === cleanEmailStr) isEmailUnchanged = true;
+            if (cleanMobileStr && currentProd.mobile && cleanPhone(currentProd.mobile) === cleanMobileStr) isMobileUnchanged = true;
+          }
+          if (!isEmailUnchanged || !isMobileUnchanged) {
+            const { data: currentOps } = await db.from('operations_staff').select('email, mobile').eq('staff_id', staff_id).maybeSingle();
+            if (currentOps) {
+              if (cleanEmailStr && currentOps.email && currentOps.email.trim().toLowerCase() === cleanEmailStr) isEmailUnchanged = true;
+              if (cleanMobileStr && currentOps.mobile && cleanPhone(currentOps.mobile) === cleanMobileStr) isMobileUnchanged = true;
+            }
+          }
+        }
+
+        if (!isEmailUnchanged || !isMobileUnchanged) {
+          const uniqueCheck = await checkGlobalUniquenessInDb(
+            db, 
+            isMobileUnchanged ? null : (cleanMobileStr || existingMobileFound), 
+            isEmailUnchanged ? null : (cleanEmailStr || existingEmailFound), 
+            auth_id, 
+            existingEmailFound || cleanEmailStr, 
+            existingMobileFound || cleanMobileStr, 
+            staff_id
+          );
+          if (!uniqueCheck.isUnique) {
+            return res.status(400).json({ 
+              success: false, 
+              error: uniqueCheck.error,
+              isMobileDuplicate: uniqueCheck.isMobileDuplicate,
+              isEmailDuplicate: uniqueCheck.isEmailDuplicate 
+            });
+          }
         }
       }
 
