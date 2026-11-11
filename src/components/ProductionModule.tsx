@@ -7803,25 +7803,6 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                           {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
-                      {/* Current Password Display */}
-                      {editingStaffId && (
-                        <div className="mt-2.5 p-3 bg-zinc-900 border border-zinc-800 rounded-xl flex items-center justify-between">
-                          <div className="text-xs font-mono text-zinc-400 flex items-center gap-2">
-                            <span className="text-[10px] uppercase font-bold text-zinc-500 font-mono tracking-wider">Current Password:</span>
-                            <span className="text-amber-400 font-bold select-all font-mono tracking-wider text-xs">
-                              {showCurrentPassword ? (currentStaffPassword || '••••••••') : '••••••••'}
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                            className="text-zinc-400 hover:text-white transition-colors cursor-pointer p-1"
-                            title={showCurrentPassword ? "Hide current password" : "Show current password"}
-                          >
-                            {showCurrentPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                          </button>
-                        </div>
-                      )}
                     </div>
                     {/* Tag-based Skills input field */}
                     <div>
