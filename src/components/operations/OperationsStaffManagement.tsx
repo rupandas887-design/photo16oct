@@ -23,6 +23,7 @@ export const OperationsStaffManagement: React.FC = () => {
   const [newSkill, setNewSkill] = useState('');
   const [showStaffModal, setShowStaffModal] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [currentStaffPassword, setCurrentStaffPassword] = useState('');
   const [openSkillsStaffId, setOpenSkillsStaffId] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
@@ -113,6 +114,7 @@ export const OperationsStaffManagement: React.FC = () => {
     }
     return [];
   };
+
   const [form, setForm] = useState({
     name: '',
     role: 'Photographer',
@@ -147,6 +149,7 @@ export const OperationsStaffManagement: React.FC = () => {
     setEditingId(st.staff_id);
     setShowStaffModal(true);
     setShowPassword(false);
+    setShowCurrentPassword(false);
     setFormError('');
 
     // Retrieve and show current password
@@ -183,6 +186,8 @@ export const OperationsStaffManagement: React.FC = () => {
     setEditingId(null);
     setShowStaffModal(false);
     setShowPassword(false);
+    setShowCurrentPassword(false);
+    setCurrentStaffPassword('');
     setCurrentStaffPassword('');
     setFormError('');
     setForm({
@@ -772,8 +777,24 @@ export const OperationsStaffManagement: React.FC = () => {
                 </button>
               </div>
               {editingId && (
-                <div className="mt-1.5 text-xs text-zinc-400 font-mono">
-                  Current Password: <span className="text-white font-medium select-all font-mono">{currentStaffPassword || '********'}</span>
+                <div className="mt-1.5 text-xs text-zinc-400 font-mono flex items-center gap-1.5 flex-wrap">
+                  <span>Current Password:</span>
+                  <span className="text-white font-medium select-all font-mono">
+                    {showCurrentPassword ? (currentStaffPassword || '********') : '********'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                    className="inline-flex items-center justify-center text-zinc-450 hover:text-white transition-colors cursor-pointer p-0.5 rounded focus:outline-none"
+                    title={showCurrentPassword ? "Hide current password" : "Show current password"}
+                    aria-label={showCurrentPassword ? "Hide current password" : "Show current password"}
+                  >
+                    {showCurrentPassword ? (
+                      <EyeOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
+                  </button>
                 </div>
               )}
             </div>
