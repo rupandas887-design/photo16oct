@@ -1938,7 +1938,6 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
   // Review & Close Modal State
   const [reviewModalOrder, setReviewModalOrder] = useState<Order | null>(null);
   const [selectedHistoryOrder, setSelectedHistoryOrder] = useState<Order | null>(null);
-  const [selectedNotesModal, setSelectedNotesModal] = useState<{ customerName: string; notes: NoteRecord[] } | null>(null);
   const [noteModalOrder, setNoteModalOrder] = useState<any | null>(null);
   const [approvalFeedback, setApprovalFeedback] = useState<string | null>(null);
 
@@ -4329,6 +4328,7 @@ const RevenuePaymentSummarySection: React.FC<RevenuePaymentSummarySectionProps> 
   const [selectedPaymentHistoryOrder, setSelectedPaymentHistoryOrder] = useState<any | null>(null);
   const [selectedHistoryOrder, setSelectedHistoryOrder] = useState<any | null>(null);
   const [noteModalOrder, setNoteModalOrder] = useState<any | null>(null);
+  const [selectedNotesModal, setSelectedNotesModal] = useState<{ customerName: string; notes: NoteRecord[] } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [paymentTab, setPaymentTab] = useState<'all' | 'pending' | 'history'>('all');
 

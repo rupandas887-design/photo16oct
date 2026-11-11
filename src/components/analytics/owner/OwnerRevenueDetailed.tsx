@@ -22,6 +22,9 @@ export const OwnerRevenueDetailed: React.FC = () => {
     const totalPending = outstandingBalance;
     const totalConfirmed = orders.length;
     const totalPipeline = leads.length;
+    const totalQuotation = orders.reduce((sum, o) => sum + (o.quotation_amount || 0), 0);
+    const totalAdvance = payments.reduce((sum, p) => sum + (p.advance_received || 0), 0);
+    const totalFinal = payments.reduce((sum, p) => sum + (p.final_payment_received || 0), 0);
 
     return {
       totalCollected,
@@ -33,7 +36,7 @@ export const OwnerRevenueDetailed: React.FC = () => {
       totalConfirmed,
       totalPipeline
     };
-  }, [leads, orders, payments, quotations]);
+  }, [leads, orders, payments, quotations, paymentHistory]);
 
   // Chart Data: Monthly Revenue Trend
   const monthlyRevenueData = useMemo(() => {

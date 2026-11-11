@@ -988,16 +988,19 @@ export const getProductionStaffColumns = async (): Promise<string[]> => {
       }
     });
     if (res.ok) {
-      const spec = await res.json();
-      const props = spec.definitions?.production_staff?.properties;
-      if (props) {
-        cachedProdStaffColumns = Object.keys(props);
-        console.log('[RoleContext] Detected live production_staff columns:', cachedProdStaffColumns);
-        return cachedProdStaffColumns;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const spec = await res.json().catch(() => null);
+        const props = spec?.definitions?.production_staff?.properties;
+        if (props) {
+          cachedProdStaffColumns = Object.keys(props);
+          console.log('[RoleContext] Detected live production_staff columns:', cachedProdStaffColumns);
+          return cachedProdStaffColumns;
+        }
       }
     }
   } catch (err) {
-    console.error('[RoleContext] Error detecting production_staff columns:', err);
+    // Non-fatal, fallback to default columns
   }
   return ['staff_id', 'name', 'mobile', 'email', 'role', 'department', 'status', 'joining_date', 'notes', 'created_at', "'production_role_speciality", 'Staff_Type', 'staff_type', 'whatsapp_number', 'production_role_speciality', 'Skill', 'skill', 'city', 'experience', 'employee_id', 'Password', 'password'];
 };
