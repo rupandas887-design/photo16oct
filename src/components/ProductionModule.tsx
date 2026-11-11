@@ -362,7 +362,7 @@ const StaffSelectDropdown = React.memo(({
     return Array.from(map.values());
   }, [productionStaff, staffType]);
 
-  // If the Staff Type changes, clear any previously selected staff member that no longer matches the selected type or is not active
+  // If the Staff Type changes, clear any previously selected staff member that no longer matches the selected type
   useEffect(() => {
     if (selectedStaffId && productionStaff.length > 0) {
       const match = (productionStaff || []).find(s => s.staff_id === selectedStaffId);
@@ -371,7 +371,7 @@ const StaffSelectDropdown = React.memo(({
         const cleanType = type.replace(/[\s-]/g, '').toLowerCase();
         const cleanFilter = staffType.replace(/[\s-]/g, '').toLowerCase();
         
-        if (cleanType !== cleanFilter || match.status !== 'Active') {
+        if (cleanType !== cleanFilter) {
           onSelect('');
         }
       } else {
@@ -381,9 +381,8 @@ const StaffSelectDropdown = React.memo(({
   }, [staffType, selectedStaffId, productionStaff, onSelect]);
 
   const currentStaff = useMemo(() => {
-    // Note: look in the entire active productionStaff list first, but only allow showing it if it matches the active status and current staffType filter
     const staffMember = (productionStaff || []).find(s => s.staff_id === selectedStaffId);
-    if (!staffMember || staffMember.status !== 'Active') return null;
+    if (!staffMember) return null;
     const type = staffMember.staff_type || (staffMember as any).Staff_Type || 'In-House';
     const cleanType = type.replace(/[\s-]/g, '').toLowerCase();
     const cleanFilter = staffType.replace(/[\s-]/g, '').toLowerCase();
@@ -6475,19 +6474,6 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                             >
                               <Ban className="w-3.5 h-3.5" />
                             </button>
-
-                            {/* Delete Button */}
-                            <button
-                              onClick={async () => {
-                                if (confirm(`Are you sure you want to remove ${member.name} from the post-production database?`)) {
-                                  await deleteProductionStaff(member.staff_id);
-                                }
-                              }}
-                              className="p-1.5 bg-rose-500/10 hover:bg-rose-500/25 text-rose-450 border border-rose-500/20 rounded-lg transition duration-150 cursor-pointer"
-                              title="Delete Professional Record"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
                           </div>
                         </td>
                       </tr>
@@ -8187,21 +8173,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                                     Edit
                                   </button>
 
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      if (window.confirm(`Are you sure you want to delete ${member.name}?`)) {
-                                        try {
-                                          await deleteProductionStaff(member.staff_id);
-                                        } catch (err: any) {
-                                          alert("Failed to delete staff: " + (err.message || err));
-                                        }
-                                      }
-                                    }}
-                                    className="px-2 py-1 bg-rose-950/10 hover:bg-rose-950/25 border border-rose-950/30 text-rose-500 hover:text-rose-400 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer"
-                                  >
-                                    Delete
-                                  </button>
+
                                 </div>
                               </td>
                             </tr>
@@ -10407,7 +10379,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                                                 }`}
                                               >
                                                 <option value="Unassigned">Select Editor</option>
-                                                {(productionStaff || []).map(s => (
+                                                {(productionStaff || []).filter(s => s.status === 'Active' || s.name === currentEditor).map(s => (
                                                   <option key={s.staff_id} value={s.name}>{s.name}</option>
                                                 ))}
                                               </select>
