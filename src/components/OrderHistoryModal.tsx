@@ -703,8 +703,14 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
   }, [dbProductionRecords, matchedProd]);
 
   const activeClientAcceptanceVerif = useMemo(() => {
-    return dbClientAcceptanceVerifs[0] || null;
-  }, [dbClientAcceptanceVerifs]);
+    const prodId = String(activeProductionRecord?.production_id || '').trim().toLowerCase();
+    return (
+      dbClientAcceptanceVerifs.find((v: any) => v.final_image_url && prodId && String(v.final_image_production_id || '').trim().toLowerCase() === prodId) ||
+      dbClientAcceptanceVerifs.find((v: any) => Boolean(v.final_image_url)) ||
+      dbClientAcceptanceVerifs[0] ||
+      null
+    );
+  }, [dbClientAcceptanceVerifs, activeProductionRecord]);
 
   /**
    * Stage-Wise Proof Matcher (Sales, Operations, Editing, Customer Review, Production)
@@ -1047,14 +1053,12 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         (finalImgValUploads as any).final_image_url ||
         prod?.final_image_url ||
         cav?.final_image_url ||
-        cav?.proof_storage_path ||
         '';
       const resolvedFinalImgUrl = resolveStorageUrl(rawFinalImgUrl) || (rawFinalImgUrl ? String(rawFinalImgUrl).trim() : null);
       const finalImgName =
         (finalImgValUploads as any).final_image_name ||
         prod?.final_image_name ||
         cav?.final_image_name ||
-        cav?.proof_file_name ||
         'Final Delivered Image';
       const finalImgEventName =
         (finalImgValUploads as any).final_image_event_name ||

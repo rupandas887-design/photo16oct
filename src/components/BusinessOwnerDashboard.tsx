@@ -451,18 +451,22 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       prod?.production_id
     ].filter(Boolean).map(v => String(v).trim().toLowerCase());
 
-    const matchingVerif = (clientAcceptanceVerifications || []).find(v => {
+    const matchingVerifs = (clientAcceptanceVerifications || []).filter(v => {
+      if (!v.final_image_url) return false;
       const vOrd = String(v.order_id || '').trim().toLowerCase();
       const vProd = String(v.final_image_production_id || '').trim().toLowerCase();
-      return (vOrd && ids.includes(vOrd)) || (vProd && ids.includes(vProd));
+      return (vProd && ids.includes(vProd)) || (vOrd && ids.includes(vOrd));
     });
+    const prodIdLower = String(prod?.production_id || '').trim().toLowerCase();
+    const matchingVerif =
+      matchingVerifs.find(v => prodIdLower && String(v.final_image_production_id || '').trim().toLowerCase() === prodIdLower) ||
+      matchingVerifs[0];
 
     const rawUrl =
       (valUploads as any).final_image_url ||
       (prod as any)?.final_image_url ||
       orderOrItem?.final_image_url ||
       matchingVerif?.final_image_url ||
-      matchingVerif?.proof_storage_path ||
       '';
     const resolvedUrl = resolveStorageUrl(rawUrl) || (rawUrl ? String(rawUrl).trim() : null);
 
@@ -472,7 +476,6 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         (valUploads as any).final_image_name ||
         (prod as any)?.final_image_name ||
         matchingVerif?.final_image_name ||
-        matchingVerif?.proof_file_name ||
         '',
       uploadedAt:
         (valUploads as any).final_image_uploaded_at ||
@@ -6187,23 +6190,26 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
               prod?.tracking_id,
               prod?.production_id
             ].filter(Boolean).map(v => String(v).trim().toLowerCase());
-            const matchingVerif = (clientAcceptanceVerifications || []).find((v: any) => {
+            const matchingVerifs = (clientAcceptanceVerifications || []).filter((v: any) => {
+              if (!v.final_image_url) return false;
               const vOrd = String(v.order_id || '').trim().toLowerCase();
               const vProd = String(v.final_image_production_id || '').trim().toLowerCase();
-              return (vOrd && matchIds.includes(vOrd)) || (vProd && matchIds.includes(vProd));
+              return (vProd && matchIds.includes(vProd)) || (vOrd && matchIds.includes(vOrd));
             });
+            const prodIdLower = String(prod?.production_id || '').trim().toLowerCase();
+            const matchingVerif =
+              matchingVerifs.find((v: any) => prodIdLower && String(v.final_image_production_id || '').trim().toLowerCase() === prodIdLower) ||
+              matchingVerifs[0];
             const rawFinalUrl =
               (valUploads as any).final_image_url ||
               (prod as any)?.final_image_url ||
               matchingVerif?.final_image_url ||
-              matchingVerif?.proof_storage_path ||
               '';
             const resolvedFinalUrl = resolveStorageUrl(rawFinalUrl) || (rawFinalUrl ? String(rawFinalUrl).trim() : null);
             const finalFileName =
               (valUploads as any).final_image_name ||
               (prod as any)?.final_image_name ||
               matchingVerif?.final_image_name ||
-              matchingVerif?.proof_file_name ||
               '';
             const finalUploadedAt =
               (valUploads as any).final_image_uploaded_at ||

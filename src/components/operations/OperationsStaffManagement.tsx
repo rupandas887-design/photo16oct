@@ -32,6 +32,7 @@ export const OperationsStaffManagement: React.FC = () => {
   const [mobileError, setMobileError] = useState('');
   const [emailError, setEmailError] = useState('');
   const [staffSearchQuery, setStaffSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Inactive'>('All');
 
   // Automatically scroll modal viewport to error message whenever form validation fails
   useEffect(() => {
@@ -408,8 +409,15 @@ export const OperationsStaffManagement: React.FC = () => {
     }
   };
 
+  const activeStaffCount = staff.filter(st => String(st.status || 'Active').trim().toLowerCase() === 'active').length;
+  const inactiveStaffCount = staff.filter(st => String(st.status || '').trim().toLowerCase() === 'inactive').length;
+
   // Keep list filtered to crew profiles (photographers, videographers, drone operators, assistants) for high specificity
   const operationsCrew = staff.filter(st => {
+    const normalizedStatus = String(st.status || 'Active').trim().toLowerCase();
+    if (statusFilter === 'Active' && normalizedStatus !== 'active') return false;
+    if (statusFilter === 'Inactive' && normalizedStatus !== 'inactive') return false;
+
     if (!staffSearchQuery.trim()) return true;
     const q = staffSearchQuery.toLowerCase();
     const nameMatch = st.name?.toLowerCase().includes(q);
@@ -861,12 +869,36 @@ export const OperationsStaffManagement: React.FC = () => {
 
       {/* Roster table - Full Width */}
       <div className="flex flex-col bg-zinc-900/40 border border-zinc-850 rounded-2xl p-5 shadow-xl space-y-4 overflow-hidden h-full">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-850 pb-2.5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-zinc-850 pb-2.5">
           <h3 className="text-xs font-mono font-black uppercase text-zinc-300 flex items-center gap-1.5">
             <Users className="w-4 h-4 text-amber-500" />
-            <span>ACTIVE ROSTER SUMMARY ({operationsCrew.length} registered)</span>
+            <span>
+              ACTIVE ROSTER SUMMARY ({operationsCrew.length}
+              {statusFilter !== 'All' || staffSearchQuery.trim() ? ` of ${staff.length}` : ''} registered)
+            </span>
           </h3>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Status Filter Dropdown (All / Active / Inactive) */}
+            <div className="relative">
+              <select
+                aria-label="Filter staff by status"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as 'All' | 'Active' | 'Inactive')}
+                className="appearance-none bg-zinc-950 border border-zinc-800 rounded-xl pl-3 pr-8 py-1.5 text-xs font-mono font-bold text-zinc-200 focus:outline-none focus:border-amber-500/50 cursor-pointer hover:border-zinc-700 transition-colors"
+              >
+                <option value="All" className="bg-zinc-950 text-zinc-200">
+                  Status: All ({staff.length})
+                </option>
+                <option value="Active" className="bg-zinc-950 text-emerald-400">
+                  Active ({activeStaffCount})
+                </option>
+                <option value="Inactive" className="bg-zinc-950 text-zinc-300">
+                  Inactive ({inactiveStaffCount})
+                </option>
+              </select>
+              <ChevronDown className="w-3.5 h-3.5 text-zinc-400 pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2" />
+            </div>
+
             <div className="relative">
               <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
@@ -884,7 +916,7 @@ export const OperationsStaffManagement: React.FC = () => {
                   handleCancel();
                   setShowStaffModal(true);
                 }}
-                className="flex items-center gap-2 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded-lg transition-colors shadow-lg shadow-amber-500/20"
+                className="flex items-center gap-2 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded-lg transition-colors shadow-lg shadow-amber-500/20 cursor-pointer"
               >
                 <PlusCircle className="w-4 h-4" />
                 + Add Staff
@@ -911,6 +943,7 @@ export const OperationsStaffManagement: React.FC = () => {
                   const activeAssignmentsCount = getStaffActiveAssignmentsCount(st.name);
                   const staffSkills = getStaffSkillsList(st);
                   const isSkillsOpen = openSkillsStaffId === st.staff_id;
+                  const isStaffActive = String(st.status || 'Active').trim().toLowerCase() === 'active';
 
                   return (
                     <tr key={st.staff_id} className="hover:bg-zinc-900/10 transition-all">
@@ -1006,11 +1039,11 @@ export const OperationsStaffManagement: React.FC = () => {
                       </td>
                       <td className="p-3.5">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase border ${
-                          st.status === 'Active' 
+                          isStaffActive
                             ? 'bg-emerald-500/10 text-emerald-450 border-emerald-500/20' 
                             : 'bg-zinc-805 text-zinc-450 border-zinc-755'
                         }`}>
-                          {st.status}
+                          {st.status || 'Active'}
                         </span>
                       </td>
                       <td className="p-3.5 text-right">
@@ -1026,7 +1059,7 @@ export const OperationsStaffManagement: React.FC = () => {
                                 <Edit className="w-3.5 h-3.5" />
                               </button>
 
-                              {st.status === 'Active' ? (
+                              {isStaffActive ? (
                                 <button
                                   onClick={() => handleStatusChange(st.staff_id, 'Inactive')}
                                   disabled={operatingId !== null}
@@ -1060,8 +1093,10 @@ export const OperationsStaffManagement: React.FC = () => {
                 })
               ) : (
                 <tr>
-                  <td colSpan={7} className="p-10 text-center text-zinc-550 italic font-mono">
-                    No field personnel currently on call.
+                  <td colSpan={6} className="p-10 text-center text-zinc-550 italic font-mono">
+                    {statusFilter !== 'All' || staffSearchQuery.trim()
+                      ? `No ${statusFilter === 'All' ? '' : statusFilter.toLowerCase() + ' '}staff members match the current filter.`
+                      : 'No field personnel currently on call.'}
                   </td>
                 </tr>
               )}

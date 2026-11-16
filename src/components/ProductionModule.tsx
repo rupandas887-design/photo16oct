@@ -3117,12 +3117,20 @@ Production Team`;
   const handleOpenClientAcceptance = (prod: Production) => {
     setClientAcceptanceProd(prod);
 
-    const orderId = prod.tracking_id || (prod as any).order_id || prod.production_id;
-    const cleanOrd = String(orderId || '').trim().toLowerCase();
-    const matchingVerifs = (clientAcceptanceVerifications || []).filter(
-      v => String(v.order_id || '').trim().toLowerCase() === cleanOrd
-    );
-    const primaryVerif = matchingVerifs[0];
+    const { order: linkedOrder, lead: linkedLead } = resolveOrderAndLead(prod);
+    const candidateOrderIds = [
+      linkedOrder?.order_id,
+      (prod as any).order_id,
+      prod.tracking_id,
+      prod.production_id
+    ].filter(Boolean).map(v => String(v).trim().toLowerCase());
+    const cleanProdId = String(prod.production_id || '').trim().toLowerCase();
+    const matchingVerifs = (clientAcceptanceVerifications || []).filter(v => {
+      const vOrd = String(v.order_id || '').trim().toLowerCase();
+      const vProd = String(v.final_image_production_id || '').trim().toLowerCase();
+      return (vProd && cleanProdId && vProd === cleanProdId) || (vOrd && candidateOrderIds.includes(vOrd));
+    });
+    const primaryVerif = matchingVerifs.find(v => v.final_image_production_id && String(v.final_image_production_id).trim().toLowerCase() === cleanProdId) || matchingVerifs[0];
 
     const existingProof = prod.client_communication_proof || 
       (prod as any).customer_communication_proof || 
@@ -3243,17 +3251,22 @@ Production Team`;
     setCaValidateEditedFiles(overallValidated);
 
     // Load linked Event & persisted Final Image strictly for this project / order / event
-    const { order: linkedOrder, lead: linkedLead } = resolveOrderAndLead(prod);
     const linkedEvents = extractEventsList(linkedLead, linkedOrder);
+    const prodEventRaw = (prod.event_id && prod.event_id !== 'MULTIPLE') ? String(prod.event_id).trim() : '';
+    const matchedProdEvObj = prodEventRaw ? linkedEvents.find((ev: any) =>
+      String(ev?.event_id || ev?.id || '').trim().toLowerCase() === prodEventRaw.toLowerCase() ||
+      String(ev?.custom_event_name || ev?.event_name || ev?.event_type || '').trim().toLowerCase() === prodEventRaw.toLowerCase()
+    ) : undefined;
     const preferredEventId =
       (valUploads as any).final_image_event_id ||
       (prod as any).final_image_event_id ||
       primaryVerif?.final_image_event_id ||
-      (prod.event_id && prod.event_id !== 'MULTIPLE' ? prod.event_id : '') ||
+      (matchedProdEvObj ? (matchedProdEvObj.event_id || matchedProdEvObj.id) : '') ||
+      prodEventRaw ||
       (linkedEvents[0]?.event_id || linkedEvents[0]?.id || 'default');
     const matchedEvObj = linkedEvents.find((ev: any) =>
       String(ev?.event_id || ev?.id || '') === String(preferredEventId)
-    ) || linkedEvents[0];
+    ) || matchedProdEvObj || linkedEvents[0];
     const resolvedEventName =
       (valUploads as any).final_image_event_name ||
       (prod as any).final_image_event_name ||
@@ -3268,18 +3281,35 @@ Production Team`;
       linkedLead?.event_type ||
       'Main Event';
 
-    const matchedFinalVerif = matchingVerifs.find(v => v.final_image_url || v.proof_storage_path);
+    const cleanPreferredEvt = String(preferredEventId || '').trim().toLowerCase();
+    const matchedFinalVerif =
+      matchingVerifs.find(v =>
+        Boolean(v.final_image_url) &&
+        v.final_image_production_id &&
+        String(v.final_image_production_id).trim().toLowerCase() === cleanProdId &&
+        (!cleanPreferredEvt || cleanPreferredEvt === 'default' ||
+          String(v.final_image_event_id || v.event_id || '').trim().toLowerCase() === cleanPreferredEvt)
+      ) ||
+      matchingVerifs.find(v =>
+        Boolean(v.final_image_url) &&
+        v.final_image_production_id &&
+        String(v.final_image_production_id).trim().toLowerCase() === cleanProdId
+      ) ||
+      matchingVerifs.find(v =>
+        Boolean(v.final_image_url) &&
+        (!cleanPreferredEvt || cleanPreferredEvt === 'default' ||
+          String(v.final_image_event_id || v.event_id || '').trim().toLowerCase() === cleanPreferredEvt)
+      ) ||
+      matchingVerifs.find(v => Boolean(v.final_image_url));
     const loadedFinalImageUrl =
       (valUploads as any).final_image_url ||
       (prod as any).final_image_url ||
       matchedFinalVerif?.final_image_url ||
-      matchedFinalVerif?.proof_storage_path ||
       '';
     const loadedFinalImageName =
       (valUploads as any).final_image_name ||
       (prod as any).final_image_name ||
       matchedFinalVerif?.final_image_name ||
-      matchedFinalVerif?.proof_file_name ||
       (loadedFinalImageUrl && !loadedFinalImageUrl.startsWith('data:') ? loadedFinalImageUrl.split('/').pop()?.split('?')[0] : '') ||
       '';
     const loadedFinalImageUploadedAt =
@@ -4089,7 +4119,7 @@ Production Team`;
 
     try {
       const { order, lead } = resolveOrderAndLead(clientAcceptanceProd);
-      const cleanOrderId = order?.order_id || clientAcceptanceProd.tracking_id || clientAcceptanceProd.production_id;
+      const cleanOrderId = order?.order_id || (clientAcceptanceProd as any).order_id || clientAcceptanceProd.tracking_id || clientAcceptanceProd.production_id;
       const cleanEventId = caFinalImageEventId || clientAcceptanceProd.event_id || 'default';
       const customerName =
         order?.customer_name ||
@@ -4134,8 +4164,14 @@ Production Team`;
       } : prev);
 
       await updateProduction(clientAcceptanceProd.production_id, {
-        validated_server_uploads: nextValidatedUploads
-      });
+        validated_server_uploads: nextValidatedUploads,
+        final_image_url: publicUrl,
+        final_image_name: file.name,
+        final_image_uploaded_at: uploadedAt,
+        final_image_event_id: cleanEventId,
+        final_image_event_name: caFinalImageEventName || 'Main Event',
+        final_image_customer_name: customerName
+      } as any);
 
       await saveClientAcceptanceVerification({
         order_id: cleanOrderId,
@@ -4143,8 +4179,6 @@ Production Team`;
         delivery_method: caDeliveryMethod,
         server_link: caDeliveryMethod === 'server_link' ? caServerLink.trim() : undefined,
         physical_drive_details: caDeliveryMethod === 'physical_drive' ? caPhysicalDriveDetails.trim() : undefined,
-        proof_file_name: file.name,
-        proof_storage_path: publicUrl,
         final_image_url: publicUrl,
         final_image_name: file.name,
         final_image_uploaded_at: uploadedAt,
@@ -4168,7 +4202,7 @@ Production Team`;
 
     try {
       const { order, lead } = resolveOrderAndLead(clientAcceptanceProd);
-      const cleanOrderId = order?.order_id || clientAcceptanceProd.tracking_id || clientAcceptanceProd.production_id;
+      const cleanOrderId = order?.order_id || (clientAcceptanceProd as any).order_id || clientAcceptanceProd.tracking_id || clientAcceptanceProd.production_id;
       const cleanEventId = caFinalImageEventId || clientAcceptanceProd.event_id || 'default';
       const customerName =
         order?.customer_name ||
@@ -4200,8 +4234,11 @@ Production Team`;
       } : prev);
 
       await updateProduction(clientAcceptanceProd.production_id, {
-        validated_server_uploads: nextValidatedUploads
-      });
+        validated_server_uploads: nextValidatedUploads,
+        final_image_url: '',
+        final_image_name: '',
+        final_image_uploaded_at: ''
+      } as any);
 
       await saveClientAcceptanceVerification({
         order_id: cleanOrderId,
@@ -4209,8 +4246,6 @@ Production Team`;
         delivery_method: caDeliveryMethod,
         server_link: caDeliveryMethod === 'server_link' ? caServerLink.trim() : undefined,
         physical_drive_details: caDeliveryMethod === 'physical_drive' ? caPhysicalDriveDetails.trim() : undefined,
-        proof_file_name: '',
-        proof_storage_path: '',
         final_image_url: '',
         final_image_name: '',
         final_image_uploaded_at: '',
@@ -13735,7 +13770,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
 
                     try {
                       setIsSaving(true);
-                      const cleanOrderId = order?.order_id || trackingId || clientAcceptanceProd.production_id;
+                      const cleanOrderId = order?.order_id || (clientAcceptanceProd as any).order_id || trackingId || clientAcceptanceProd.production_id;
                       const cleanEventId = caFinalImageEventId || clientAcceptanceProd.event_id || 'default';
                       const customerName =
                         order?.customer_name ||
@@ -13808,8 +13843,6 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                         folder_name: caDeliveryMethod === 'physical_drive' ? caPhysicalDriveDetails.trim() : undefined,
                         upload_link_path: caDeliveryMethod === 'server_link' ? caServerLink.trim() : '',
                         final_edited_footage_link: caDeliveryMethod === 'server_link' ? caServerLink.trim() : '',
-                        proof_file_name: caFinalImageName || '',
-                        proof_storage_path: caFinalImageUrl || '',
                         final_image_url: caFinalImageUrl || '',
                         final_image_name: caFinalImageName || '',
                         final_image_uploaded_at: caFinalImageUploadedAt || '',
@@ -14128,7 +14161,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
 
                         try {
                           setIsSavingProgress(true);
-                          const cleanOrderId = order?.order_id || trackingId || clientAcceptanceProd.production_id;
+                          const cleanOrderId = order?.order_id || (clientAcceptanceProd as any).order_id || trackingId || clientAcceptanceProd.production_id;
                           const cleanEventId = caFinalImageEventId || clientAcceptanceProd.event_id || 'default';
                           const customerName =
                             order?.customer_name ||
@@ -14195,8 +14228,6 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                             folder_name: caDeliveryMethod === 'physical_drive' ? caPhysicalDriveDetails.trim() : undefined,
                             upload_link_path: caDeliveryMethod === 'server_link' ? caServerLink.trim() : '',
                             final_edited_footage_link: caDeliveryMethod === 'server_link' ? caServerLink.trim() : '',
-                            proof_file_name: caFinalImageName || '',
-                            proof_storage_path: caFinalImageUrl || '',
                             final_image_url: caFinalImageUrl || '',
                             final_image_name: caFinalImageName || '',
                             final_image_uploaded_at: caFinalImageUploadedAt || '',

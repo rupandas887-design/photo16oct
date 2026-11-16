@@ -1721,19 +1721,29 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ? (p as any).validated_server_uploads
         : {};
       const effOrderId = order_id || (p as any).order_id || p.tracking_id;
-      const matchingCaVerif = (clientAcceptanceVerifications || []).find(v =>
-        (effOrderId && String(v.order_id || '').toLowerCase() === String(effOrderId).toLowerCase()) ||
-        (p.tracking_id && String(v.order_id || '').toLowerCase() === String(p.tracking_id).toLowerCase()) ||
-        (p.production_id && String(v.order_id || '').toLowerCase() === String(p.production_id).toLowerCase())
+      const effEventId = String(p.event_id || '').trim().toLowerCase();
+      const orderCaVerifs = (clientAcceptanceVerifications || []).filter(v =>
+        (v.final_image_production_id && p.production_id && String(v.final_image_production_id).trim().toLowerCase() === String(p.production_id).trim().toLowerCase()) ||
+        (effOrderId && String(v.order_id || '').trim().toLowerCase() === String(effOrderId).trim().toLowerCase()) ||
+        (p.tracking_id && String(v.order_id || '').trim().toLowerCase() === String(p.tracking_id).trim().toLowerCase()) ||
+        (p.production_id && String(v.order_id || '').trim().toLowerCase() === String(p.production_id).trim().toLowerCase())
       );
+      const matchingCaVerif =
+        orderCaVerifs.find(v => v.final_image_production_id && p.production_id && String(v.final_image_production_id).trim().toLowerCase() === String(p.production_id).trim().toLowerCase()) ||
+        orderCaVerifs.find(v => effEventId && effEventId !== 'multiple' && (String(v.final_image_event_id || v.event_id || '').trim().toLowerCase() === effEventId)) ||
+        orderCaVerifs[0];
+      const matchingFinalCaVerif =
+        orderCaVerifs.find(v => Boolean(v.final_image_url) && v.final_image_production_id && p.production_id && String(v.final_image_production_id).trim().toLowerCase() === String(p.production_id).trim().toLowerCase()) ||
+        orderCaVerifs.find(v => Boolean(v.final_image_url) && effEventId && effEventId !== 'multiple' && (String(v.final_image_event_id || v.event_id || '').trim().toLowerCase() === effEventId)) ||
+        orderCaVerifs.find(v => Boolean(v.final_image_url));
       const delivery_method = p.delivery_method || valUploads.delivery_method || matchingCaVerif?.delivery_method || (p.delivery_link ? 'server_link' : undefined);
       const server_link = p.server_link || valUploads.server_link || matchingCaVerif?.server_link || (delivery_method === 'server_link' ? (p.delivery_link || matchingCaVerif?.final_edited_footage_link || matchingCaVerif?.upload_link_path || '') : '');
       const physical_drive_details = p.physical_drive_details || valUploads.physical_drive_details || matchingCaVerif?.physical_drive_details || (delivery_method === 'physical_drive' ? (matchingCaVerif?.folder_name || '') : '');
-      const final_image_url = p.final_image_url ?? valUploads.final_image_url ?? matchingCaVerif?.final_image_url ?? matchingCaVerif?.proof_storage_path ?? '';
-      const final_image_name = p.final_image_name ?? valUploads.final_image_name ?? matchingCaVerif?.final_image_name ?? matchingCaVerif?.proof_file_name ?? '';
-      const final_image_uploaded_at = p.final_image_uploaded_at ?? valUploads.final_image_uploaded_at ?? matchingCaVerif?.final_image_uploaded_at ?? '';
-      const final_image_event_id = p.final_image_event_id ?? valUploads.final_image_event_id ?? matchingCaVerif?.final_image_event_id ?? '';
-      const final_image_event_name = p.final_image_event_name ?? valUploads.final_image_event_name ?? matchingCaVerif?.final_image_event_name ?? '';
+      const final_image_url = p.final_image_url || valUploads.final_image_url || matchingFinalCaVerif?.final_image_url || '';
+      const final_image_name = p.final_image_name || valUploads.final_image_name || matchingFinalCaVerif?.final_image_name || '';
+      const final_image_uploaded_at = p.final_image_uploaded_at || valUploads.final_image_uploaded_at || matchingFinalCaVerif?.final_image_uploaded_at || '';
+      const final_image_event_id = p.final_image_event_id || valUploads.final_image_event_id || matchingFinalCaVerif?.final_image_event_id || '';
+      const final_image_event_name = p.final_image_event_name || valUploads.final_image_event_name || matchingFinalCaVerif?.final_image_event_name || '';
 
       return {
         ...p,
@@ -2302,12 +2312,20 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
         'delivery_link', 'client_communication_proof_name', 'proof_name', 'upload_name',
         'checklist_client_communication_proof', 'edited_folder_uploaded_to_server', 'status',
         'folder_name', 'final_edited_footage_link', 'upload_link_path', 'client_approval_date',
-        'client_communication_consent_proof', 'proof_file_name', 'updated_at'
+        'client_communication_consent_proof', 'proof_file_name', 'updated_at',
+        'delivery_method', 'server_link', 'physical_drive_details',
+        'final_image_url', 'final_image_name', 'final_image_uploaded_at',
+        'final_image_event_id', 'final_image_event_name', 'final_image_customer_name'
       ],
       client_acceptance_verifications: [
-        'id', 'order_id', 'event_id', 'client_communication_consent_proof',
-        'folder_name', 'upload_link_path', 'final_edited_footage_link', 'edited_folder_uploaded_to_server', 'proof_file_name', 'proof_storage_path',
-        'consent_proof_verified', 'created_at', 'updated_at'
+        'id', 'order_id', 'event_id', 'task_id', 'assignment_id',
+        'delivery_method', 'server_link', 'physical_drive_details',
+        'client_communication_consent_proof',
+        'folder_name', 'upload_link_path', 'final_edited_footage_link', 'edited_folder_uploaded_to_server',
+        'proof_file_name', 'proof_storage_path', 'consent_proof_verified',
+        'final_image_url', 'final_image_name', 'final_image_uploaded_at',
+        'final_image_event_id', 'final_image_event_name', 'final_image_customer_name', 'final_image_production_id',
+        'created_at', 'updated_at'
       ],
       payments: [
         'payment_id', 'order_id', 'quotation_amount', 'advance_received', 'balance_due', 

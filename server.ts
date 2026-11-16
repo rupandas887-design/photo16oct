@@ -1978,8 +1978,8 @@ async function startServer() {
           folder_name: delivery_method === 'physical_drive' ? (physical_drive_details || folder_name || existingRecords[index].folder_name) : (folder_name !== undefined ? folder_name : existingRecords[index].folder_name),
           upload_link_path: delivery_method === 'physical_drive' ? '' : (resolvedLink || existingRecords[index].upload_link_path || ''),
           final_edited_footage_link: delivery_method === 'physical_drive' ? '' : (resolvedLink || existingRecords[index].final_edited_footage_link || existingRecords[index].upload_link_path || ''),
-          proof_file_name: final_image_name !== undefined ? final_image_name : (proof_file_name !== undefined ? proof_file_name : existingRecords[index].proof_file_name),
-          proof_storage_path: final_image_url !== undefined ? final_image_url : (proof_storage_path !== undefined ? proof_storage_path : existingRecords[index].proof_storage_path),
+          proof_file_name: proof_file_name !== undefined ? proof_file_name : existingRecords[index].proof_file_name,
+          proof_storage_path: proof_storage_path !== undefined ? proof_storage_path : existingRecords[index].proof_storage_path,
           consent_proof_verified: consent_proof_verified !== undefined ? Boolean(consent_proof_verified) : existingRecords[index].consent_proof_verified,
           edited_folder_uploaded_to_server: edited_folder_uploaded_to_server !== undefined ? Boolean(edited_folder_uploaded_to_server) : existingRecords[index].edited_folder_uploaded_to_server,
           delivery_method: delivery_method || existingRecords[index].delivery_method,
@@ -2007,8 +2007,8 @@ async function startServer() {
           folder_name: delivery_method === 'physical_drive' ? (physical_drive_details || folder_name || '') : (folder_name || ''),
           upload_link_path: delivery_method === 'physical_drive' ? '' : resolvedLink,
           final_edited_footage_link: delivery_method === 'physical_drive' ? '' : resolvedLink,
-          proof_file_name: final_image_name || proof_file_name || '',
-          proof_storage_path: final_image_url || proof_storage_path || '',
+          proof_file_name: proof_file_name || '',
+          proof_storage_path: proof_storage_path || '',
           consent_proof_verified: consent_proof_verified !== undefined ? Boolean(consent_proof_verified) : false,
           edited_folder_uploaded_to_server: edited_folder_uploaded_to_server !== undefined ? Boolean(edited_folder_uploaded_to_server) : false,
           delivery_method: delivery_method,
@@ -2029,10 +2029,10 @@ async function startServer() {
 
       writeCaVerificationsToFile(existingRecords);
 
-      // Attempt to upsert into Supabase client_acceptance_verifications table using safe column set
+      // Upsert into Supabase client_acceptance_verifications table using dedicated final_image_* columns
       try {
         const db = getServerSupabase();
-        const safeSupabasePayload = {
+        const legacySupabasePayload: any = {
           id: savedRecord.id,
           order_id: savedRecord.order_id,
           event_id: savedRecord.event_id,
@@ -2043,27 +2043,64 @@ async function startServer() {
           proof_file_name: savedRecord.proof_file_name || '',
           proof_storage_path: savedRecord.proof_storage_path || '',
           consent_proof_verified: savedRecord.consent_proof_verified || false,
+          edited_folder_uploaded_to_server: savedRecord.edited_folder_uploaded_to_server || false,
           created_at: savedRecord.created_at,
           updated_at: savedRecord.updated_at
         };
-        await db.from('client_acceptance_verifications').upsert(safeSupabasePayload, {
-          onConflict: 'order_id,event_id'
-        });
+        const fullSupabasePayload: any = {
+          ...legacySupabasePayload,
+          task_id: savedRecord.task_id || null,
+          assignment_id: savedRecord.assignment_id || null,
+          delivery_method: savedRecord.delivery_method || null,
+          server_link: savedRecord.server_link || null,
+          physical_drive_details: savedRecord.physical_drive_details || null,
+          final_image_url: savedRecord.final_image_url || null,
+          final_image_name: savedRecord.final_image_name || null,
+          final_image_uploaded_at: savedRecord.final_image_uploaded_at || null,
+          final_image_event_id: savedRecord.final_image_event_id || cleanEventId,
+          final_image_event_name: savedRecord.final_image_event_name || null,
+          final_image_customer_name: savedRecord.final_image_customer_name || null,
+          final_image_production_id: savedRecord.final_image_production_id || null
+        };
+        const { error: upsertErr } = await db
+          .from('client_acceptance_verifications')
+          .upsert(fullSupabasePayload, { onConflict: 'order_id,event_id' });
+
+        if (upsertErr) {
+          const msg = String(upsertErr.message || upsertErr.details || '');
+          if (upsertErr.code === 'PGRST204' || upsertErr.code === '42703' || /column/i.test(msg)) {
+            await db.from('client_acceptance_verifications').upsert(legacySupabasePayload, {
+              onConflict: 'order_id,event_id'
+            });
+          } else {
+            console.warn('[Server CA Storage] Supabase upsert warning:', upsertErr);
+          }
+        }
       } catch (dbErr) {
-        // Suppress warning if table is not yet created in Postgres
+        console.warn('[Server CA Storage] Supabase upsert exception:', dbErr);
       }
 
-      // Sync delivery method & Final Image directly to linked Supabase production record
+      // Sync delivery method & Final Image strictly to the linked Supabase production record
       try {
         const db = getServerSupabase();
-        const orFilters = [`order_id.eq.${cleanOrderId}`, `tracking_id.eq.${cleanOrderId}`];
+        let matchedProds: any[] | null = null;
         if (final_image_production_id) {
-          orFilters.push(`production_id.eq.${String(final_image_production_id).trim()}`);
+          const { data: exactProds } = await db.from('production')
+            .select('production_id, validated_server_uploads')
+            .eq('production_id', String(final_image_production_id).trim())
+            .limit(1);
+          if (Array.isArray(exactProds) && exactProds.length > 0) {
+            matchedProds = exactProds;
+          }
         }
-        const { data: matchedProds } = await db.from('production')
-          .select('production_id, validated_server_uploads')
-          .or(orFilters.join(','))
-          .limit(5);
+        if (!matchedProds || matchedProds.length === 0) {
+          const orFilters = [`order_id.eq.${cleanOrderId}`, `tracking_id.eq.${cleanOrderId}`];
+          const { data: orderProds } = await db.from('production')
+            .select('production_id, validated_server_uploads')
+            .or(orFilters.join(','))
+            .limit(5);
+          matchedProds = orderProds;
+        }
 
         if (Array.isArray(matchedProds) && matchedProds.length > 0) {
           for (const mProd of matchedProds) {
@@ -2099,18 +2136,38 @@ async function startServer() {
                 final_image_customer_name: savedRecord.final_image_customer_name || ''
               } : {})
             };
-            const prodUp: any = {
+            const legacyProdUp: any = {
               validated_server_uploads: nextUploads
             };
             if (savedRecord.delivery_method) {
-              prodUp.delivery_link = savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '';
-              prodUp.upload_link_path = savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '';
-              prodUp.final_edited_footage_link = savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '';
+              legacyProdUp.delivery_link = savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '';
+              legacyProdUp.upload_link_path = savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '';
+              legacyProdUp.final_edited_footage_link = savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '';
             }
             if (savedRecord.delivery_method === 'physical_drive' && savedRecord.physical_drive_details) {
-              prodUp.folder_name = savedRecord.physical_drive_details;
+              legacyProdUp.folder_name = savedRecord.physical_drive_details;
             }
-            await db.from('production').update(prodUp).eq('production_id', mProd.production_id);
+            const fullProdUp: any = {
+              ...legacyProdUp,
+              ...(savedRecord.delivery_method ? { delivery_method: savedRecord.delivery_method } : {}),
+              ...(savedRecord.delivery_method === 'server_link' ? { server_link: savedRecord.server_link || '' } : {}),
+              ...(savedRecord.delivery_method === 'physical_drive' ? { physical_drive_details: savedRecord.physical_drive_details || '' } : {}),
+              ...(final_image_url !== undefined ? {
+                final_image_url: final_image_url || null,
+                final_image_name: final_image_url ? (savedRecord.final_image_name || '') : null,
+                final_image_uploaded_at: final_image_url ? (savedRecord.final_image_uploaded_at || now) : null,
+                final_image_event_id: final_image_url ? (savedRecord.final_image_event_id || cleanEventId) : null,
+                final_image_event_name: final_image_url ? (savedRecord.final_image_event_name || '') : null,
+                final_image_customer_name: final_image_url ? (savedRecord.final_image_customer_name || '') : null
+              } : {})
+            };
+            const { error: prodUpErr } = await db.from('production').update(fullProdUp).eq('production_id', mProd.production_id);
+            if (prodUpErr) {
+              const pMsg = String(prodUpErr.message || prodUpErr.details || '');
+              if (prodUpErr.code === 'PGRST204' || prodUpErr.code === '42703' || /column/i.test(pMsg)) {
+                await db.from('production').update(legacyProdUp).eq('production_id', mProd.production_id);
+              }
+            }
           }
         }
       } catch (syncErr) {
@@ -2143,8 +2200,8 @@ async function startServer() {
             map.set(key, {
               ...existing,
               ...r,
-              final_image_url: existing.final_image_url ?? r.final_image_url ?? r.proof_storage_path ?? '',
-              final_image_name: existing.final_image_name ?? r.final_image_name ?? r.proof_file_name ?? ''
+              final_image_url: r.final_image_url || existing.final_image_url || '',
+              final_image_name: r.final_image_name || existing.final_image_name || ''
             });
           });
           records = Array.from(map.values());
