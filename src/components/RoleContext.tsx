@@ -671,7 +671,12 @@ export const fetchStaffPasswordStatus = async (
     if (!res.ok || !data.success) {
       return { password: null, requiresReset: false, error: data.error || 'Unable to retrieve password' };
     }
-    if (typeof data.password === 'string' && data.password.length > 0) {
+    if (
+      typeof data.password === 'string' &&
+      data.password.trim().length > 0 &&
+      !isPasswordHashOrToken(data.password) &&
+      !data.password.trim().startsWith('enc:v1:')
+    ) {
       return { password: data.password, requiresReset: false };
     }
     return { password: null, requiresReset: Boolean(data.requiresReset ?? true) };
@@ -9241,7 +9246,12 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       }
     }
 
-    setProductionStaff((prev) => [newStaff, ...prev]);
+    setProductionStaff((prev) => {
+      const exists = prev.some(s => s.staff_id === staffId);
+      return exists
+        ? prev.map(s => s.staff_id === staffId ? { ...s, ...newStaff } : s)
+        : [newStaff, ...prev];
+    });
     logActivity(`Added Production Staff Member: ${newStaff.name}`, 'StaffManagement', staffId);
     return res;
   };

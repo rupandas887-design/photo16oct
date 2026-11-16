@@ -254,6 +254,11 @@ export const ProductionStaffDirectoryModule: React.FC = () => {
           ...{ employee_id: formEmployeeId.trim(), city: formCity.trim() || 'N/A' } as any
         });
         showToast('success', '✅ Production staff saved successfully.');
+        currentPasswordReqIdRef.current += 1;
+        setCurrentStaffPassword('');
+        setShowCurrentPassword(true);
+        setLoadingCurrentPassword(false);
+        setCurrentPasswordError('');
         setIsFormOpen(false);
         setEditingStaff(null);
       }
@@ -796,7 +801,14 @@ export const ProductionStaffDirectoryModule: React.FC = () => {
                   </h3>
                 </div>
                 <button 
-                  onClick={() => setIsFormOpen(false)}
+                  onClick={() => {
+                    currentPasswordReqIdRef.current += 1;
+                    setCurrentStaffPassword('');
+                    setShowCurrentPassword(true);
+                    setLoadingCurrentPassword(false);
+                    setCurrentPasswordError('');
+                    setIsFormOpen(false);
+                  }}
                   className="p-1.5 hover:bg-zinc-900 text-zinc-500 hover:text-white rounded-lg cursor-pointer"
                 >
                   <X className="w-4 h-4" />

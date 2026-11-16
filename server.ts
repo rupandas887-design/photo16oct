@@ -3664,7 +3664,7 @@ async function startServer() {
           staffId: existingStaffRecord?.staff_id || staff_id || null,
           password: cleanPwd,
           name: name || existingStaffRecord?.name || 'Staff Member',
-          normalizedRole: normalizedRole || 'Operation Staff',
+          normalizedRole: normalizedRole || (resolvedStaffTable === 'production_staff' ? 'Production Team' : 'Operation Staff'),
           active,
           encPwd
         });
@@ -3716,7 +3716,7 @@ async function startServer() {
               staffId: existingStaffRecord?.staff_id || staff_id || null,
               password: cleanPwd,
               name: name || existingStaffRecord?.name || 'Staff Member',
-              normalizedRole: normalizedRole || 'Operation Staff',
+              normalizedRole: normalizedRole || (resolvedStaffTable === 'production_staff' ? 'Production Team' : 'Operation Staff'),
               active,
               encPwd: encryptStaffPassword(cleanPwd)
             });
@@ -3745,14 +3745,37 @@ async function startServer() {
         });
       }
 
-      // Sync auth_user_id and (only when changed) password column in resolved staff table
+      // Sync auth_user_id and (when changed or needing auto-heal from Auth enc_pwd) password column in resolved staff table
+      let tablePasswordToSync: string | null = cleanPwd;
+      if (!tablePasswordToSync && resolvedStaffTable === 'production_staff' && targetAuthUser?.app_metadata?.enc_pwd) {
+        const existingColVal = existingStaffRecord?.Password;
+        const needsHeal =
+          !existingColVal ||
+          typeof existingColVal !== 'string' ||
+          existingColVal.trim() === '' ||
+          existingColVal.trim().startsWith('enc:v1:') ||
+          /^[0-9a-f]{64}$/i.test(existingColVal.trim()) ||
+          /^[0-9a-f]{32}$/i.test(existingColVal.trim());
+        if (needsHeal) {
+          const decrypted = decryptStaffPassword(targetAuthUser.app_metadata.enc_pwd);
+          if (
+            decrypted &&
+            !decrypted.trim().startsWith('enc:v1:') &&
+            !/^[0-9a-f]{64}$/i.test(decrypted.trim()) &&
+            !/^[0-9a-f]{32}$/i.test(decrypted.trim())
+          ) {
+            tablePasswordToSync = decrypted;
+          }
+        }
+      }
+
       if (targetAuthId && resolvedStaffTable) {
         const staffSyncRes = await syncStaffNotesAuthId(db, {
           table: resolvedStaffTable,
           staffId: existingStaffRecord?.staff_id || staff_id || null,
           email: cleanEmailStr || null,
           authUserId: targetAuthId,
-          password: cleanPwd
+          password: tablePasswordToSync
         });
         if (!staffSyncRes.success && cleanPwd) {
           return res.status(500).json({
@@ -4083,17 +4106,41 @@ async function startServer() {
       let resolvedPassword: string | null = null;
       let hadValidEncPwd = false;
 
-      // 1. Primary source: AES-256-GCM encrypted password in Auth app_metadata
+      const staffRowRawPwd = targetStaffRecord?.Password ?? targetStaffRecord?.password ?? null;
+      const staffRowPlain = staffRowRawPwd && !isHashedOrEncrypted(String(staffRowRawPwd))
+        ? String(staffRowRawPwd).trim()
+        : null;
+
+      // 1. Primary source for Production Staff: plain-text 'Password' column in production_staff
+      if (targetDept === 'production' && staffRowPlain) {
+        resolvedPassword = staffRowPlain;
+      }
+
+      // 2. AES-256-GCM encrypted password in Auth app_metadata
       const encPwd = targetAuthUser?.app_metadata?.enc_pwd;
       if (encPwd) {
         const decrypted = decryptStaffPassword(encPwd);
         if (decrypted !== null && !isHashedOrEncrypted(decrypted)) {
-          resolvedPassword = decrypted;
           hadValidEncPwd = true;
+          if (!resolvedPassword) {
+            resolvedPassword = decrypted;
+          }
         }
       }
 
-      // 2. Legacy fallback: verified plaintext / SHA-256-matched password from DB or Auth metadata (never return hashes)
+      if (resolvedPassword && targetAuthUser && !hadValidEncPwd) {
+        try {
+          await db.auth.admin.updateUserById(targetAuthUser.id, {
+            app_metadata: {
+              ...(targetAuthUser.app_metadata || {}),
+              enc_pwd: encryptStaffPassword(resolvedPassword)
+            }
+          });
+          hadValidEncPwd = true;
+        } catch (_) {}
+      }
+
+      // 3. Legacy fallback: verified plaintext / SHA-256-matched password from DB or Auth metadata (never return hashes)
       if (!resolvedPassword) {
         let matchedDbUser: any = null;
         const candidateDbIds = [targetAuthUser?.id, resolvedStaffAuthId].filter(Boolean) as string[];
@@ -4132,10 +4179,6 @@ async function startServer() {
           targetAuthUser?.user_metadata?.current_password,
           targetAuthUser?.user_metadata?.password
         ].find(v => v && !isHashedOrEncrypted(String(v)));
-        const staffRowRawPwd = targetStaffRecord?.Password ?? targetStaffRecord?.password ?? null;
-        const staffRowPlain = staffRowRawPwd && !isHashedOrEncrypted(String(staffRowRawPwd))
-          ? String(staffRowRawPwd).trim()
-          : null;
 
         // If the staff record stores a SHA-256 hash, check if any real candidate matches it mathematically
         if (typeof staffRowRawPwd === 'string' && /^[0-9a-f]{64}$/i.test(staffRowRawPwd.trim())) {
@@ -4157,7 +4200,7 @@ async function startServer() {
         }
 
         if (!resolvedPassword) {
-          resolvedPassword = dbUserPwd || (metaPwd ? String(metaPwd).trim() : null) || notesPwd || staffRowPlain || null;
+          resolvedPassword = staffRowPlain || dbUserPwd || (metaPwd ? String(metaPwd).trim() : null) || notesPwd || null;
         }
 
         // Persist AES-256-GCM enc_pwd onto targetAuthUser for fast future retrieval
@@ -4173,8 +4216,8 @@ async function startServer() {
         }
       }
 
-      if (!resolvedPassword) {
-        return res.json({ success: true, password: null, requiresReset: true });
+      if (!resolvedPassword || isHashedOrEncrypted(resolvedPassword)) {
+        return res.json({ success: true, password: null, requiresReset: true, hasPassword: Boolean(targetAuthUser) });
       }
 
       // Ensure the corresponding staff profile table password column is synchronized whenever empty, hashed, or stale
@@ -4194,7 +4237,7 @@ async function startServer() {
         }
       }
 
-      return res.json({ success: true, password: resolvedPassword, requiresReset: false });
+      return res.json({ success: true, password: resolvedPassword, requiresReset: false, hasPassword: true });
     } catch (err: any) {
       console.error('[Server Auth Get Staff Password Error]', err);
       return res.status(500).json({ success: false, error: err?.message || 'Failed to retrieve staff password' });

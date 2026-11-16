@@ -8307,6 +8307,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                     <button 
                       type="button"
                       onClick={() => {
+                        currentPasswordReqIdRef.current += 1;
                         setEditingStaffId(null);
                         setNewStaffName('');
                         setNewStaffType('');
@@ -8315,6 +8316,10 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                         setNewStaffEmail('');
                         setNewStaffPassword('');
                         setShowPassword(false);
+                        setCurrentStaffPassword('');
+                        setShowCurrentPassword(true);
+                        setLoadingCurrentPassword(false);
+                        setCurrentPasswordError('');
                         setNewStaffSkills([]);
                         setAddStaffError('');
                         setAddStaffSuccess('');
