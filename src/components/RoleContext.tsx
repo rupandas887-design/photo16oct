@@ -435,8 +435,7 @@ const isStaffAccountRole = (role?: string, userRecord?: any): boolean => {
   return (
     r === 'operation staff' ||
     r === 'operations staff' ||
-    r === 'production staff' ||
-    r === 'production team'
+    r === 'production staff'
   );
 };
 
@@ -625,6 +624,7 @@ const getAuthRequestHeaders = async (): Promise<Record<string, string>> => {
     const erpToken = localStorage.getItem('erp_manager_token');
     if (erpToken) {
       headers['X-ERP-Session'] = erpToken;
+      headers['X-ERP-Session-Token'] = erpToken;
     }
   } catch (_) {}
   return headers;
@@ -4195,54 +4195,127 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         localStorage.setItem('erp_current_user', JSON.stringify(finalProfileUser));
         localStorage.setItem('erp_role', verifiedRole);
         localStorage.setItem('erp_user_name', finalProfileUser.name);
+        return { user: finalProfileUser, role: verifiedRole };
+      }
+      return null;
+    };
+
+    const MANAGER_ROLES = new Set<UserRole>(['Business Owner', 'Operations Team', 'Production Team', 'Sales Team']);
+
+    const syncManagerSessionFromAuth = async (activeSession: any, emailHint?: string) => {
+      if (!activeSession?.access_token) return;
+      try {
+        const sessRes = await fetch('/api/auth/manager-session', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${activeSession.access_token}`
+          },
+          body: JSON.stringify({
+            userId: activeSession.user?.id,
+            accessToken: activeSession.access_token,
+            email: emailHint || activeSession.user?.email
+          })
+        });
+        const sessData = await sessRes.json().catch(() => ({}));
+        if (sessRes.ok && sessData.success && sessData.token) {
+          localStorage.setItem('erp_manager_token', sessData.token);
+        } else {
+          console.warn('[SYNC SESSION] Manager session token mint failed:', sessRes.status, sessData?.error || sessData);
+        }
+      } catch (e: any) {
+        console.warn('[SYNC SESSION] Manager session sync error:', e?.message || e);
       }
     };
 
     // Check initial session
     supabaseClient.auth.getSession().then(async ({ data: { session } }) => {
-      if (session) {
-        await syncProfileAndSession(session);
-        if (!localStorage.getItem('erp_manager_token')) {
-          try {
-            const sessRes = await fetch('/api/auth/manager-session', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${session.access_token}`
-              },
-              body: JSON.stringify({})
-            });
-            const sessData = await sessRes.json().catch(() => ({}));
-            if (sessRes.ok && sessData.success && sessData.token) {
-              localStorage.setItem('erp_manager_token', sessData.token);
-            }
-          } catch (_) {}
+      let activeSession = session;
+      if (activeSession?.expires_at && activeSession.expires_at * 1000 < Date.now() + 30_000) {
+        const refreshed = await supabaseClient!.auth.refreshSession().catch(() => null);
+        if (refreshed?.data?.session) {
+          activeSession = refreshed.data.session;
+        }
+      }
+
+      if (activeSession) {
+        const synced = await syncProfileAndSession(activeSession);
+        if (synced && MANAGER_ROLES.has(synced.role)) {
+          const existingErpToken = localStorage.getItem('erp_manager_token');
+          if (!existingErpToken) {
+            await syncManagerSessionFromAuth(activeSession, synced.user?.email);
+          } else {
+            try {
+              const vRes = await fetch('/api/auth/verify-session', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${activeSession.access_token}`,
+                  'X-ERP-Session': existingErpToken
+                },
+                body: JSON.stringify({})
+              });
+              const vData = await vRes.json().catch(() => ({}));
+              if (vRes.ok && vData.valid && vData.token) {
+                localStorage.setItem('erp_manager_token', vData.token);
+              } else if (vRes.status === 401 || vRes.status === 403) {
+                await syncManagerSessionFromAuth(activeSession, synced.user?.email);
+              }
+            } catch (_) {}
+          }
         }
       } else if (!isLoggingInRef.current) {
         const savedUserStr = localStorage.getItem('erp_current_user');
         const erpToken = localStorage.getItem('erp_manager_token');
-        if (savedUserStr && !erpToken) {
-          // Clear legacy pre-token localStorage session so manager re-authenticates once to receive a signed session token
-          localStorage.removeItem('erp_current_user');
-          localStorage.removeItem('erp_role');
-          localStorage.removeItem('erp_user_name');
-          localStorage.removeItem('erp_manager_token');
-          setCurrentUser(null);
-        } else if (savedUserStr && erpToken) {
+        if (savedUserStr || erpToken) {
           try {
             const vRes = await fetch('/api/auth/verify-session', {
               method: 'POST',
+              credentials: 'include',
               headers: {
                 'Content-Type': 'application/json',
-                'X-ERP-Session': erpToken
+                ...(erpToken ? { 'X-ERP-Session': erpToken } : {})
               },
               body: JSON.stringify({})
             });
-            if (vRes.status === 401 || vRes.status === 403) {
+            const vData = await vRes.json().catch(() => ({}));
+            if (vRes.ok && vData.valid) {
+              if (vData.token) {
+                localStorage.setItem('erp_manager_token', vData.token);
+              }
+              if (!savedUserStr && (vData.userId || vData.email)) {
+                try {
+                  let restoredRow: any = null;
+                  if (vData.userId) {
+                    const { data } = await supabaseClient!.from('users').select('*').eq('id', vData.userId).maybeSingle();
+                    if (data) restoredRow = data;
+                  }
+                  if (!restoredRow && vData.email) {
+                    const { data } = await supabaseClient!.from('users').select('*').ilike('email', vData.email).maybeSingle();
+                    if (data) restoredRow = data;
+                  }
+                  if (restoredRow) {
+                    const mapped = mapUserFieldsFromDb(restoredRow);
+                    mapped.role = (vData.role as UserRole) || mapped.role;
+                    delete mapped.password;
+                    delete mapped.Password;
+                    setCurrentUser(mapped);
+                    setCurrentRoleState(mapped.role);
+                    setCurrentUserNameState(mapped.name);
+                    localStorage.setItem('erp_current_user', JSON.stringify(mapped));
+                    localStorage.setItem('erp_role', mapped.role);
+                    localStorage.setItem('erp_user_name', mapped.name);
+                  }
+                } catch (_) {}
+              }
+            } else if (vRes.status === 401 || vRes.status === 403) {
               localStorage.removeItem('erp_current_user');
               localStorage.removeItem('erp_role');
               localStorage.removeItem('erp_user_name');
               localStorage.removeItem('erp_manager_token');
+              localStorage.removeItem('erp_session_token');
               setCurrentUser(null);
             }
           } catch (_) {}
@@ -4256,7 +4329,10 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     const { data: { subscription } } = supabaseClient.auth.onAuthStateChange(async (event, session) => {
       console.log(`[SUPABASE AUTH EVENT]: ${event}`);
       if (session) {
-        await syncProfileAndSession(session);
+        const synced = await syncProfileAndSession(session);
+        if (synced && MANAGER_ROLES.has(synced.role) && !isLoggingInRef.current && (event === 'TOKEN_REFRESHED' || !localStorage.getItem('erp_manager_token'))) {
+          await syncManagerSessionFromAuth(session, synced.user?.email);
+        }
       } else {
         // Ignore stale SIGNED_OUT events emitted during an active login transition
         if (event === 'SIGNED_OUT' && !isLoggingInRef.current) {
@@ -4265,6 +4341,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           localStorage.removeItem('erp_role');
           localStorage.removeItem('erp_user_name');
           localStorage.removeItem('erp_manager_token');
+          localStorage.removeItem('erp_session_token');
         }
       }
     });
@@ -4920,6 +4997,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
 
       let authSuccess = false;
       let authedUserObj: any = null;
+      let authedSessionObj: any = null;
       let sawSchemaError = false;
       let sawUnconfirmedError = false;
       let sawRateLimitError = false;
@@ -4984,6 +5062,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             if (!authErr && authData?.session && authData.user) {
               authSuccess = true;
               authedUserObj = authData.user;
+              authedSessionObj = authData.session;
               dbUser = candidateUsers.find(u =>
                 u.id === authData.user.id ||
                 String(u.email ?? '').trim().toLowerCase() === loginEmail ||
@@ -5175,44 +5254,94 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       delete foundUser.password;
       delete foundUser.Password;
 
-      // Successful login: mint durable signed manager session token when applicable
+      // Successful login: mint durable signed manager session token + HttpOnly cookie when applicable
       const isManagerRole = ['Business Owner', 'Operations Team', 'Production Team', 'Sales Team'].includes(foundUser.role);
-      if (authedUserObj) {
-        localStorage.removeItem('erp_manager_token');
-        if (isManagerRole && supabaseClient) {
-          try {
-            const { data: { session: liveSess } } = await supabaseClient.auth.getSession();
-            if (liveSess?.access_token) {
-              const sessRes = await fetch('/api/auth/manager-session', {
+      localStorage.removeItem('erp_manager_token');
+
+      if (isManagerRole) {
+        const requestManagerSession = async (
+          headers: Record<string, string>,
+          payload: Record<string, any>
+        ): Promise<{ ok: boolean; token?: string; error?: string; status?: number }> => {
+          let lastError = '';
+          let lastStatus: number | undefined;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              const res = await fetchWithTimeout('/api/auth/manager-session', {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${liveSess.access_token}`
-                },
-                body: JSON.stringify({})
-              });
-              const sessData = await sessRes.json().catch(() => ({}));
-              if (sessRes.ok && sessData.success && sessData.token) {
-                localStorage.setItem('erp_manager_token', sessData.token);
+                credentials: 'include',
+                headers,
+                body: JSON.stringify(payload)
+              }, 12000);
+              lastStatus = res.status;
+              const rawText = await res.text().catch(() => '');
+              let parsed: any = {};
+              if (rawText) {
+                try {
+                  parsed = JSON.parse(rawText);
+                } catch (_) {
+                  parsed = {};
+                }
+              }
+              if (res.ok && parsed?.success && parsed?.token) {
+                return { ok: true, token: parsed.token, status: res.status };
+              }
+              lastError = parsed?.error || (rawText && !rawText.trim().startsWith('<') ? rawText.trim().slice(0, 200) : '') || `Manager session rejected by server (HTTP ${res.status})`;
+              // Only retry transient gateway/server errors
+              if (res.status >= 502 && res.status <= 504 && attempt === 0) {
+                await new Promise(r => setTimeout(r, 300));
+                continue;
+              }
+              break;
+            } catch (err: any) {
+              lastError = err?.name === 'AbortError'
+                ? 'Manager session request timed out. Please check your connection and try again.'
+                : (err?.message || 'Network error while contacting manager session server.');
+              if (attempt === 0) {
+                await new Promise(r => setTimeout(r, 300));
+                continue;
               }
             }
-          } catch (_) {}
+          }
+          console.error('[LOGIN] Manager session error:', { status: lastStatus, error: lastError, role: foundUser.role, email: foundUser.email });
+          return { ok: false, error: lastError, status: lastStatus };
+        };
+
+        let sessionResult: { ok: boolean; token?: string; error?: string; status?: number };
+        if (authedUserObj) {
+          let accessToken = authedSessionObj?.access_token || '';
+          if (!accessToken && supabaseClient) {
+            const { data: { session: liveSess } } = await supabaseClient.auth.getSession().catch(() => ({ data: { session: null } }));
+            accessToken = liveSess?.access_token || '';
+          }
+          sessionResult = await requestManagerSession(
+            {
+              'Content-Type': 'application/json',
+              ...(accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {})
+            },
+            {
+              userId: authedUserObj.id,
+              ...(accessToken ? { accessToken } : { password: exactPassword }),
+              email: foundUser.email || dbUser.email || cleanInput,
+              identifier: cleanInput
+            }
+          );
+        } else {
+          sessionResult = await requestManagerSession(
+            { 'Content-Type': 'application/json' },
+            {
+              userId: dbUser.id,
+              email: foundUser.email || dbUser.email || cleanInput,
+              identifier: cleanInput,
+              password: exactPassword
+            }
+          );
         }
-      } else {
-        const sessRes = await fetch('/api/auth/manager-session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: foundUser.email || cleanInput,
-            identifier: cleanInput,
-            password: cleanPassword
-          })
-        }).catch(() => null);
-        const sessData = sessRes ? await sessRes.json().catch(() => ({})) : {};
-        if (sessRes && sessRes.ok && sessData.success && sessData.token) {
-          localStorage.setItem('erp_manager_token', sessData.token);
-        } else if (isManagerRole) {
-          const msg = sessData?.error || 'Could not establish a secure manager session. Please try logging in again.';
+
+        if (sessionResult.ok && sessionResult.token) {
+          localStorage.setItem('erp_manager_token', sessionResult.token);
+        } else {
+          const msg = sessionResult.error || 'Unable to establish a secure manager session (no error details returned by server).';
           logAttempt('Failed', msg, dbUser.id);
           return { success: false, error: msg };
         }
@@ -5279,6 +5408,8 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     localStorage.removeItem('erp_role');
     localStorage.removeItem('erp_user_name');
     localStorage.removeItem('erp_manager_token');
+    localStorage.removeItem('erp_session_token');
+    fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
     if (supabaseClient) {
       supabaseClient.auth.signOut()
         .then(() => {

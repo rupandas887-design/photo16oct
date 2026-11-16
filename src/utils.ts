@@ -4882,12 +4882,21 @@ export interface StaffCredentialFetchResult {
 export async function getAdminAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   try {
-    const erpToken = typeof localStorage !== 'undefined' ? localStorage.getItem('erp_admin_token') : null;
+    const erpToken = typeof localStorage !== 'undefined'
+      ? (localStorage.getItem('erp_manager_token') || localStorage.getItem('erp_admin_token'))
+      : null;
     if (erpToken) {
+      headers['X-ERP-Session'] = erpToken;
       headers['X-ERP-Session-Token'] = erpToken;
     }
     if (supabaseClient) {
-      const { data } = await supabaseClient.auth.getSession();
+      let { data } = await supabaseClient.auth.getSession();
+      if (data?.session?.expires_at && data.session.expires_at * 1000 < Date.now() + 30_000) {
+        const refreshed = await supabaseClient.auth.refreshSession().catch(() => null);
+        if (refreshed?.data?.session) {
+          data = refreshed.data;
+        }
+      }
       if (data?.session?.access_token) {
         headers['Authorization'] = `Bearer ${data.session.access_token}`;
       }
@@ -4907,6 +4916,7 @@ export async function fetchStaffCurrentCredential(params: {
     const headers = await getAdminAuthHeaders();
     const resp = await fetch('/api/auth/get-staff-password', {
       method: 'POST',
+      credentials: 'include',
       headers,
       body: JSON.stringify(params)
     });

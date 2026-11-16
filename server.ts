@@ -30,6 +30,7 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
 
 async function startServer() {
   const app = express();
+  app.set('trust proxy', 1);
   // Dev server must always run on port 3000 (nginx listens on 8080 and proxies to 3000)
   const portArgIdx = process.argv.indexOf('--port');
   const cliPort = portArgIdx !== -1 && process.argv[portArgIdx + 1] ? parseInt(process.argv[portArgIdx + 1], 10) : null;
@@ -45,7 +46,7 @@ async function startServer() {
     res.status(200).send('OK');
   });
 
-  app.use(cors());
+  app.use(cors({ origin: true, credentials: true }));
 
   // Proxy /supabase to the actual Supabase project
   // MUST be before express.json() to prevent body from being consumed
@@ -2628,6 +2629,57 @@ async function startServer() {
     }
   };
 
+  const MANAGER_SESSION_COOKIE = 'erp_manager_session';
+  const MANAGER_ROLES_SET = new Set(['Business Owner', 'Operations Team', 'Production Team', 'Sales Team']);
+
+  const parseCookies = (req: any): Record<string, string> => {
+    const raw = String(req?.headers?.cookie || '');
+    const out: Record<string, string> = {};
+    if (!raw) return out;
+    for (const part of raw.split(';')) {
+      const idx = part.indexOf('=');
+      if (idx <= 0) continue;
+      const key = part.slice(0, idx).trim();
+      const val = part.slice(idx + 1).trim();
+      try {
+        out[key] = decodeURIComponent(val);
+      } catch {
+        out[key] = val;
+      }
+    }
+    return out;
+  };
+
+  const isHttpsRequest = (req: any): boolean => {
+    if (req?.secure) return true;
+    const xfProto = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+    if (xfProto === 'https') return true;
+    const origin = String(req?.headers?.origin || req?.headers?.referer || '').trim().toLowerCase();
+    if (origin.startsWith('https://')) return true;
+    return process.env.NODE_ENV === 'production';
+  };
+
+  const setManagerSessionCookie = (req: any, res: any, token: string) => {
+    const isHttps = isHttpsRequest(req);
+    res.cookie(MANAGER_SESSION_COOKIE, token, {
+      httpOnly: true,
+      secure: isHttps,
+      sameSite: isHttps ? 'none' : 'lax',
+      path: '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+  };
+
+  const clearManagerSessionCookie = (req: any, res: any) => {
+    const isHttps = isHttpsRequest(req);
+    res.clearCookie(MANAGER_SESSION_COOKIE, {
+      httpOnly: true,
+      secure: isHttps,
+      sameSite: isHttps ? 'none' : 'lax',
+      path: '/'
+    });
+  };
+
   const extractNotesAuthUserIdServer = (notesVal: any): string | null => {
     if (!notesVal) return null;
     try {
@@ -3153,10 +3205,25 @@ async function startServer() {
             };
           }
         } catch (_) {}
+
+        const verifiedBearerErp = verifyManagerSessionToken(jwt);
+        if (verifiedBearerErp) {
+          return {
+            id: verifiedBearerErp.uid,
+            email: verifiedBearerErp.email,
+            metadataRole: verifiedBearerErp.role
+          };
+        }
       }
     }
 
-    const erpToken = String(req?.headers?.['x-erp-session'] || '').trim();
+    const cookies = parseCookies(req);
+    const erpToken = String(
+      req?.headers?.['x-erp-session'] ||
+      req?.headers?.['x-erp-session-token'] ||
+      cookies[MANAGER_SESSION_COOKIE] ||
+      ''
+    ).trim();
     const verified = verifyManagerSessionToken(erpToken);
     if (verified) {
       return {
@@ -3902,94 +3969,184 @@ async function startServer() {
     }
   });
 
-  // Issue a short-lived signed session token for system division manager/owner accounts logging in via legacy DB password fallback or Supabase Auth
+  // Issue a durable signed session token + HttpOnly cookie for authorized manager/owner accounts
   app.post('/api/auth/manager-session', async (req, res) => {
     try {
       const db = getServerSupabase();
+      const { userId, accessToken, identifier, email, password } = req.body || {};
+      const hasCredentialFallback = Boolean(String(password ?? '') && (email || identifier || userId));
 
-      // 1. Also allow an already-authenticated Supabase Auth manager/owner JWT to mint an ERP manager fallback token
+      // 1. Verify Supabase Auth JWT (from Authorization header or request body accessToken)
       const authHeader = String(req?.headers?.authorization || '').trim();
-      if (authHeader.toLowerCase().startsWith('bearer ')) {
-        const jwt = authHeader.slice(7).trim();
-        if (jwt && jwt !== SUPABASE_ANON_KEY) {
-          try {
-            const { data: userData, error: jwtErr } = await db.auth.getUser(jwt);
-            if (!jwtErr && userData?.user) {
-              const authInfo = await resolveCallerAuthoritativeRole(db, {
-                id: userData.user.id,
-                email: userData.user.email,
-                mobile: userData.user.user_metadata?.mobile,
-                metadataRole: userData.user.user_metadata?.role
-              });
-              if (authInfo.active && ['Business Owner', 'Operations Team', 'Production Team', 'Sales Team'].includes(authInfo.role)) {
-                const token = signManagerSessionToken({
-                  uid: String(userData.user.id),
-                  email: cleanEmail(userData.user.email),
-                  role: authInfo.role
-                });
-                return res.json({ success: true, token, role: authInfo.role });
-              }
+      const headerJwt = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
+      const jwt = (headerJwt && headerJwt !== SUPABASE_ANON_KEY)
+        ? headerJwt
+        : (typeof accessToken === 'string' && accessToken.trim() && accessToken.trim() !== SUPABASE_ANON_KEY ? accessToken.trim() : '');
+
+      if (jwt) {
+        try {
+          const { data: userData, error: jwtErr } = await db.auth.getUser(jwt);
+          if (!jwtErr && userData?.user) {
+            if (userId && String(userId).trim() !== String(userData.user.id).trim()) {
+              console.warn('[Server Auth Manager Session] Body userId differs from verified JWT user.id:', userId, userData.user.id);
             }
-          } catch (_) {}
+            const authInfo = await resolveCallerAuthoritativeRole(db, {
+              id: userData.user.id,
+              email: userData.user.email,
+              mobile: userData.user.user_metadata?.mobile,
+              metadataRole: userData.user.user_metadata?.role
+            });
+            if (!authInfo.active) {
+              console.warn('[Server Auth Manager Session] Deactivated user attempted manager session:', userData.user.email);
+              return res.status(403).json({
+                success: false,
+                code: 'ACCOUNT_DEACTIVATED',
+                error: 'Your account has been deactivated. Please contact the administrator.'
+              });
+            }
+            if (!MANAGER_ROLES_SET.has(authInfo.role)) {
+              console.warn('[Server Auth Manager Session] Non-manager role attempted manager session:', userData.user.email, authInfo.role);
+              return res.status(403).json({
+                success: false,
+                code: 'ROLE_NOT_MANAGER',
+                error: `Account role "${authInfo.role}" is not authorized for a manager session.`
+              });
+            }
+            const token = signManagerSessionToken({
+              uid: String(userData.user.id),
+              email: cleanEmail(userData.user.email),
+              role: authInfo.role
+            });
+            setManagerSessionCookie(req, res, token);
+            return res.json({
+              success: true,
+              token,
+              userId: String(userData.user.id),
+              email: cleanEmail(userData.user.email),
+              role: authInfo.role
+            });
+          } else {
+            const jwtReason = jwtErr?.message || 'Supabase token verification failed';
+            console.warn('[Server Auth Manager Session] JWT validation failed:', jwtReason);
+            if (!hasCredentialFallback) {
+              return res.status(401).json({
+                success: false,
+                code: 'INVALID_ACCESS_TOKEN',
+                error: `Authentication token verification failed (${jwtReason}). Please log in again.`
+              });
+            }
+          }
+        } catch (jwtEx: any) {
+          console.error('[Server Auth Manager Session] JWT check exception:', jwtEx?.message || jwtEx);
+          if (!hasCredentialFallback) {
+            return res.status(502).json({
+              success: false,
+              code: 'TOKEN_VERIFICATION_ERROR',
+              error: `Failed to verify authentication token: ${jwtEx?.message || 'Auth service unavailable'}`
+            });
+          }
         }
       }
 
-      // 2. Credential verification against public.users (check all matching candidate rows for duplicate emails)
-      const { identifier, email, password } = req.body || {};
-      const cleanInput = String(email || identifier || '').trim();
-      const cleanPwd = String(password || '').trim();
-      if (!cleanInput || !cleanPwd) {
-        return res.status(400).json({ success: false, error: 'Credentials required' });
+      // 2. Credential verification against public.users (supports email, username, mobile, or userId; checks all duplicate rows)
+      const lookupTerms = Array.from(new Set(
+        [email, identifier]
+          .map(v => String(v ?? '').trim())
+          .filter(Boolean)
+      ));
+      const rawPwd = typeof password === 'string' ? password : String(password || '');
+      const cleanPwd = rawPwd.trim();
+      const targetUserId = String(userId || '').trim();
+
+      if ((lookupTerms.length === 0 && !targetUserId) || !cleanPwd) {
+        return res.status(400).json({
+          success: false,
+          code: 'MISSING_CREDENTIALS',
+          error: 'Authenticated access token or valid manager credentials are required.'
+        });
       }
 
-      const lowerInput = cleanInput.toLowerCase();
-      const digits = cleanInput.replace(/\D/g, '');
-      const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
-
-      const { data: allUsers, error: uErr } = await db.from('users').select('id, email, username, mobile, role, active, password');
+      const { data: allUsers, error: uErr } = await db
+        .from('users')
+        .select('id, email, username, mobile, role, active, password');
       if (uErr || !Array.isArray(allUsers)) {
-        return res.status(500).json({ success: false, error: 'Failed to verify credentials' });
+        console.error('[Server Auth Manager Session] Database users lookup failed:', uErr?.message || uErr);
+        return res.status(500).json({
+          success: false,
+          code: 'DB_USERS_LOOKUP_FAILED',
+          error: `Database user verification failed: ${uErr?.message || 'Unable to query public.users'}`
+        });
       }
 
       const candidates = allUsers.filter((u: any) => {
+        if (targetUserId && String(u.id || '').trim() === targetUserId) return true;
         const uEmail = cleanEmail(u.email);
         const uUser = cleanEmail(u.username);
         const uMob = cleanPhone(u.mobile);
         const uMob10 = uMob.length >= 10 ? uMob.slice(-10) : uMob;
-        if (uEmail && uEmail === lowerInput) return true;
-        if (uUser && uUser === lowerInput) return true;
-        if (!cleanInput.includes('@') && last10.length >= 7 && uMob10 === last10) return true;
+        for (const term of lookupTerms) {
+          const lowerTerm = term.toLowerCase();
+          if (uEmail && uEmail === lowerTerm) return true;
+          if (uUser && uUser === lowerTerm) return true;
+          if (!term.includes('@')) {
+            const digits = term.replace(/\D/g, '');
+            const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+            if (digits.length >= 7 && !/^0+$/.test(digits) && (uMob === digits || (last10.length >= 7 && uMob10 === last10))) {
+              return true;
+            }
+          }
+        }
         return false;
       });
 
       if (candidates.length === 0) {
-        return res.status(401).json({ success: false, error: 'Invalid credentials' });
+        console.warn('[Server Auth Manager Session] No matching public.users row for:', lookupTerms, targetUserId);
+        return res.status(401).json({
+          success: false,
+          code: 'USER_NOT_FOUND',
+          error: 'Manager account record not found in database.'
+        });
       }
 
-      const bBuf = Buffer.from(cleanPwd, 'utf8');
+      const passwordsMatch = (storedRaw: any): boolean => {
+        const storedExact = String(storedRaw ?? '');
+        const storedTrimmed = storedExact.trim();
+        if (!storedTrimmed) return false;
+        const timingEq = (a: string, b: string) => {
+          const aBuf = Buffer.from(a, 'utf8');
+          const bBuf = Buffer.from(b, 'utf8');
+          return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
+        };
+        return timingEq(storedTrimmed, cleanPwd) || (rawPwd !== cleanPwd && timingEq(storedExact, rawPwd));
+      };
+
       const activePasswordMatched = candidates.find((u: any) => {
         const isActive = u.active !== false && String(u.active) !== 'false' && u.active !== 0 && String(u.active) !== '0';
-        const storedPwd = String(u.password ?? '').trim();
-        if (!isActive || !storedPwd) return false;
-        const aBuf = Buffer.from(storedPwd, 'utf8');
-        return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
+        return isActive && passwordsMatch(u.password);
       });
 
       if (!activePasswordMatched) {
-        const anyMatchedPwd = candidates.some((u: any) => {
-          const storedPwd = String(u.password ?? '').trim();
-          if (!storedPwd) return false;
-          const aBuf = Buffer.from(storedPwd, 'utf8');
-          return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
-        });
+        const anyMatchedPwd = candidates.some((u: any) => passwordsMatch(u.password));
         if (anyMatchedPwd) {
-          return res.status(403).json({ success: false, error: 'Account is deactivated' });
+          return res.status(403).json({
+            success: false,
+            code: 'ACCOUNT_DEACTIVATED',
+            error: 'Your account has been deactivated. Please contact the administrator.'
+          });
         }
         const anyHasPwd = candidates.some((u: any) => String(u.password ?? '').trim() !== '');
         if (!anyHasPwd) {
-          return res.status(401).json({ success: false, error: 'Account uses standard Auth login' });
+          return res.status(401).json({
+            success: false,
+            code: 'NO_FALLBACK_PASSWORD',
+            error: 'This account uses standard Supabase Authentication. Supabase Auth verification failed or timed out.'
+          });
         }
-        return res.status(401).json({ success: false, error: 'Invalid credentials' });
+        return res.status(401).json({
+          success: false,
+          code: 'INVALID_CREDENTIALS',
+          error: 'Invalid manager credentials.'
+        });
       }
 
       const authInfo = await resolveCallerAuthoritativeRole(db, {
@@ -3998,8 +4155,20 @@ async function startServer() {
         mobile: activePasswordMatched.mobile,
         metadataRole: activePasswordMatched.role
       });
-      if (!['Business Owner', 'Operations Team', 'Production Team', 'Sales Team'].includes(authInfo.role)) {
-        return res.status(403).json({ success: false, error: 'Not authorized for manager session' });
+      if (!authInfo.active) {
+        return res.status(403).json({
+          success: false,
+          code: 'ACCOUNT_DEACTIVATED',
+          error: 'Your account has been deactivated. Please contact the administrator.'
+        });
+      }
+      if (!MANAGER_ROLES_SET.has(authInfo.role)) {
+        console.warn('[Server Auth Manager Session] Resolved role is not a manager:', activePasswordMatched.email, authInfo.role);
+        return res.status(403).json({
+          success: false,
+          code: 'ROLE_NOT_MANAGER',
+          error: `Account role "${authInfo.role}" is not authorized for a manager session.`
+        });
       }
 
       const token = signManagerSessionToken({
@@ -4008,10 +4177,21 @@ async function startServer() {
         role: authInfo.role
       });
 
-      return res.json({ success: true, token, role: authInfo.role });
+      setManagerSessionCookie(req, res, token);
+      return res.json({
+        success: true,
+        token,
+        userId: String(activePasswordMatched.id),
+        email: cleanEmail(activePasswordMatched.email),
+        role: authInfo.role
+      });
     } catch (err: any) {
       console.error('[Server Auth Manager Session Error]', err);
-      return res.status(500).json({ success: false, error: err?.message || 'Failed to create manager session' });
+      return res.status(500).json({
+        success: false,
+        code: 'MANAGER_SESSION_EXCEPTION',
+        error: err?.message || 'Failed to create manager session'
+      });
     }
   });
 
@@ -4020,16 +4200,42 @@ async function startServer() {
       const db = getServerSupabase();
       const callerIdentity = await authenticateCallerIdentity(db, req);
       if (!callerIdentity) {
+        clearManagerSessionCookie(req, res);
         return res.status(401).json({ success: false, valid: false, error: 'Session missing or expired' });
       }
       const callerAuth = await resolveCallerAuthoritativeRole(db, callerIdentity);
       if (!callerAuth.active) {
+        clearManagerSessionCookie(req, res);
         return res.status(403).json({ success: false, valid: false, error: 'Account is deactivated' });
       }
-      return res.json({ success: true, valid: true, role: callerAuth.role });
+
+      let refreshedToken: string | undefined;
+      if (MANAGER_ROLES_SET.has(callerAuth.role)) {
+        refreshedToken = signManagerSessionToken({
+          uid: String(callerIdentity.id || ''),
+          email: cleanEmail(callerIdentity.email),
+          role: callerAuth.role
+        });
+        setManagerSessionCookie(req, res, refreshedToken);
+      }
+
+      return res.json({
+        success: true,
+        valid: true,
+        userId: callerIdentity.id || null,
+        email: callerIdentity.email || null,
+        role: callerAuth.role,
+        ...(refreshedToken ? { token: refreshedToken } : {})
+      });
     } catch (err: any) {
+      console.error('[Server Auth Verify Session Error]', err);
       return res.status(500).json({ success: false, error: err?.message || 'Failed to verify session' });
     }
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    clearManagerSessionCookie(req, res);
+    return res.json({ success: true });
   });
 
   // RBAC-protected endpoint to retrieve the decrypted current password of an authorized staff member
