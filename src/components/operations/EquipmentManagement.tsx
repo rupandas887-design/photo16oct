@@ -301,6 +301,7 @@ export const EquipmentManagement: React.FC = () => {
 
   // Form states
   const [showGearForm, setShowGearForm] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const [form, setForm] = useState({
     equipment_name: '',
@@ -365,6 +366,7 @@ export const EquipmentManagement: React.FC = () => {
   // Form submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     if (!canEdit) {
       showToast('error', 'Unauthorized! Operations Team or Business Owner privileges required.');
       return;
@@ -400,6 +402,7 @@ export const EquipmentManagement: React.FC = () => {
       return;
     }
 
+    setIsSaving(true);
     try {
       if (editingId) {
         // Editing: Only allow updating the 4 fields!
@@ -413,43 +416,24 @@ export const EquipmentManagement: React.FC = () => {
         showToast('success', 'Equipment details updated successfully.');
         handleCancelEdit();
       } else {
-        // Registering new
-        const now = new Date().toISOString();
-        const { error } = await supabaseClient.from('equipment').insert([
-          {
-            equipment_name: form.equipment_name,
-            brand: form.brand,
-            Equipment_Category: form.equipment_type,
-            Equipment_Status: form.status,
-            equipment_type: form.equipment_type,
-            status: form.status,
-            model: '',
-            serial_number: null,
-            quantity: 1,
-            available_quantity: 1,
-            purchase_date: null,
-            purchase_price: null,
-            storage_location: null,
-            notes: null,
-            created_by: currentUserName || 'Operations Team',
-            updated_by: currentUserName || 'Operations Team',
-            created_at: now,
-            updated_at: now
-          }
-        ]);
-
-        if (error) {
-          console.error('Failed to add equipment:', error);
-          showToast('error', '❌ Failed to add equipment.');
-          return;
-        }
+        // Registering new via optimistic addEquipment context helper
+        await addEquipment({
+          equipment_name: form.equipment_name,
+          brand: form.brand,
+          equipment_type: form.equipment_type,
+          status: form.status as any,
+          model: '',
+          quantity: 1,
+          available_quantity: 1,
+        } as any);
 
         showToast('success', '✅ Equipment added successfully.');
-        refreshData();
         handleCancelEdit();
       }
     } catch (err: any) {
       showToast('error', err.message || 'An error occurred while saving equipment.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -702,9 +686,8 @@ export const EquipmentManagement: React.FC = () => {
         setForm(prev => ({ ...prev, equipment_type: trimmedNew }));
       }
 
-      // 5. Trigger refresh of RoleContext equipment and re-fetch categories from DB
+      // 5. Re-fetch categories list (equipment state already updated optimistically)
       await fetchDbCategories();
-      refreshData();
 
       showToast('success', `Equipment category "${currentName}" updated to "${trimmedNew}" successfully.`);
       setShowEditCategoryModal(false);
@@ -2065,16 +2048,18 @@ export const EquipmentManagement: React.FC = () => {
                     <div className="flex gap-2 justify-end">
                       <button
                         type="button"
+                        disabled={isSaving}
                         onClick={handleCancelEdit}
-                        className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold rounded-xl cursor-pointer text-xs transition-colors"
+                        className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold rounded-xl cursor-pointer text-xs transition-colors disabled:opacity-50"
                       >
                         Cancel
                       </button>
                       <button
                         type="submit"
-                        className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-black font-semibold rounded-xl cursor-pointer flex items-center gap-1 text-xs shadow-md transition-all active:scale-95"
+                        disabled={isSaving}
+                        className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-black font-semibold rounded-xl cursor-pointer flex items-center gap-1 text-xs shadow-md transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
                       >
-                        <span>{editingId ? 'Update Gear' : 'Add to Inventory'}</span>
+                        <span>{isSaving ? 'Saving...' : (editingId ? 'Update Gear' : 'Add to Inventory')}</span>
                       </button>
                     </div>
                   ) : (

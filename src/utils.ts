@@ -1322,10 +1322,33 @@ export async function verifyStaffDatabaseUniqueness(
     };
   }
 
-  // 1. Query production_staff (ONLY allowed table)
-  const { data: prodData, error: prodErr } = await supabaseClient
-    .from('production_staff')
-    .select('staff_id, name, mobile, email');
+  // 1-3. Query production_staff, users, and operations_staff in parallel with 15s timeout
+  let prodRes: any;
+  let usersRes: any;
+  let opsRes: any;
+  try {
+    const queryTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Database uniqueness verification timed out. Please try again.')), 15000)
+    );
+    [prodRes, usersRes, opsRes] = await Promise.race([
+      Promise.all([
+        supabaseClient.from('production_staff').select('staff_id, name, mobile, email'),
+        supabaseClient.from('users').select('id, name, mobile, phone, email, role'),
+        supabaseClient.from('operations_staff').select('staff_id, name, mobile, email')
+      ]),
+      queryTimeout
+    ]) as [any, any, any];
+  } catch (timeoutErr: any) {
+    return {
+      isUnique: false,
+      isMobileDuplicate: false,
+      isEmailDuplicate: false,
+      queryFailed: true,
+      error: timeoutErr?.message || 'Database uniqueness check failed.'
+    };
+  }
+
+  const { data: prodData, error: prodErr } = prodRes || {};
   if (prodErr) {
     console.error('[Safe Diagnostics] production_staff query failed:', prodErr.message);
     return {
@@ -1337,10 +1360,7 @@ export async function verifyStaffDatabaseUniqueness(
     };
   }
 
-  // 2. Query users (ONLY allowed table)
-  const { data: usersData, error: usersErr } = await supabaseClient
-    .from('users')
-    .select('id, name, mobile, phone, email, role');
+  const { data: usersData, error: usersErr } = usersRes || {};
   if (usersErr) {
     console.error('[Safe Diagnostics] users query failed:', usersErr.message);
     return {
@@ -1352,10 +1372,7 @@ export async function verifyStaffDatabaseUniqueness(
     };
   }
 
-  // 3. Query operations_staff (ONLY allowed table)
-  const { data: opsData, error: opsErr } = await supabaseClient
-    .from('operations_staff')
-    .select('staff_id, name, mobile, email');
+  const { data: opsData, error: opsErr } = opsRes || {};
   if (opsErr) {
     console.error('[Safe Diagnostics] operations_staff query failed:', opsErr.message);
     return {
@@ -4850,5 +4867,130 @@ export const isValidPlaintextPassword = (val: any): boolean => {
   if (isPasswordHashOrToken(s)) return false;
   return true;
 };
+
+export const MASKED_EXISTING_PASSWORD = '••••••••••••';
+export const HASHED_PASSWORD_NOTICE = 'Existing Password Set (Securely Hashed)';
+
+export interface StaffCredentialFetchResult {
+  hasPassword: boolean;
+  needsReset: boolean;
+  password: string | null;
+  unauthorized?: boolean;
+  error?: string;
+}
+
+export async function getAdminAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    const erpToken = typeof localStorage !== 'undefined' ? localStorage.getItem('erp_admin_token') : null;
+    if (erpToken) {
+      headers['X-ERP-Session-Token'] = erpToken;
+    }
+    if (supabaseClient) {
+      const { data } = await supabaseClient.auth.getSession();
+      if (data?.session?.access_token) {
+        headers['Authorization'] = `Bearer ${data.session.access_token}`;
+      }
+    }
+  } catch (_) {}
+  return headers;
+}
+
+export async function fetchStaffCurrentCredential(params: {
+  staff_id?: string | null;
+  auth_id?: string | null;
+  email?: string | null;
+  mobile?: string | null;
+  staff_type?: 'production' | 'operations';
+}): Promise<StaffCredentialFetchResult> {
+  try {
+    const headers = await getAdminAuthHeaders();
+    const resp = await fetch('/api/auth/get-staff-password', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(params)
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.status === 401 || resp.status === 403) {
+      return {
+        hasPassword: Boolean(params.auth_id),
+        needsReset: false,
+        password: null,
+        unauthorized: true,
+        error: data?.error || 'Authorized administrator session required to view credentials.'
+      };
+    }
+    if (!resp.ok || !data?.success) {
+      return {
+        hasPassword: Boolean(params.auth_id),
+        needsReset: Boolean(params.auth_id),
+        password: null,
+        error: data?.error || 'Failed to load staff credential.'
+      };
+    }
+    const hasPassword = Boolean(data?.hasPassword ?? data?.authLinked ?? params.auth_id);
+    const pwd = typeof data?.password === 'string' && data.password.length > 0 ? data.password : null;
+    return {
+      hasPassword,
+      needsReset: Boolean(data?.needsReset ?? (hasPassword && !pwd)),
+      password: pwd
+    };
+  } catch {
+    return {
+      hasPassword: Boolean(params.auth_id),
+      needsReset: Boolean(params.auth_id),
+      password: null
+    };
+  }
+}
+
+export function generateSecureStaffPassword(length = 10): string {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghijkmnpqrstuvwxyz';
+  const digits = '23456789';
+  const symbols = '@#$!';
+  const all = upper + lower + digits + symbols;
+  const pick = (chars: string, byte: number) => chars[byte % chars.length];
+  const bytes = new Uint8Array(Math.max(8, length));
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  const result = [
+    pick(upper, bytes[0]),
+    pick(lower, bytes[1]),
+    pick(digits, bytes[2]),
+    pick(symbols, bytes[3])
+  ];
+  for (let i = 4; i < bytes.length; i++) {
+    result.push(pick(all, bytes[i]));
+  }
+  return result.join('');
+}
+
+export function hasOptimisticStaffAuthAccount(member: any, users: any[] = []): boolean {
+  if (!member) return false;
+  if (member.auth_user_id) return true;
+  const memberEmail = cleanEmail(member.email);
+  const memberMobile = cleanPhone(member.mobile);
+  return (users || []).some((u: any) => {
+    if (!u) return false;
+    if (memberEmail && cleanEmail(u.email) === memberEmail) return true;
+    if (memberMobile && memberMobile.length >= 7 && cleanPhone(u.mobile) === memberMobile) return true;
+    return false;
+  });
+}
+
+export async function verifyStaffHasExistingPassword(params: {
+  staff_id?: string | null;
+  auth_id?: string | null;
+  email?: string | null;
+  mobile?: string | null;
+  staff_type?: 'production' | 'operations';
+}): Promise<boolean> {
+  const res = await fetchStaffCurrentCredential(params);
+  return res.hasPassword;
+}
 
 

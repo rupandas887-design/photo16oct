@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useRole, getStaffCurrentPassword, fetchStaffCurrentPassword } from './RoleContext';
+import { useRole } from './RoleContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabaseClient } from '../supabaseClient';
 import { 
@@ -16,9 +16,10 @@ import { Production, EditingStatus, Staff } from '../types';
 import { performBusinessOwnerReview } from '../utils/businessOwnerReview';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { ProjectDetailModal } from './ProjectDetailModal';
-import { formatINR, extractEventsList, triggerAutoScrollAndFocus, convertTo12Hour, formatQtyItem, parseQtyAndText, parseDeliverablesWithQty, uploadProofToStorage, resolveStorageUrl, parseCustomerProof, ParsedCustomerProof, formatDateDDMMYY, checkGlobalStaffUniqueness, formatStaffErrorMessage, verifyStaffDatabaseUniqueness, scrollToFirstError, isPasswordHashOrToken, isValidPlaintextPassword } from '../utils';
+import { formatINR, extractEventsList, triggerAutoScrollAndFocus, convertTo12Hour, formatQtyItem, parseQtyAndText, parseDeliverablesWithQty, uploadProofToStorage, resolveStorageUrl, parseCustomerProof, ParsedCustomerProof, formatDateDDMMYY, checkGlobalStaffUniqueness, formatStaffErrorMessage, verifyStaffDatabaseUniqueness, scrollToFirstError } from '../utils';
 import { AppLogo } from './AppLogo';
 import { AddNoteModal } from './AddNoteModal';
+import { SafeProofImage } from './ui/SafeProofImage';
 import { StatusText } from './ui/StatusText';
 import { EventDropdownCell } from './EventDropdownCell';
 import { UnifiedEventDropdownCell } from './UnifiedEventDropdownCell';
@@ -622,7 +623,8 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ activeSubTab
     pushUpdate,
     clientAcceptanceVerifications = [],
     saveClientAcceptanceVerification,
-    statusHistory = []
+    statusHistory = [],
+    fetchStaffPasswordStatus
   } = useRole();
 
   // Role permissions gate
@@ -2311,6 +2313,12 @@ ${coordinatorName}`;
 
   // Action Dropdown state for Production Leads table
   const [openActionDropdown, setOpenActionDropdown] = useState<any>(null);
+  const [whatsappCompletionError, setWhatsappCompletionError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!whatsappCompletionError) return;
+    const timer = setTimeout(() => setWhatsappCompletionError(null), 6000);
+    return () => clearTimeout(timer);
+  }, [whatsappCompletionError]);
   const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [noteModalLeadId, setNoteModalLeadId] = useState('');
   const [noteModalOrderId, setNoteModalOrderId] = useState('');
@@ -2978,6 +2986,126 @@ Production Team`;
     return { message: msg, phone };
   };
 
+  const formatCustomerWhatsAppNumber = (rawPhone?: string | null): string | null => {
+    if (!rawPhone) return null;
+    const trimmed = String(rawPhone).trim();
+    if (!trimmed || ['no contact phone', '—', '-', 'n/a', 'na', 'null', 'undefined', 'none'].includes(trimmed.toLowerCase())) {
+      return null;
+    }
+    let digits = trimmed.replace(/\D/g, '');
+    if (!digits) return null;
+    if (digits.startsWith('00') && digits.length > 12) {
+      digits = digits.slice(2);
+    }
+    if (digits.startsWith('910') && digits.length === 13) {
+      digits = '91' + digits.slice(3);
+    }
+    if (digits.startsWith('0')) {
+      digits = digits.replace(/^0+/, '');
+    }
+    if (!digits || digits.length < 10 || digits.length > 15 || /^(\d)\1{9,}$/.test(digits)) {
+      return null;
+    }
+    if (digits.length === 10) {
+      return /^[6-9]\d{9}$/.test(digits) ? `91${digits}` : null;
+    }
+    if (digits.length === 12 && digits.startsWith('91')) {
+      return /^[6-9]\d{9}$/.test(digits.slice(2)) ? digits : null;
+    }
+    if (!digits.startsWith('91') && digits.length >= 11 && digits.length <= 15) {
+      return digits;
+    }
+    return null;
+  };
+
+  const handleOpenWhatsAppCompletionMessage = (prod: Production, orderRow?: any) => {
+    setWhatsappCompletionError(null);
+    const { order: linkedOrder, lead: linkedLead } = resolveOrderAndLead(prod);
+
+    const rawCustomerName =
+      linkedOrder?.customer_name ||
+      (linkedOrder as any)?.client_name ||
+      linkedLead?.customer_name ||
+      (linkedLead as any)?.client_name ||
+      (linkedLead as any)?.name ||
+      (orderRow?.customer_name && orderRow.customer_name !== 'Client' ? orderRow.customer_name : '') ||
+      ((prod as any).customer_name && (prod as any).customer_name !== 'Client' ? (prod as any).customer_name : '');
+
+    const customerName =
+      rawCustomerName && !['—', '-', 'n/a', 'na', 'null', 'undefined', 'client'].includes(String(rawCustomerName).trim().toLowerCase())
+        ? String(rawCustomerName).trim()
+        : 'Customer';
+
+    const phoneCandidates = [
+      (linkedOrder as any)?.whatsapp_number,
+      linkedLead?.whatsapp_number,
+      linkedOrder?.mobile,
+      (linkedOrder as any)?.customer_phone,
+      (linkedOrder as any)?.phone,
+      (linkedOrder as any)?.contact_number,
+      linkedLead?.mobile,
+      (linkedLead as any)?.customer_phone,
+      (linkedLead as any)?.phone,
+      (linkedLead as any)?.contact_number,
+      orderRow?.mobile,
+      (prod as any)?.customer_mobile,
+      (prod as any)?.mobile,
+    ].filter((val) => {
+      if (val === undefined || val === null) return false;
+      const trimmed = String(val).trim();
+      if (!trimmed) return false;
+      return !['no contact phone', '—', '-', 'n/a', 'na', 'null', 'undefined', 'none'].includes(trimmed.toLowerCase());
+    });
+
+    let formattedPhone: string | null = null;
+    for (const candidate of phoneCandidates) {
+      const parsed = formatCustomerWhatsAppNumber(String(candidate));
+      if (parsed) {
+        formattedPhone = parsed;
+        break;
+      }
+    }
+
+    if (!formattedPhone) {
+      const errorText =
+        phoneCandidates.length === 0
+          ? `Customer WhatsApp/mobile number is missing for ${customerName}. Please add a valid phone number before sending.`
+          : `Invalid customer WhatsApp/mobile number (${String(phoneCandidates[0]).trim()}) for ${customerName}. Please update the phone number before sending.`;
+      setWhatsappCompletionError(errorText);
+      return;
+    }
+
+    const message =
+      `Hi ${customerName},\n\n` +
+      `Thank you for trusting PHOTOCREW PICTURES and choosing us to capture your special moments. We’re happy to inform you that your project has been successfully completed and delivered.\n\n` +
+      `We kindly request you to take a moment to go through the following important information:\n\n` +
+      `*1. Project Delivery*\n\n` +
+      `We have delivered your RAW files, edited photographs and videos, and album (if included in your package).\n\n` +
+      `*2. Social Media Usage*\n\n` +
+      `We may use selected photographs and videos from your project for our social media, portfolio, and promotional purposes.\n\n` +
+      `*3. Data Storage & Backup Policy*\n\n` +
+      `Please note that all your project data will be permanently deleted from our storage system after 7 days from the delivery date.\n\n` +
+      `We kindly request you to download and securely back up all the delivered files within this period.\n\n` +
+      `Once the 7-day period has expired, PHOTOCREW PICTURES will not be responsible for any data loss or recovery requests.\n\n` +
+      `*4. Your Feedback Means a Lot to Us!*\n\n` +
+      `We would truly be grateful if you could take a moment to share your experience with us by leaving a Google review.\n\n` +
+      `Your kind words and 5-star rating will help us reach more customers and continue doing what we love.\n\n` +
+      `⭐ Leave us a Google Review:\n` +
+      `https://g.page/r/CemEVVMcmGBdEBM/review\n\n` +
+      `Thank you once again for choosing us. It was a pleasure being part of your special moments!\n\n` +
+      `Warm regards,\n` +
+      `Team PHOTOCREW PICTURES`;
+
+    const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(message)}`;
+    const link = document.createElement('a');
+    link.href = whatsappUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleOpenResendReviewPopup = (prod: Production) => {
     if (prod.production_status === 'Order Closed' || prod.editing_status === 'Order Closed') return;
     const { message, phone } = generateCustomerReviewMessage(prod);
@@ -3070,7 +3198,7 @@ Production Team`;
     setCaPhysicalDriveDetails(loadedPhysicalDrive);
 
     // Load persisted 5-item checklist states
-    setCaVerifyCustomerAcceptance(prod.checklist_customer_acceptance ?? true);
+    setCaVerifyCustomerAcceptance(Boolean(prod.checklist_customer_acceptance ?? false));
     setCaContentUsageConfirmation(prod.checklist_content_usage ?? false);
     setCaFootageDeleted7Days(prod.checklist_footage_deleted_7_days ?? false);
     setCaVerifyPaymentSales(prod.checklist_payment_from_sales ?? false);
@@ -3113,6 +3241,62 @@ Production Team`;
       (eventGroups.length > 0 && eventGroups.every(g => initialValidationMap[g.eventId]))
     );
     setCaValidateEditedFiles(overallValidated);
+
+    // Load linked Event & persisted Final Image strictly for this project / order / event
+    const { order: linkedOrder, lead: linkedLead } = resolveOrderAndLead(prod);
+    const linkedEvents = extractEventsList(linkedLead, linkedOrder);
+    const preferredEventId =
+      (valUploads as any).final_image_event_id ||
+      (prod as any).final_image_event_id ||
+      primaryVerif?.final_image_event_id ||
+      (prod.event_id && prod.event_id !== 'MULTIPLE' ? prod.event_id : '') ||
+      (linkedEvents[0]?.event_id || linkedEvents[0]?.id || 'default');
+    const matchedEvObj = linkedEvents.find((ev: any) =>
+      String(ev?.event_id || ev?.id || '') === String(preferredEventId)
+    ) || linkedEvents[0];
+    const resolvedEventName =
+      (valUploads as any).final_image_event_name ||
+      (prod as any).final_image_event_name ||
+      primaryVerif?.final_image_event_name ||
+      matchedEvObj?.custom_event_name ||
+      matchedEvObj?.event_name ||
+      matchedEvObj?.event_type ||
+      prod.custom_event_name ||
+      linkedOrder?.custom_event_name ||
+      linkedOrder?.event_type ||
+      linkedLead?.custom_event_name ||
+      linkedLead?.event_type ||
+      'Main Event';
+
+    const matchedFinalVerif = matchingVerifs.find(v => v.final_image_url || v.proof_storage_path);
+    const loadedFinalImageUrl =
+      (valUploads as any).final_image_url ||
+      (prod as any).final_image_url ||
+      matchedFinalVerif?.final_image_url ||
+      matchedFinalVerif?.proof_storage_path ||
+      '';
+    const loadedFinalImageName =
+      (valUploads as any).final_image_name ||
+      (prod as any).final_image_name ||
+      matchedFinalVerif?.final_image_name ||
+      matchedFinalVerif?.proof_file_name ||
+      (loadedFinalImageUrl && !loadedFinalImageUrl.startsWith('data:') ? loadedFinalImageUrl.split('/').pop()?.split('?')[0] : '') ||
+      '';
+    const loadedFinalImageUploadedAt =
+      (valUploads as any).final_image_uploaded_at ||
+      (prod as any).final_image_uploaded_at ||
+      matchedFinalVerif?.final_image_uploaded_at ||
+      matchedFinalVerif?.updated_at ||
+      '';
+
+    setCaFinalImageEventId(String(preferredEventId || 'default'));
+    setCaFinalImageEventName(String(resolvedEventName || 'Main Event'));
+    setCaFinalImageUrl(String(loadedFinalImageUrl || ''));
+    setCaFinalImageName(String(loadedFinalImageName || ''));
+    setCaFinalImageUploadedAt(String(loadedFinalImageUploadedAt || ''));
+    setCaFinalImageError(null);
+    setCaUploadingFinalImage(false);
+    setCaFinalImageLightboxOpen(false);
   };
 
   const getAssignedEditorsText = (prod: Production): string => {
@@ -3855,12 +4039,12 @@ Production Team`;
   const [caConsentProofChecked, setCaConsentProofChecked] = useState<boolean>(false);
   const [caInternalValidation, setCaInternalValidation] = useState<boolean>(false);
   const [caChecklistCompleted, setCaChecklistCompleted] = useState<boolean>(false);
-  const [caVerifyCustomerAcceptance, setCaVerifyCustomerAcceptance] = useState<boolean>(true);
+  const [caVerifyCustomerAcceptance, setCaVerifyCustomerAcceptance] = useState<boolean>(false);
   const [caContentUsageConfirmation, setCaContentUsageConfirmation] = useState<boolean>(false);
   const [caFootageDeleted7Days, setCaFootageDeleted7Days] = useState<boolean>(false);
   const [caVerifyPaymentSales, setCaVerifyPaymentSales] = useState<boolean>(false);
   const [caValidateEditedFiles, setCaValidateEditedFiles] = useState<boolean>(false);
-  const [caValidatedServerUploads, setCaValidatedServerUploads] = useState<Record<string, boolean>>({});
+  const [caValidatedServerUploads, setCaValidatedServerUploads] = useState<Record<string, any>>({});
   const [caUploadingProof, setCaUploadingProof] = useState<boolean>(false);
   const [isSavingProgress, setIsSavingProgress] = useState(false);
   const [caChecklist, setCaChecklist] = useState<Record<string, boolean>>({});
@@ -3872,6 +4056,175 @@ Production Team`;
   const [caDeliveryMethod, setCaDeliveryMethod] = useState<'server_link' | 'physical_drive'>('server_link');
   const [caServerLink, setCaServerLink] = useState<string>('');
   const [caPhysicalDriveDetails, setCaPhysicalDriveDetails] = useState<string>('');
+
+  // Client Acceptance Final Image states
+  const [caFinalImageUrl, setCaFinalImageUrl] = useState<string>('');
+  const [caFinalImageName, setCaFinalImageName] = useState<string>('');
+  const [caFinalImageUploadedAt, setCaFinalImageUploadedAt] = useState<string>('');
+  const [caFinalImageEventId, setCaFinalImageEventId] = useState<string>('');
+  const [caFinalImageEventName, setCaFinalImageEventName] = useState<string>('');
+  const [caUploadingFinalImage, setCaUploadingFinalImage] = useState<boolean>(false);
+  const [caFinalImageError, setCaFinalImageError] = useState<string | null>(null);
+  const [caFinalImageLightboxOpen, setCaFinalImageLightboxOpen] = useState<boolean>(false);
+  const caFinalImageInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleCaFinalImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (e.target) {
+      e.target.value = '';
+    }
+    if (!file || !clientAcceptanceProd) return;
+
+    const lowerName = file.name.toLowerCase();
+    const isImageFile =
+      file.type.startsWith('image/') ||
+      /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|avif)$/i.test(lowerName);
+    if (!isImageFile) {
+      setCaFinalImageError('Please select a valid image file (JPG, PNG, WEBP, or HEIC).');
+      return;
+    }
+
+    setCaUploadingFinalImage(true);
+    setCaFinalImageError(null);
+
+    try {
+      const { order, lead } = resolveOrderAndLead(clientAcceptanceProd);
+      const cleanOrderId = order?.order_id || clientAcceptanceProd.tracking_id || clientAcceptanceProd.production_id;
+      const cleanEventId = caFinalImageEventId || clientAcceptanceProd.event_id || 'default';
+      const customerName =
+        order?.customer_name ||
+        lead?.customer_name ||
+        (clientAcceptanceProd as any).customer_name ||
+        'Customer';
+
+      const publicUrl = await uploadProofToStorage(
+        file,
+        `final_image_${String(cleanOrderId).replace(/[^a-zA-Z0-9_-]/g, '_')}_${String(cleanEventId).replace(/[^a-zA-Z0-9_-]/g, '_')}`
+      );
+      const uploadedAt = new Date().toISOString();
+
+      setCaFinalImageUrl(publicUrl);
+      setCaFinalImageName(file.name);
+      setCaFinalImageUploadedAt(uploadedAt);
+
+      const nextValidatedUploads: Record<string, any> = {
+        ...caValidatedServerUploads,
+        delivery_method: caDeliveryMethod,
+        ...(caDeliveryMethod === 'server_link' && caServerLink.trim() ? { server_link: caServerLink.trim() } : {}),
+        ...(caDeliveryMethod === 'physical_drive' && caPhysicalDriveDetails.trim() ? { physical_drive_details: caPhysicalDriveDetails.trim() } : {}),
+        final_image_url: publicUrl,
+        final_image_name: file.name,
+        final_image_uploaded_at: uploadedAt,
+        final_image_order_id: cleanOrderId,
+        final_image_production_id: clientAcceptanceProd.production_id,
+        final_image_event_id: cleanEventId,
+        final_image_event_name: caFinalImageEventName || 'Main Event',
+        final_image_customer_name: customerName
+      };
+
+      setCaValidatedServerUploads(nextValidatedUploads);
+      setClientAcceptanceProd(prev => prev ? {
+        ...prev,
+        validated_server_uploads: nextValidatedUploads,
+        final_image_url: publicUrl,
+        final_image_name: file.name,
+        final_image_uploaded_at: uploadedAt,
+        final_image_event_id: cleanEventId,
+        final_image_event_name: caFinalImageEventName || 'Main Event'
+      } : prev);
+
+      await updateProduction(clientAcceptanceProd.production_id, {
+        validated_server_uploads: nextValidatedUploads
+      });
+
+      await saveClientAcceptanceVerification({
+        order_id: cleanOrderId,
+        event_id: cleanEventId,
+        delivery_method: caDeliveryMethod,
+        server_link: caDeliveryMethod === 'server_link' ? caServerLink.trim() : undefined,
+        physical_drive_details: caDeliveryMethod === 'physical_drive' ? caPhysicalDriveDetails.trim() : undefined,
+        proof_file_name: file.name,
+        proof_storage_path: publicUrl,
+        final_image_url: publicUrl,
+        final_image_name: file.name,
+        final_image_uploaded_at: uploadedAt,
+        final_image_event_id: cleanEventId,
+        final_image_event_name: caFinalImageEventName || 'Main Event',
+        final_image_customer_name: customerName,
+        final_image_production_id: clientAcceptanceProd.production_id
+      });
+    } catch (err: any) {
+      console.error('[Client Approval Final Image Upload Error]', err);
+      setCaFinalImageError(err?.message || 'Failed to upload Final Image. Please try again.');
+    } finally {
+      setCaUploadingFinalImage(false);
+    }
+  };
+
+  const handleCaFinalImageRemove = async () => {
+    if (!clientAcceptanceProd || caUploadingFinalImage) return;
+    setCaUploadingFinalImage(true);
+    setCaFinalImageError(null);
+
+    try {
+      const { order, lead } = resolveOrderAndLead(clientAcceptanceProd);
+      const cleanOrderId = order?.order_id || clientAcceptanceProd.tracking_id || clientAcceptanceProd.production_id;
+      const cleanEventId = caFinalImageEventId || clientAcceptanceProd.event_id || 'default';
+      const customerName =
+        order?.customer_name ||
+        lead?.customer_name ||
+        (clientAcceptanceProd as any).customer_name ||
+        'Customer';
+
+      const nextValidatedUploads: Record<string, any> = { ...caValidatedServerUploads };
+      delete nextValidatedUploads.final_image_url;
+      delete nextValidatedUploads.final_image_name;
+      delete nextValidatedUploads.final_image_uploaded_at;
+      delete nextValidatedUploads.final_image_order_id;
+      delete nextValidatedUploads.final_image_production_id;
+      delete nextValidatedUploads.final_image_event_id;
+      delete nextValidatedUploads.final_image_event_name;
+      delete nextValidatedUploads.final_image_customer_name;
+
+      setCaFinalImageUrl('');
+      setCaFinalImageName('');
+      setCaFinalImageUploadedAt('');
+      setCaFinalImageLightboxOpen(false);
+      setCaValidatedServerUploads(nextValidatedUploads);
+      setClientAcceptanceProd(prev => prev ? {
+        ...prev,
+        validated_server_uploads: nextValidatedUploads,
+        final_image_url: '',
+        final_image_name: '',
+        final_image_uploaded_at: ''
+      } : prev);
+
+      await updateProduction(clientAcceptanceProd.production_id, {
+        validated_server_uploads: nextValidatedUploads
+      });
+
+      await saveClientAcceptanceVerification({
+        order_id: cleanOrderId,
+        event_id: cleanEventId,
+        delivery_method: caDeliveryMethod,
+        server_link: caDeliveryMethod === 'server_link' ? caServerLink.trim() : undefined,
+        physical_drive_details: caDeliveryMethod === 'physical_drive' ? caPhysicalDriveDetails.trim() : undefined,
+        proof_file_name: '',
+        proof_storage_path: '',
+        final_image_url: '',
+        final_image_name: '',
+        final_image_uploaded_at: '',
+        final_image_event_id: cleanEventId,
+        final_image_event_name: caFinalImageEventName || 'Main Event',
+        final_image_customer_name: customerName,
+        final_image_production_id: clientAcceptanceProd.production_id
+      });
+    } catch (err: any) {
+      setCaFinalImageError(err?.message || 'Failed to remove Final Image.');
+    } finally {
+      setCaUploadingFinalImage(false);
+    }
+  };
 
   // Re-send Review / Customer Review Popup states
   const [customerReviewResendProd, setCustomerReviewResendProd] = useState<Production | null>(null);
@@ -4046,7 +4399,10 @@ _Please acknowledge receipt of this task assignment._`;
   const [newStaffPassword, setNewStaffPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [currentStaffPassword, setCurrentStaffPassword] = useState('');
-  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(true);
+  const [loadingCurrentPassword, setLoadingCurrentPassword] = useState(false);
+  const [currentPasswordError, setCurrentPasswordError] = useState('');
+  const currentPasswordReqIdRef = useRef(0);
   const [newStaffSkills, setNewStaffSkills] = useState<string[]>([]);
   const [newSkillText, setNewSkillText] = useState('');
   const [addStaffError, setAddStaffError] = useState('');
@@ -5935,6 +6291,30 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                         </button>
                       )}
 
+                      {/* WhatsApp Completion Message */}
+                      {(displayStatus === "Editing Completed" ||
+                        displayStatus === "Editing Complete" ||
+                        displayStatus === "Completed" ||
+                        prod.editing_status === "Editing Completed" ||
+                        prod.editing_status === "Editing Complete" ||
+                        (prod.editing_status as string) === "Completed" ||
+                        isEditingCompleted(prod)) &&
+                        currentRole !== "Production Staff" && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setOpenActionDropdown(null);
+                              handleOpenWhatsAppCompletionMessage(prod, order);
+                            }}
+                            className="w-full text-left px-2.5 py-2 text-[11px] font-semibold text-emerald-300 hover:text-white hover:bg-emerald-600/25 rounded-lg transition-colors flex items-center gap-2 cursor-pointer"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                            <span>WhatsApp Completion Message</span>
+                          </button>
+                        )}
+
                       {/* Share via WhatsApp */}
                       {isEditorAssigned && hasSavedAssignments && isStatusActive && (
                         <button
@@ -6006,6 +6386,26 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                 </div>
               );
             })(),
+            document.body
+          )}
+
+          {/* Non-blocking error notification for missing/invalid customer WhatsApp number */}
+          {whatsappCompletionError && typeof document !== 'undefined' && createPortal(
+            <div className="fixed top-5 right-5 z-[100001] max-w-md w-[calc(100vw-2.5rem)] bg-zinc-950 border border-rose-500/40 text-rose-200 rounded-xl shadow-2xl p-3.5 flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-150 font-sans">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <div className="flex-1 text-xs leading-relaxed">
+                <p className="font-bold text-rose-300 mb-0.5">Unable to Open WhatsApp</p>
+                <p className="text-zinc-300">{whatsappCompletionError}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWhatsappCompletionError(null)}
+                className="text-zinc-400 hover:text-white p-0.5 cursor-pointer shrink-0"
+                aria-label="Close error message"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>,
             document.body
           )}
         </div>
@@ -7413,68 +7813,35 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
 
           try {
             if (editingStaffId) {
-              const currentStaff = productionStaff?.find(s => s.staff_id === editingStaffId);
-              let targetAuthUserId = currentStaff?.auth_user_id;
-              if (!targetAuthUserId && typeof currentStaff?.notes === 'string') {
-                try {
-                  let parsed = JSON.parse(currentStaff.notes);
-                  if (typeof parsed === 'string') parsed = JSON.parse(parsed);
-                  if (parsed.auth_user_id) targetAuthUserId = parsed.auth_user_id;
-                } catch (e) {}
-              }
-              const staffEmail = (currentStaff?.email || email || '').trim().toLowerCase();
-              if (staffEmail) {
-                const userMatch = users?.find(u => u.email?.trim().toLowerCase() === staffEmail);
-                if (userMatch?.id) targetAuthUserId = userMatch.id;
-              }
-
-              // Update password securely in the authentication provider if provided
-              if (password && password.trim() !== '') {
-                const cleanPwd = password.trim();
-                if (cleanPwd.length < 6) {
-                  setAddStaffError('Password must be at least 6 characters.');
-                  setIsSubmittingStaff(false);
-                  return;
-                }
-
-                const res = await fetch('/api/auth/update-user', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    auth_id: targetAuthUserId,
-                    staff_id: editingStaffId,
-                    email: currentStaff?.email || email,
-                    mobile: currentStaff?.mobile || mobile,
-                    password: cleanPwd,
-                    name,
-                    role: 'Production Team',
-                  })
-                });
-
-                const resData = await res.json().catch(() => ({}));
-                if (!res.ok || !resData.success) {
-                  throw new Error(resData.error || 'Failed to update authentication credentials');
-                }
-
-                if (resData.auth_user_id && currentStaff) {
-                  currentStaff.auth_user_id = resData.auth_user_id;
-                }
-                setCurrentStaffPassword(cleanPwd);
+              const cleanPwd = (password || '').trim();
+              if (cleanPwd && cleanPwd.length < 6) {
+                setAddStaffError('Password must be at least 6 characters.');
+                setIsSubmittingStaff(false);
+                return;
               }
 
               // Update explicit record being edited (mobile and email are permanently locked)
-              // Note: Do not store plaintext password in table columns
+              // Password updates are handled securely via /api/auth/update-user inside updateProductionStaff
               await updateProductionStaff(editingStaffId, {
                 name,
                 whatsapp_number: whatsapp,
                 Skill: skillsArray as any,
                 staff_type: newStaffType as any,
-                Staff_Type: newStaffType as any
-              });
+                Staff_Type: newStaffType as any,
+                ...(cleanPwd ? { password: cleanPwd } : {})
+              } as any);
+              if (cleanPwd) {
+                setCurrentStaffPassword(cleanPwd);
+                setShowCurrentPassword(true);
+              }
               if (refreshData) {
                 try { await refreshData(); } catch (e) {}
               }
-              setAddStaffSuccess('✅ Staff details updated successfully.');
+              setAddStaffSuccess(
+                cleanPwd
+                  ? '✅ Staff details and password updated successfully.'
+                  : '✅ Staff details updated successfully.'
+              );
             } else {
               // 1. Password check
               const cleanPwd = (password || '').trim();
@@ -7531,12 +7898,17 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
             }, 3000);
 
             // Reset form only on success
+            currentPasswordReqIdRef.current += 1;
             setNewStaffName('');
             setNewStaffType('');
             setNewStaffMobile('');
             setNewStaffWhatsapp('');
             setNewStaffEmail('');
             setNewStaffPassword('');
+            setCurrentStaffPassword('');
+            setShowCurrentPassword(true);
+            setLoadingCurrentPassword(false);
+            setCurrentPasswordError('');
             setNewStaffSkills([]);
             setEditingStaffId(null);
             setShowStaffModal(false);
@@ -7548,18 +7920,10 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
           }
         };
 
-        const addSkill = async (skillName: string) => {
+        const addSkill = (skillName: string) => {
           const trimmed = skillName.trim();
           if (trimmed && !newStaffSkills.includes(trimmed)) {
-            const updatedSkills = [...newStaffSkills, trimmed];
-            setNewStaffSkills(updatedSkills);
-            if (editingStaffId) {
-              try {
-                await updateProductionStaff(editingStaffId, { Skill: updatedSkills as any });
-              } catch (e) {
-                console.error('Failed real-time skill save', e);
-              }
-            }
+            setNewStaffSkills([...newStaffSkills, trimmed]);
           }
           setNewSkillText('');
         };
@@ -7595,6 +7959,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                   className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
                   onClick={(e) => { 
                     if (e.target === e.currentTarget) {
+                      currentPasswordReqIdRef.current += 1;
                       setEditingStaffId(null);
                       setNewStaffName('');
                       setNewStaffType('');
@@ -7602,6 +7967,10 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                       setNewStaffWhatsapp('');
                       setNewStaffEmail('');
                       setNewStaffPassword('');
+                      setCurrentStaffPassword('');
+                      setShowCurrentPassword(true);
+                      setLoadingCurrentPassword(false);
+                      setCurrentPasswordError('');
                       setNewStaffSkills([]);
                       setShowStaffModal(false);
                     }
@@ -7620,6 +7989,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                       <button 
                         type="button"
                         onClick={() => {
+                          currentPasswordReqIdRef.current += 1;
                           setEditingStaffId(null);
                           setNewStaffName('');
                           setNewStaffType('');
@@ -7627,6 +7997,10 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                           setNewStaffWhatsapp('');
                           setNewStaffEmail('');
                           setNewStaffPassword('');
+                          setCurrentStaffPassword('');
+                          setShowCurrentPassword(true);
+                          setLoadingCurrentPassword(false);
+                          setCurrentPasswordError('');
                           setNewStaffSkills([]);
                           setShowStaffModal(false);
                         }}
@@ -7671,16 +8045,8 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                       </label>
                       <select
                         value={newStaffType}
-                        onChange={async (e) => {
-                          const val = e.target.value;
-                          setNewStaffType(val);
-                          if (editingStaffId) {
-                            try {
-                              await updateProductionStaff(editingStaffId, { staff_type: val as any, Staff_Type: val as any });
-                            } catch (err) {
-                              console.error('Failed real-time staff type save', err);
-                            }
-                          }
+                        onChange={(e) => {
+                          setNewStaffType(e.target.value);
                         }}
                         className={`w-full bg-zinc-900 border px-4 py-2.5 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition-all font-sans cursor-pointer ${addStaffError === 'Please select Staff Type.' ? 'border-rose-500/50' : 'border-zinc-850'}`}
                       >
@@ -7775,21 +8141,64 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                       <div className="relative">
                         <input
                           type={showPassword ? "text" : "password"}
+                          name={editingStaffId ? "prod-staff-new-password" : "prod-staff-password"}
+                          autoComplete="new-password"
                           required={!editingStaffId}
                           value={newStaffPassword}
                           onChange={(e) => setNewStaffPassword(e.target.value)}
-                          placeholder={editingStaffId ? "Enter new password" : "Enter password"}
+                          placeholder={editingStaffId ? "Leave blank to keep existing password" : "Enter password"}
                           className="w-full bg-zinc-900 border border-zinc-850 pl-4 pr-10 py-2.5 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition-all font-sans"
                         />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
+                          aria-label={showPassword ? "Hide password" : "Show password"}
                           className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white focus:outline-none cursor-pointer"
                         >
                           {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
+                      {editingStaffId && (
+                        <p className="text-[10px] text-zinc-500 mt-1 font-sans">
+                          Existing login credentials are preserved unless you enter a new password (min 6 chars).
+                        </p>
+                      )}
                     </div>
+                    {editingStaffId && (
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5 font-mono">
+                          CURRENT PASSWORD
+                        </label>
+                        <div className="relative">
+                          <input
+                            type={currentStaffPassword && !loadingCurrentPassword && !showCurrentPassword ? "password" : "text"}
+                            readOnly
+                            value={
+                              loadingCurrentPassword
+                                ? "Loading..."
+                                : currentStaffPassword
+                                  ? currentStaffPassword
+                                  : currentPasswordError
+                                    ? currentPasswordError
+                                    : "Not available (reset password once)"
+                            }
+                            aria-label="Current password"
+                            className={`w-full bg-zinc-900/70 border border-zinc-850 pl-4 pr-10 py-2.5 rounded-xl text-xs focus:outline-none font-mono ${
+                              currentStaffPassword && !loadingCurrentPassword ? 'text-white' : 'text-zinc-400 italic'
+                            }`}
+                          />
+                          <button
+                            type="button"
+                            disabled={loadingCurrentPassword || !currentStaffPassword}
+                            onClick={() => setShowCurrentPassword(prev => !prev)}
+                            aria-label={showCurrentPassword ? "Hide current password" : "Show current password"}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white focus:outline-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {/* Tag-based Skills input field */}
                     <div>
                       <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5 font-mono">
@@ -7831,16 +8240,8 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                               <span>{skill}</span>
                               <button
                                 type="button"
-                                onClick={async () => {
-                                  const updatedSkills = newStaffSkills.filter((_, i) => i !== index);
-                                  setNewStaffSkills(updatedSkills);
-                                  if (editingStaffId) {
-                                    try {
-                                      await updateProductionStaff(editingStaffId, { Skill: updatedSkills as any });
-                                    } catch (e) {
-                                      console.error('Failed real-time skill save', e);
-                                    }
-                                  }
+                                onClick={() => {
+                                  setNewStaffSkills(newStaffSkills.filter((_, i) => i !== index));
                                 }}
                                 className="text-purple-450 hover:text-purple-300 font-black focus:outline-none transition-colors"
                               >
@@ -7864,6 +8265,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                     <button
                       type="button"
                       onClick={() => {
+                        currentPasswordReqIdRef.current += 1;
                         setEditingStaffId(null);
                         setNewStaffName('');
                         setNewStaffType('');
@@ -7871,6 +8273,10 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                         setNewStaffWhatsapp('');
                         setNewStaffEmail('');
                         setNewStaffPassword('');
+                        setCurrentStaffPassword('');
+                        setShowCurrentPassword(true);
+                        setLoadingCurrentPassword(false);
+                        setCurrentPasswordError('');
                         setNewStaffSkills([]);
                         setShowStaffModal(false);
                       }}
@@ -7900,7 +8306,20 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                   <div>
                     <button 
                       type="button"
-                      onClick={() => setShowStaffModal(true)}
+                      onClick={() => {
+                        setEditingStaffId(null);
+                        setNewStaffName('');
+                        setNewStaffType('');
+                        setNewStaffMobile('');
+                        setNewStaffWhatsapp('');
+                        setNewStaffEmail('');
+                        setNewStaffPassword('');
+                        setShowPassword(false);
+                        setNewStaffSkills([]);
+                        setAddStaffError('');
+                        setAddStaffSuccess('');
+                        setShowStaffModal(true);
+                      }}
                       className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-mono text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg"
                     >
                       <Plus className="w-4 h-4" />
@@ -8137,6 +8556,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                                   <button
                                     type="button"
                                     onClick={() => {
+                                      const reqId = ++currentPasswordReqIdRef.current;
                                       setEditingStaffId(member.staff_id);
                                       setNewStaffName(member.name);
                                       setNewStaffType(member.Staff_Type || member.staff_type || '');
@@ -8145,28 +8565,20 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                                       setNewStaffEmail(member.email || '');
                                       setNewStaffPassword('');
                                       setShowPassword(false);
+                                      setCurrentStaffPassword('');
                                       setShowCurrentPassword(true);
-
-                                      // Retrieve current password for display
-                                      const pwd = getStaffCurrentPassword(member, users) || '';
-                                      setCurrentStaffPassword(pwd);
-                                      fetchStaffCurrentPassword(member, users).then(livePwd => {
-                                        if (livePwd && isValidPlaintextPassword(livePwd)) setCurrentStaffPassword(livePwd);
-                                      });
-                                      fetch('/api/auth/get-staff-password', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({
-                                          staff_id: member.staff_id,
-                                          email: member.email,
-                                          mobile: member.mobile,
-                                          auth_id: member.auth_user_id || (member.notes && member.notes.includes('auth_user_id') ? JSON.parse(member.notes).auth_user_id : undefined)
-                                        })
-                                      }).then(r => r.json()).then(d => {
-                                        if (d?.password && isValidPlaintextPassword(d.password)) setCurrentStaffPassword(d.password);
-                                      }).catch(() => null);
+                                      setCurrentPasswordError('');
+                                      setLoadingCurrentPassword(true);
+                                      setAddStaffError('');
+                                      setAddStaffSuccess('');
                                       setNewStaffSkills(Array.isArray(member.Skill) ? member.Skill : member.Skill ? member.Skill.split(',').map((s: string) => s.trim()).filter(Boolean) : member.production_role_speciality ? member.production_role_speciality.split(',').map((s: string) => s.trim()).filter(Boolean) : []);
                                       setShowStaffModal(true);
+                                      fetchStaffPasswordStatus(member, 'production').then((res) => {
+                                        if (currentPasswordReqIdRef.current !== reqId) return;
+                                        setCurrentStaffPassword(res.password || '');
+                                        setCurrentPasswordError(res.error || '');
+                                        setLoadingCurrentPassword(false);
+                                      });
                                     }}
                                     className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-amber-500 hover:text-amber-400 border border-zinc-850 rounded font-bold cursor-pointer transition-colors text-[10px] font-mono"
                                   >
@@ -8997,7 +9409,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                                                   `Please update your VFX Post-Production pipeline state. Thanks!`;
                               
                               const encodedMsg = encodeURIComponent(textMessage);
-                              const cleanPhone = assignedStaffRecord.mobile.replace(/\D/g, '');
+                              const cleanPhone = assignedStaffRecord?.mobile ? String(assignedStaffRecord.mobile).replace(/\D/g, '') : '';
                               const waUrl = `https://wa.me/${cleanPhone}?text=${encodedMsg}`;
                               window.open(waUrl, '_blank');
                             };
@@ -13272,6 +13684,12 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                       setCaServerLink('');
                       setCaPhysicalDriveDetails('');
                       setCaDeliveryMethod('server_link');
+                      setCaFinalImageUrl('');
+                      setCaFinalImageName('');
+                      setCaFinalImageUploadedAt('');
+                      setCaFinalImageError(null);
+                      setCaFinalImageLightboxOpen(false);
+                      setCaVerifyCustomerAcceptance(false);
                     }}
                     className="p-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg transition-all cursor-pointer flex items-center justify-center shrink-0"
                   >
@@ -13295,18 +13713,42 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                     try {
                       setIsSaving(true);
                       const cleanOrderId = order?.order_id || trackingId || clientAcceptanceProd.production_id;
-                      const cleanEventId = clientAcceptanceProd.event_id || 'default';
+                      const cleanEventId = caFinalImageEventId || clientAcceptanceProd.event_id || 'default';
+                      const customerName =
+                        order?.customer_name ||
+                        lead?.customer_name ||
+                        (clientAcceptanceProd as any).customer_name ||
+                        'Customer';
                       
-                      const nextValidatedUploads = {
+                      const nextValidatedUploads: Record<string, any> = {
                         ...caValidatedServerUploads,
                         delivery_method: caDeliveryMethod,
                         ...(caDeliveryMethod === 'server_link' ? { server_link: caServerLink.trim() } : {}),
                         ...(caDeliveryMethod === 'physical_drive' ? { physical_drive_details: caPhysicalDriveDetails.trim() } : {})
                       };
                       if (caDeliveryMethod === 'server_link') {
-                        delete (nextValidatedUploads as any).physical_drive_details;
+                        delete nextValidatedUploads.physical_drive_details;
                       } else if (caDeliveryMethod === 'physical_drive') {
-                        delete (nextValidatedUploads as any).server_link;
+                        delete nextValidatedUploads.server_link;
+                      }
+                      if (caFinalImageUrl) {
+                        nextValidatedUploads.final_image_url = caFinalImageUrl;
+                        nextValidatedUploads.final_image_name = caFinalImageName;
+                        nextValidatedUploads.final_image_uploaded_at = caFinalImageUploadedAt || new Date().toISOString();
+                        nextValidatedUploads.final_image_order_id = cleanOrderId;
+                        nextValidatedUploads.final_image_production_id = clientAcceptanceProd.production_id;
+                        nextValidatedUploads.final_image_event_id = cleanEventId;
+                        nextValidatedUploads.final_image_event_name = caFinalImageEventName || 'Main Event';
+                        nextValidatedUploads.final_image_customer_name = customerName;
+                      } else {
+                        delete nextValidatedUploads.final_image_url;
+                        delete nextValidatedUploads.final_image_name;
+                        delete nextValidatedUploads.final_image_uploaded_at;
+                        delete nextValidatedUploads.final_image_order_id;
+                        delete nextValidatedUploads.final_image_production_id;
+                        delete nextValidatedUploads.final_image_event_id;
+                        delete nextValidatedUploads.final_image_event_name;
+                        delete nextValidatedUploads.final_image_customer_name;
                       }
 
                       const updates: any = {
@@ -13342,13 +13784,23 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                         consent_proof_verified: caVerifyCustomerAcceptance,
                         folder_name: caDeliveryMethod === 'physical_drive' ? caPhysicalDriveDetails.trim() : undefined,
                         upload_link_path: caDeliveryMethod === 'server_link' ? caServerLink.trim() : '',
-                        final_edited_footage_link: caDeliveryMethod === 'server_link' ? caServerLink.trim() : ''
+                        final_edited_footage_link: caDeliveryMethod === 'server_link' ? caServerLink.trim() : '',
+                        proof_file_name: caFinalImageName || '',
+                        proof_storage_path: caFinalImageUrl || '',
+                        final_image_url: caFinalImageUrl || '',
+                        final_image_name: caFinalImageName || '',
+                        final_image_uploaded_at: caFinalImageUploadedAt || '',
+                        final_image_event_id: cleanEventId,
+                        final_image_event_name: caFinalImageEventName || 'Main Event',
+                        final_image_customer_name: customerName,
+                        final_image_production_id: clientAcceptanceProd.production_id
                       });
                       
                       if (refreshData) {
                         await refreshData();
                       }
                       setClientAcceptanceProd(null);
+                      setCaFinalImageLightboxOpen(false);
                     } catch (err: any) {
                       alert(`Error finalizing Client Acceptance: ${err.message || err}`);
                     } finally {
@@ -13462,17 +13914,107 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                       )}
                     </div>
 
-                    <label className="flex items-center gap-3.5 p-4 bg-[#0f0f11] border border-zinc-800/80 rounded-xl cursor-pointer hover:border-zinc-700 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={caVerifyCustomerAcceptance}
-                        onChange={(e) => setCaVerifyCustomerAcceptance(e.target.checked)}
-                        className="w-4 h-4 rounded border-zinc-600 bg-zinc-950 text-white focus:ring-0 focus:ring-offset-0 transition-colors cursor-pointer appearance-none checked:bg-white checked:border-white relative before:content-[''] checked:before:absolute checked:before:w-1.5 checked:before:h-2.5 checked:before:border-r-2 checked:before:border-b-2 checked:before:border-black checked:before:rotate-45 checked:before:top-[1px] checked:before:left-[5px]"
-                      />
-                      <span className="text-[13px] font-bold text-zinc-100">
-                        Client Approval & WhatsApp Exit
-                      </span>
-                    </label>
+                    {(() => {
+                      const customerDisplay = order?.customer_name || lead?.customer_name || (clientAcceptanceProd as any).customer_name || 'Customer';
+                      const projectDisplay = clientAcceptanceProd.production_id || order?.order_id || trackingId;
+                      return (
+                        <div className="p-4 bg-[#0f0f11] border border-zinc-800/80 rounded-xl hover:border-zinc-700 transition-colors space-y-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2.5">
+                            <label className="flex items-center gap-3.5 cursor-pointer flex-1 min-w-0">
+                              <input
+                                type="checkbox"
+                                checked={caVerifyCustomerAcceptance}
+                                onChange={(e) => setCaVerifyCustomerAcceptance(e.target.checked)}
+                                className="w-4 h-4 rounded border-zinc-600 bg-zinc-950 text-white focus:ring-0 focus:ring-offset-0 transition-colors cursor-pointer appearance-none checked:bg-white checked:border-white relative shrink-0 before:content-[''] checked:before:absolute checked:before:w-1.5 checked:before:h-2.5 checked:before:border-r-2 checked:before:border-b-2 checked:before:border-black checked:before:rotate-45 checked:before:top-[1px] checked:before:left-[5px]"
+                              />
+                              <span className="text-[13px] font-bold text-zinc-100">
+                                Client Approval & WhatsApp Exit
+                              </span>
+                            </label>
+
+                            {caVerifyCustomerAcceptance && (
+                              <div className="flex items-center gap-2 shrink-0">
+                                <input
+                                  ref={caFinalImageInputRef}
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={handleCaFinalImageUpload}
+                                  className="hidden"
+                                />
+                                {caUploadingFinalImage ? (
+                                  <span className="px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-emerald-400 text-[11px] font-mono font-bold flex items-center gap-1.5">
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Uploading...</span>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => caFinalImageInputRef.current?.click()}
+                                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+                                  >
+                                    <Upload className="w-3.5 h-3.5" />
+                                    <span>{caFinalImageUrl ? 'Replace Image' : 'Final Image Upload'}</span>
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {caVerifyCustomerAcceptance && caFinalImageError && (
+                            <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[11px] flex items-center gap-2">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                              <span>{caFinalImageError}</span>
+                            </div>
+                          )}
+
+                          {caVerifyCustomerAcceptance && !caUploadingFinalImage && caFinalImageUrl && (
+                            <div className="flex flex-wrap items-center justify-between gap-2.5 p-2.5 rounded-lg bg-zinc-950/80 border border-emerald-500/25">
+                              <div
+                                onClick={() => setCaFinalImageLightboxOpen(true)}
+                                className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer group"
+                              >
+                                <div className="w-12 h-10 rounded-md overflow-hidden border border-zinc-800 bg-zinc-900 shrink-0">
+                                  <SafeProofImage
+                                    url={caFinalImageUrl}
+                                    alt={`Final Image - ${customerDisplay}`}
+                                    containerClassName="relative overflow-hidden w-full h-full flex items-center justify-center"
+                                    className="w-full h-full object-cover"
+                                    onClick={() => setCaFinalImageLightboxOpen(true)}
+                                    showExternalLink={false}
+                                  />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-[11px] font-mono font-bold text-emerald-300 truncate" title={caFinalImageName || 'Final Image'}>
+                                    {caFinalImageName || 'Final Delivered Image'}
+                                  </div>
+                                  <div className="text-[10px] font-mono text-zinc-500 truncate">
+                                    {customerDisplay} • {projectDisplay}{caFinalImageEventName ? ` • ${caFinalImageEventName}` : ''}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => setCaFinalImageLightboxOpen(true)}
+                                  className="px-2 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                >
+                                  <Eye className="w-3 h-3 text-emerald-400" />
+                                  <span>View</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleCaFinalImageRemove}
+                                  className="px-2 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Remove</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     <label className="flex items-start gap-3.5 p-4 bg-[#0f0f11] border border-zinc-800/80 rounded-xl cursor-pointer hover:border-zinc-700 transition-colors">
                       <input
@@ -13538,6 +14080,12 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                         setCaServerLink('');
                         setCaPhysicalDriveDetails('');
                         setCaDeliveryMethod('server_link');
+                        setCaFinalImageUrl('');
+                        setCaFinalImageName('');
+                        setCaFinalImageUploadedAt('');
+                        setCaFinalImageError(null);
+                        setCaFinalImageLightboxOpen(false);
+                        setCaVerifyCustomerAcceptance(false);
                       }}
                       className="py-3 sm:py-3.5 px-4 sm:px-6 bg-[#1f1f22] hover:bg-[#2a2a2d] text-zinc-100 font-black text-[11px] uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-sm shrink-0"
                     >
@@ -13545,7 +14093,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                     </button>
                     <button
                       type="button"
-                      disabled={isSaving || isSavingProgress}
+                      disabled={isSaving || isSavingProgress || caUploadingFinalImage}
                       onClick={async () => {
                         if (caDeliveryMethod === 'server_link' && caServerLink.trim()) {
                           const lower = caServerLink.toLowerCase();
@@ -13558,18 +14106,42 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                         try {
                           setIsSavingProgress(true);
                           const cleanOrderId = order?.order_id || trackingId || clientAcceptanceProd.production_id;
-                          const cleanEventId = clientAcceptanceProd.event_id || 'default';
+                          const cleanEventId = caFinalImageEventId || clientAcceptanceProd.event_id || 'default';
+                          const customerName =
+                            order?.customer_name ||
+                            lead?.customer_name ||
+                            (clientAcceptanceProd as any).customer_name ||
+                            'Customer';
                           
-                          const nextValidatedUploads = {
+                          const nextValidatedUploads: Record<string, any> = {
                             ...caValidatedServerUploads,
                             delivery_method: caDeliveryMethod,
                             ...(caDeliveryMethod === 'server_link' ? { server_link: caServerLink.trim() } : {}),
                             ...(caDeliveryMethod === 'physical_drive' ? { physical_drive_details: caPhysicalDriveDetails.trim() } : {})
                           };
                           if (caDeliveryMethod === 'server_link') {
-                            delete (nextValidatedUploads as any).physical_drive_details;
+                            delete nextValidatedUploads.physical_drive_details;
                           } else if (caDeliveryMethod === 'physical_drive') {
-                            delete (nextValidatedUploads as any).server_link;
+                            delete nextValidatedUploads.server_link;
+                          }
+                          if (caFinalImageUrl) {
+                            nextValidatedUploads.final_image_url = caFinalImageUrl;
+                            nextValidatedUploads.final_image_name = caFinalImageName;
+                            nextValidatedUploads.final_image_uploaded_at = caFinalImageUploadedAt || new Date().toISOString();
+                            nextValidatedUploads.final_image_order_id = cleanOrderId;
+                            nextValidatedUploads.final_image_production_id = clientAcceptanceProd.production_id;
+                            nextValidatedUploads.final_image_event_id = cleanEventId;
+                            nextValidatedUploads.final_image_event_name = caFinalImageEventName || 'Main Event';
+                            nextValidatedUploads.final_image_customer_name = customerName;
+                          } else {
+                            delete nextValidatedUploads.final_image_url;
+                            delete nextValidatedUploads.final_image_name;
+                            delete nextValidatedUploads.final_image_uploaded_at;
+                            delete nextValidatedUploads.final_image_order_id;
+                            delete nextValidatedUploads.final_image_production_id;
+                            delete nextValidatedUploads.final_image_event_id;
+                            delete nextValidatedUploads.final_image_event_name;
+                            delete nextValidatedUploads.final_image_customer_name;
                           }
 
                           const updates: any = {
@@ -13599,7 +14171,16 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                             consent_proof_verified: caVerifyCustomerAcceptance,
                             folder_name: caDeliveryMethod === 'physical_drive' ? caPhysicalDriveDetails.trim() : undefined,
                             upload_link_path: caDeliveryMethod === 'server_link' ? caServerLink.trim() : '',
-                            final_edited_footage_link: caDeliveryMethod === 'server_link' ? caServerLink.trim() : ''
+                            final_edited_footage_link: caDeliveryMethod === 'server_link' ? caServerLink.trim() : '',
+                            proof_file_name: caFinalImageName || '',
+                            proof_storage_path: caFinalImageUrl || '',
+                            final_image_url: caFinalImageUrl || '',
+                            final_image_name: caFinalImageName || '',
+                            final_image_uploaded_at: caFinalImageUploadedAt || '',
+                            final_image_event_id: cleanEventId,
+                            final_image_event_name: caFinalImageEventName || 'Main Event',
+                            final_image_customer_name: customerName,
+                            final_image_production_id: clientAcceptanceProd.production_id
                           });
 
                           alert('Client Acceptance details saved successfully.');
@@ -13615,7 +14196,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                     </button>
                     <button
                       type="submit"
-                      disabled={isSaving || isSavingProgress}
+                      disabled={isSaving || isSavingProgress || caUploadingFinalImage}
                       className="flex-1 py-3 sm:py-3.5 px-3 sm:px-6 bg-[#00A36C] hover:bg-[#008F5D] text-white font-black text-[11px] uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer disabled:opacity-50 shadow-md min-w-0"
                     >
                       {isSaving ? 'SUBMITTING...' : '✓ CLIENT APPROVED'}
@@ -13627,6 +14208,57 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
           );
         })()}
       </AnimatePresence>
+
+      {/* CLIENT APPROVAL FINAL IMAGE LIGHTBOX */}
+      {caFinalImageLightboxOpen && caFinalImageUrl && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 bg-black/95 backdrop-blur-md z-[300] flex flex-col items-center justify-center p-3 sm:p-6"
+          onClick={() => setCaFinalImageLightboxOpen(false)}
+        >
+          <div
+            className="w-full max-w-4xl bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-mono font-bold uppercase tracking-wider text-emerald-400">
+                  Final Image Preview
+                </div>
+                <div className="text-[11px] text-zinc-400 font-mono truncate">
+                  {caFinalImageEventName || 'Main Event'} {caFinalImageName ? `• ${caFinalImageName}` : ''}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={resolveStorageUrl(caFinalImageUrl) || caFinalImageUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-mono flex items-center gap-1.5"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-sky-400" />
+                  <span className="hidden sm:inline">Open Original</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setCaFinalImageLightboxOpen(false)}
+                  className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-3 sm:p-4 bg-black flex items-center justify-center">
+              <img
+                src={resolveStorageUrl(caFinalImageUrl) || caFinalImageUrl}
+                alt="Final Delivered Image Full View"
+                referrerPolicy="no-referrer"
+                className="max-w-full max-h-[75vh] object-contain rounded-lg"
+              />
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
     </div>
   );

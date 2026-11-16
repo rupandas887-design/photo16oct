@@ -875,7 +875,7 @@ export const OperationsLeads: React.FC = () => {
 
   useEffect(() => {
     const handleStaffUpdate = () => {
-      refreshData();
+      // Realtime & optimistic RoleContext state already sync assignment updates; avoid redundant 25-table reloads.
     };
     window.addEventListener('staff_status_updated', handleStaffUpdate);
     return () => window.removeEventListener('staff_status_updated', handleStaffUpdate);
@@ -1446,8 +1446,6 @@ export const OperationsLeads: React.FC = () => {
           verified_at: new Date().toISOString()
         })
       });
-
-      refreshData();
     } catch (e) {
       console.error("Failed to update verification status:", e);
       alert("Failed to update verification status.");
@@ -3328,12 +3326,9 @@ export const OperationsLeads: React.FC = () => {
         eventTime: convertTimeToDbFormat(assignForm.event_time),
         remarks: assignForm.remarks,
         equipmentUpdates,
-        equipmentHistoryInserts
+        equipmentHistoryInserts,
+        preFetchedDbAssignments: currentAssignmentsInDb
       });
-
-      if (typeof refreshData === 'function') {
-        refreshData();
-      }
 
       if (matchedOrder) {
         setWhatsappShareModalData({
@@ -3409,12 +3404,19 @@ export const OperationsLeads: React.FC = () => {
     setHandoverStates(initialHandovers);
   };
 
-  const handleConfirmCompletion = () => {
-    if (!closingOrderId) return;
-
-    markEventCompleted(closingOrderId, serverPath);
-    setClosingOrderId(null);
-    alert(`Shoot marked completed for [${closingOrderId}]!`);
+  const handleConfirmCompletion = async () => {
+    if (isSaving || !closingOrderId) return;
+    setIsSaving(true);
+    try {
+      await markEventCompleted(closingOrderId, serverPath);
+      const completedId = closingOrderId;
+      setClosingOrderId(null);
+      alert(`Shoot marked completed for [${completedId}]!`);
+    } catch (err: any) {
+      alert("Failed to mark event completed: " + (err?.message || err));
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const stats = useMemo(() => {
@@ -4305,7 +4307,6 @@ export const OperationsLeads: React.FC = () => {
                                     alert(`Failed to cancel event: ${error.message}`);
                                   } finally {
                                     setIsSaving(false);
-                                    refreshData();
                                   }
                                 }
                                 setActiveMenuOrderId(null);
@@ -6116,7 +6117,6 @@ export const OperationsLeads: React.FC = () => {
                     setConsolidatedDriveLink('');
                     setFootageForm({ footage_link: '', storage_type: 'Google Drive', upload_notes: '' });
                     
-                    await refreshData();
                     alert("✅ Raw Footage Verified Successfully! Order transferred to Production Dashboard.");
                   } catch (err: any) {
                     console.error("Failed to verify raw footage:", err);
@@ -6336,7 +6336,7 @@ export const OperationsLeads: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              const cleanPhone = stObj?.mobile ? stObj.mobile.replace(/\D/g, '') : '';
+                              const cleanPhone = stObj?.mobile ? String(stObj.mobile).replace(/\D/g, '') : '';
                               const shareUrl = cleanPhone 
                                 ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msgText)}`
                                 : `https://wa.me/?text=${encodeURIComponent(msgText)}`;

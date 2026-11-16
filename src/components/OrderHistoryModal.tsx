@@ -70,6 +70,9 @@ export interface ClientAcceptanceChecklistData {
   physicalDriveDetails?: string;
   consentProofUrl?: string | null;
   consentProofFileName?: string;
+  finalImageUrl?: string | null;
+  finalImageName?: string;
+  finalImageEventName?: string;
   isVerified?: boolean;
   verifiedAt?: string;
   verifiedBy?: string;
@@ -1037,6 +1040,39 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         addProof(prod.final_consolidated_drive_link, 'Consolidated Delivery Drive Link', 'Production Team', 'Client Acceptance', prod?.updated_at);
       }
 
+      const finalImgValUploads = (prod?.validated_server_uploads && typeof prod.validated_server_uploads === 'object')
+        ? prod.validated_server_uploads
+        : {};
+      const rawFinalImgUrl =
+        (finalImgValUploads as any).final_image_url ||
+        prod?.final_image_url ||
+        cav?.final_image_url ||
+        cav?.proof_storage_path ||
+        '';
+      const resolvedFinalImgUrl = resolveStorageUrl(rawFinalImgUrl) || (rawFinalImgUrl ? String(rawFinalImgUrl).trim() : null);
+      const finalImgName =
+        (finalImgValUploads as any).final_image_name ||
+        prod?.final_image_name ||
+        cav?.final_image_name ||
+        cav?.proof_file_name ||
+        'Final Delivered Image';
+      const finalImgEventName =
+        (finalImgValUploads as any).final_image_event_name ||
+        prod?.final_image_event_name ||
+        cav?.final_image_event_name ||
+        '';
+
+      if (resolvedFinalImgUrl) {
+        addProof(
+          resolvedFinalImgUrl,
+          `Final Image${finalImgName ? ` (${finalImgName})` : ''}`,
+          'Production Team',
+          'Client Acceptance',
+          (finalImgValUploads as any).final_image_uploaded_at || cav?.updated_at || prod?.updated_at,
+          finalImgEventName || undefined
+        );
+      }
+
       const checklistItems: ClientAcceptanceChecklistItem[] = [
         {
           key: 'customer_acceptance',
@@ -1079,6 +1115,9 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
         physicalDriveDetails: prod?.physical_drive_details || prod?.folder_name || '',
         consentProofUrl: resolveStorageUrl(consentProof),
         consentProofFileName: cav?.proof_file_name || prod?.proof_file_name || 'Customer_Approval_Consent.jpg',
+        finalImageUrl: resolvedFinalImgUrl,
+        finalImageName: finalImgName,
+        finalImageEventName: finalImgEventName,
         isVerified: cav?.consent_proof_verified ?? true,
         verifiedAt: cav?.updated_at || prod?.updated_at || timestamp,
         verifiedBy: 'Production Team'
@@ -1797,6 +1836,75 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                 ) : (
                   <div className="bg-zinc-900/40 border border-dashed border-zinc-800 rounded-xl p-4 text-center text-xs font-mono text-zinc-500">
                     No customer consent document or screenshot attached for this order.
+                  </div>
+                )}
+              </div>
+
+              {/* SECTION 4: FINAL IMAGE (VISUAL PROOF OF FINAL DELIVERY) */}
+              <div className="pt-4 border-t border-zinc-850">
+                <h5 className="text-xs font-mono uppercase tracking-wider text-zinc-400 font-bold mb-3 flex items-center justify-between">
+                  <span>Final Image (Final Delivery Proof)</span>
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-semibold ${
+                    selectedChecklist.finalImageUrl
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                  }`}>
+                    {selectedChecklist.finalImageUrl ? 'Uploaded' : 'Not Uploaded'}
+                  </span>
+                </h5>
+
+                {selectedChecklist.finalImageUrl ? (
+                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-3 flex flex-col sm:flex-row items-center gap-4">
+                    <div
+                      onClick={() => {
+                        setSelectedGallery({
+                          stageName: 'Final Delivered Image',
+                          images: [{
+                            id: 'ca_final_image',
+                            type: 'image',
+                            url: selectedChecklist.finalImageUrl!,
+                            rawUrl: selectedChecklist.finalImageUrl!,
+                            proofName: selectedChecklist.finalImageName || 'Final Delivered Image',
+                            uploadedBy: 'Production Team',
+                            stageName: 'Client Acceptance',
+                            eventName: selectedChecklist.finalImageEventName || undefined
+                          }],
+                          links: []
+                        });
+                        setLightboxImageIndex(0);
+                      }}
+                      className="w-full sm:w-44 h-28 bg-zinc-950 rounded-lg overflow-hidden border border-zinc-750 cursor-pointer relative group shrink-0"
+                    >
+                      <SafeProofImage
+                        url={selectedChecklist.finalImageUrl}
+                        alt="Final Delivered Image"
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                        containerClassName="w-full h-full relative"
+                        showExternalLink={false}
+                      />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium gap-1">
+                        <Maximize2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Enlarge</span>
+                      </div>
+                    </div>
+
+                    <div className="flex-1 min-w-0 space-y-1.5 text-xs">
+                      <div className="font-semibold text-zinc-200 truncate">
+                        {selectedChecklist.finalImageName || 'Final Delivered Image'}
+                      </div>
+                      {selectedChecklist.finalImageEventName && (
+                        <div className="text-[11px] text-zinc-400 font-mono">
+                          Event: {selectedChecklist.finalImageEventName}
+                        </div>
+                      )}
+                      <p className="text-[11px] text-zinc-400 leading-relaxed font-sans">
+                        Visual proof of final project delivery uploaded during Client Approval.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-zinc-900/40 border border-dashed border-zinc-800 rounded-xl p-4 text-center text-xs font-mono text-zinc-400">
+                    Not Uploaded
                   </div>
                 )}
               </div>

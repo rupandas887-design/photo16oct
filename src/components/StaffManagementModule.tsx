@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { useRole, getStaffCurrentPassword, fetchStaffCurrentPassword } from './RoleContext';
-import { supabaseClient } from '../supabaseClient';
-import { Staff, UserRole } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { useRole } from './RoleContext';
+import { Staff } from '../types';
 import { triggerAutoScrollAndFocus, checkGlobalStaffUniqueness, formatStaffErrorMessage, scrollToFirstError } from '../utils';
 import { 
   Users, UserPlus, Phone, Mail, Award, Clock, FileText, ToggleLeft, ToggleRight, ShieldAlert,
@@ -13,12 +12,13 @@ export const StaffManagementModule: React.FC = () => {
   const { 
     staff, addStaff, updateStaff, production, currentRole,
     specialities = [], addSpeciality, updateSpeciality, deactivateSpeciality,
-    addUser, resetUserPassword, users, productionStaff = []
+    resetUserPassword, users, productionStaff = [], fetchStaffPasswordStatus
   } = useRole();
   
   // Tabs: 'dashboard' | 'list' | 'add' | 'specialities'
   const [activeSubTab, setActiveSubTab] = useState<'dashboard' | 'list' | 'add' | 'specialities'>('dashboard');
   const [formError, setFormError] = useState('');
+  const [formSuccess, setFormSuccess] = useState('');
 
   // Automatically scroll to error when validation error appears
   useEffect(() => {
@@ -48,6 +48,11 @@ export const StaffManagementModule: React.FC = () => {
   // Password & credentials states
   const [staffPassword, setStaffPassword] = useState('');
   const [showStaffPassword, setShowStaffPassword] = useState(false);
+  const [currentStaffPassword, setCurrentStaffPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(true);
+  const [loadingCurrentPassword, setLoadingCurrentPassword] = useState(false);
+  const [currentPasswordError, setCurrentPasswordError] = useState('');
+  const currentPasswordReqIdRef = useRef(0);
 
   // Password reset modal states
   const [resetModalStaff, setResetModalStaff] = useState<Staff | null>(null);
@@ -55,6 +60,7 @@ export const StaffManagementModule: React.FC = () => {
   const [showNewStaffPassword, setShowNewStaffPassword] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [resetSuccessMessage, setResetSuccessMessage] = useState('');
+  const [resetErrorMessage, setResetErrorMessage] = useState('');
 
   // Specialties & experience fields
   const [prodSpeciality, setProdSpeciality] = useState('');
@@ -118,21 +124,29 @@ export const StaffManagementModule: React.FC = () => {
 
   const handleAddStaffSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email || !mobile) {
-      alert('Please fill out all required fields (Name, Email, Mobile).');
+    setFormError('');
+    setFormSuccess('');
+
+    if (!name.trim() || !email.trim() || !mobile.trim()) {
+      setFormError('Please fill out all required fields (Name, Email, Mobile).');
       return;
     }
 
-    if (!editingStaffId && (!staffPassword || staffPassword.length < 6)) {
-      alert('Please provide a password of at least 6 characters for the staff account.');
+    const cleanPwd = (staffPassword || '').trim();
+    if (!editingStaffId && (!cleanPwd || cleanPwd.length < 6)) {
+      setFormError('Please provide a password of at least 6 characters for the staff account.');
+      return;
+    }
+    if (editingStaffId && cleanPwd && cleanPwd.length < 6) {
+      setFormError('New password must be at least 6 characters long.');
       return;
     }
 
     const payload: any = {
-      name,
-      mobile,
-      whatsapp_number: whatsappNumber || mobile,
-      email,
+      name: name.trim(),
+      mobile: mobile.trim(),
+      whatsapp_number: (whatsappNumber || mobile).trim(),
+      email: email.trim(),
       role,
       department,
       status,
@@ -166,97 +180,31 @@ export const StaffManagementModule: React.FC = () => {
           errMsg = errMsg || "This mobile number is already registered. Please use a different number.";
         }
         setFormError(errMsg);
-        alert(errMsg);
         return;
       }
     }
 
-    setFormError('');
-
     try {
       if (editingStaffId) {
         const { mobile: _m, email: _e, ...safePayload } = payload;
-        await updateStaff(editingStaffId, safePayload);
-
-        // If a new password was provided during edit, update the user credentials
-        if (staffPassword && staffPassword.length >= 6) {
-          try {
-            const cleanPwd = staffPassword.trim();
-            const targetEmail = (email || '').trim().toLowerCase();
-            const targetMobile10 = (mobile || '').replace(/\D/g, '').slice(-10);
-            
-            let userRec = users.find(u => {
-              const uEmail = (u.email || '').trim().toLowerCase();
-              const uMobile10 = (u.mobile || '').replace(/\D/g, '').slice(-10);
-              if (targetEmail && uEmail === targetEmail) return true;
-              if (targetMobile10.length >= 7 && uMobile10.length >= 7 && uMobile10 === targetMobile10) return true;
-              return false;
-            });
-
-            if (!userRec && supabaseClient) {
-              const { data: dbUsers } = await supabaseClient.from('users').select('*');
-              if (dbUsers) {
-                userRec = dbUsers.find(u => {
-                  const uEmail = (u.email || '').trim().toLowerCase();
-                  const uMobile10 = (u.mobile || '').replace(/\D/g, '').slice(-10);
-                  if (targetEmail && uEmail === targetEmail) return true;
-                  if (targetMobile10.length >= 7 && uMobile10.length >= 7 && uMobile10 === targetMobile10) return true;
-                  return false;
-                });
-              }
-            }
-
-            if (userRec) {
-              await resetUserPassword(userRec.id, cleanPwd);
-            } else {
-              await addUser(name, email, mobile, 'Operation Staff', status === 'Active', cleanPwd);
-            }
-          } catch (pwErr) {
-            console.warn("Could not update staff login password:", pwErr);
-          }
+        await updateStaff(editingStaffId, {
+          ...safePayload,
+          ...(cleanPwd ? { password: cleanPwd } : {})
+        });
+        if (cleanPwd) {
+          setCurrentStaffPassword(cleanPwd);
+          setShowCurrentPassword(true);
         }
 
-        alert('Staff member updated successfully!');
+        setFormSuccess(
+          cleanPwd
+            ? '✅ Staff member details and password updated successfully!'
+            : '✅ Staff member updated successfully!'
+        );
         setEditingStaffId(null);
       } else {
-        const cleanPwd = (staffPassword || '').trim();
-        await addStaff({ ...payload, password: cleanPwd || undefined });
-
-        // Also create login user with the specified password for authentication
-        const userRole: UserRole = (department === 'Operations' || role.toLowerCase().includes('operation')) ? 'Operation Staff' : 'Production Staff';
-        try {
-          await addUser(name, email, mobile, userRole, status === 'Active', cleanPwd);
-        } catch (authErr) {
-          console.warn("Auto-create login user warning:", authErr);
-        }
-
-        // Direct guarantee to update users table with password
-        if (cleanPwd) {
-          try {
-            const finalEmail = (email || '').trim().toLowerCase() || `${mobile.replace(/\D/g, '')}@photocrew.com`;
-            const { data: existingUser } = await supabaseClient
-              .from('users')
-              .select('id')
-              .or(`email.eq.${finalEmail},mobile.eq.${mobile}`)
-              .limit(1);
-
-            if (existingUser && existingUser.length > 0) {
-              await supabaseClient.from('users').update({
-                name,
-                mobile,
-                email: finalEmail,
-                username: finalEmail,
-                role: userRole,
-                active: status === 'Active',
-                password: cleanPwd
-              }).eq('id', existingUser[0].id);
-            }
-          } catch (syncErr) {
-            console.warn("Staff management direct users sync warning:", syncErr);
-          }
-        }
-
-        alert('Staff member registered and login password configured successfully!');
+        await addStaff({ ...payload, password: cleanPwd });
+        setFormSuccess('✅ Staff member registered and login password configured successfully!');
       }
 
       // Reset Form
@@ -265,6 +213,12 @@ export const StaffManagementModule: React.FC = () => {
       setWhatsappNumber('');
       setEmail('');
       setStaffPassword('');
+      setShowStaffPassword(false);
+      currentPasswordReqIdRef.current += 1;
+      setCurrentStaffPassword('');
+      setShowCurrentPassword(true);
+      setLoadingCurrentPassword(false);
+      setCurrentPasswordError('');
       setRole('Editor');
       setDepartment('Editing');
       setStatus('Active');
@@ -276,17 +230,19 @@ export const StaffManagementModule: React.FC = () => {
       setExperience('Junior Editor (1-2 Years)');
 
       setActiveSubTab('list');
+      setTimeout(() => setFormSuccess(''), 4000);
     } catch (err: any) {
       const errMsg = formatStaffErrorMessage(err);
       setFormError(errMsg);
-      alert(errMsg);
     }
   };
 
   const handleResetStaffPasswordModal = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!resetModalStaff || !newStaffPassword || newStaffPassword.length < 6) {
-      alert('Password must be at least 6 characters long.');
+    setResetErrorMessage('');
+    const cleanNewPassword = (newStaffPassword || '').trim();
+    if (!resetModalStaff || !cleanNewPassword || cleanNewPassword.length < 6) {
+      setResetErrorMessage('Password must be at least 6 characters long.');
       return;
     }
 
@@ -294,80 +250,61 @@ export const StaffManagementModule: React.FC = () => {
     setResetSuccessMessage('');
 
     try {
-      const cleanNewPassword = newStaffPassword.trim();
-      const staffEmail = (resetModalStaff.email || '').trim().toLowerCase();
-      const staffMobileDigits = (resetModalStaff.mobile || '').replace(/\D/g, '');
-      const staffMobile10 = staffMobileDigits.length >= 10 ? staffMobileDigits.slice(-10) : staffMobileDigits;
-
-      // Find matching user record from state
-      let targetUser = users.find(u => {
-        const uEmail = (u.email || '').trim().toLowerCase();
-        const uMobileDigits = (u.mobile || '').replace(/\D/g, '');
-        const uMobile10 = uMobileDigits.length >= 10 ? uMobileDigits.slice(-10) : uMobileDigits;
-        if (staffEmail && uEmail && uEmail === staffEmail) return true;
-        if (staffMobile10.length >= 7 && uMobile10.length >= 7 && uMobile10 === staffMobile10) return true;
-        return false;
-      });
-
-      // If not found in state, look directly in public.users table
-      if (!targetUser && supabaseClient) {
-        const { data: dbUsers } = await supabaseClient.from('users').select('*');
-        if (dbUsers) {
-          const matchedDbUser = dbUsers.find(u => {
-            const uEmail = (u.email || '').trim().toLowerCase();
-            const uMobileDigits = (u.mobile || '').replace(/\D/g, '');
-            const uMobile10 = uMobileDigits.length >= 10 ? uMobileDigits.slice(-10) : uMobileDigits;
-            if (staffEmail && uEmail && uEmail === staffEmail) return true;
-            if (staffMobile10.length >= 7 && uMobile10.length >= 7 && uMobile10 === staffMobile10) return true;
-            return false;
-          });
-          if (matchedDbUser) {
-            targetUser = matchedDbUser;
-          }
-        }
-      }
-
-      if (targetUser) {
-        await resetUserPassword(targetUser.id, cleanNewPassword);
+      // Update password strictly via RoleContext.updateStaff so staff_id -> auth_user_id mapping & public.users sync stay 1-to-1
+      if (resetModalStaff.staff_id) {
+        await updateStaff(resetModalStaff.staff_id, { password: cleanNewPassword } as any);
       } else {
-        // Create user if missing
-        await addUser(
-          resetModalStaff.name,
-          resetModalStaff.email || `${staffMobileDigits || 'staff'}@photocrew.com`,
-          resetModalStaff.mobile,
-          'Operation Staff',
-          resetModalStaff.status === 'Active',
-          cleanNewPassword
-        );
+        const staffEmail = String(resetModalStaff.email ?? '').trim().toLowerCase();
+        const staffMobileDigits = String(resetModalStaff.mobile ?? '').replace(/\D/g, '');
+        const staffMobile10 = staffMobileDigits.length >= 10 ? staffMobileDigits.slice(-10) : staffMobileDigits;
+        const targetUser = users.find(u => {
+          const uEmail = String(u.email ?? '').trim().toLowerCase();
+          const uMobileDigits = String(u.mobile ?? '').replace(/\D/g, '');
+          const uMobile10 = uMobileDigits.length >= 10 ? uMobileDigits.slice(-10) : uMobileDigits;
+          if (staffEmail && uEmail && uEmail === staffEmail) return true;
+          if (staffMobile10.length >= 7 && uMobile10.length >= 7 && uMobile10 === staffMobile10) return true;
+          return false;
+        });
+        if (!targetUser) {
+          throw new Error('Could not locate matching authentication user for this staff member.');
+        }
+        await resetUserPassword(targetUser.id, cleanNewPassword);
       }
 
+      if (editingStaffId && resetModalStaff.staff_id === editingStaffId) {
+        setCurrentStaffPassword(cleanNewPassword);
+        setShowCurrentPassword(true);
+      }
       setResetSuccessMessage(`Password for ${resetModalStaff.name} has been updated successfully. They can now log in with their email/mobile and this new password.`);
       setTimeout(() => {
         setResetModalStaff(null);
         setNewStaffPassword('');
+        setShowNewStaffPassword(false);
         setResetSuccessMessage('');
+        setResetErrorMessage('');
       }, 2000);
     } catch (err: any) {
-      alert('Failed to reset password: ' + (err?.message || 'Unknown error'));
+      setResetErrorMessage('Failed to reset password: ' + (err?.message || 'Unknown error'));
     } finally {
       setIsResetting(false);
     }
   };
 
   const handleEditStaffClick = (member: Staff) => {
+    const reqId = ++currentPasswordReqIdRef.current;
     setEditingStaffId(member.staff_id);
+    setFormError('');
+    setFormSuccess('');
     setName(member.name);
     setMobile(member.mobile);
     setWhatsappNumber(member.whatsapp_number || '');
     setEmail(member.email);
-    const currentPwd = getStaffCurrentPassword(member, users);
-    setStaffPassword(currentPwd);
-    setShowStaffPassword(true);
-    if (!currentPwd) {
-      fetchStaffCurrentPassword(member, users).then(livePwd => {
-        if (livePwd) setStaffPassword(livePwd);
-      });
-    }
+    setStaffPassword('');
+    setShowStaffPassword(false);
+    setCurrentStaffPassword('');
+    setShowCurrentPassword(true);
+    setCurrentPasswordError('');
+    setLoadingCurrentPassword(true);
     setRole(member.role);
     setDepartment(member.department);
     setStatus(member.status);
@@ -378,6 +315,19 @@ export const StaffManagementModule: React.FC = () => {
     setSkills(Array.isArray(member.Skill) ? member.Skill : []);
     setExperience(member.experience || 'Junior Editor (1-3 Years)');
     setActiveSubTab('add');
+    const inferredStaffType =
+      String(member.staff_id || '').startsWith('STF-') ||
+      String(member.department || '').toLowerCase().includes('post') ||
+      String(member.department || '').toLowerCase().includes('prod') ||
+      String(member.role || '').toLowerCase().includes('editor')
+        ? 'production'
+        : 'operations';
+    fetchStaffPasswordStatus(member, inferredStaffType).then((res) => {
+      if (currentPasswordReqIdRef.current !== reqId) return;
+      setCurrentStaffPassword(res.password || '');
+      setCurrentPasswordError(res.error || '');
+      setLoadingCurrentPassword(false);
+    });
     setTimeout(() => {
       triggerAutoScrollAndFocus('#add_staff_form', 150);
     }, 50);
@@ -594,6 +544,12 @@ export const StaffManagementModule: React.FC = () => {
       {/* ROSTER / LIST TAB CONTAINER */}
       {activeSubTab === 'list' && (
         <div className="space-y-4">
+          {formSuccess && (
+            <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 p-3 rounded-xl text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{formSuccess}</span>
+            </div>
+          )}
           
           {/* Filters Bar */}
           <div className="bg-zinc-950 border border-zinc-900 p-4 rounded-xl flex flex-col md:flex-row gap-3 items-center justify-between relative">
@@ -703,7 +659,7 @@ export const StaffManagementModule: React.FC = () => {
                   )}
 
                   {/* Contact details */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4 py-3 border-t border-b border-zinc-900 text-[10px]">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4 py-3 border-t border-b border-zinc-900 text-[10px]">
                     <div className="space-y-1">
                       <div className="text-[9px] font-mono text-zinc-500 uppercase">Mobile</div>
                       <a href={`tel:${member.mobile}`} className="font-mono font-bold text-zinc-300 hover:text-white flex items-center gap-1 break-words" title={member.mobile}>
@@ -714,14 +670,14 @@ export const StaffManagementModule: React.FC = () => {
                     <div className="space-y-1">
                       <div className="text-[9px] font-mono text-zinc-500 uppercase">WhatsApp</div>
                       <a 
-                        href={`https://api.whatsapp.com/send?phone=${(member.whatsapp_number || member.mobile || '').replace(/[^0-9]/g, '')}`} 
+                        href={`https://api.whatsapp.com/send?phone=${String(member.whatsapp_number ?? member.mobile ?? '').replace(/[^0-9]/g, '')}`} 
                         target="_blank" 
                         rel="noreferrer" 
                         className="font-mono font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 break-words" 
-                        title={member.whatsapp_number || member.mobile}
+                        title={String(member.whatsapp_number ?? member.mobile ?? '')}
                       >
                         <span className="text-emerald-450 text-[11px] font-bold shrink-0">💬</span>
-                        <span className="break-words">{member.whatsapp_number || member.mobile}</span>
+                        <span className="break-words">{String(member.whatsapp_number || member.mobile || '')}</span>
                       </a>
                     </div>
                     <div className="space-y-1">
@@ -730,13 +686,6 @@ export const StaffManagementModule: React.FC = () => {
                         <Mail className="w-3 h-3 text-zinc-500 shrink-0" />
                         <span className="break-words">{member.email}</span>
                       </a>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[9px] font-mono text-zinc-500 uppercase">Password</div>
-                      <div className="font-mono font-bold text-zinc-300 flex items-center gap-1 select-all" title="Current Password">
-                        <Lock className="w-3 h-3 text-violet-400 shrink-0" />
-                        <span>{getStaffCurrentPassword(member, users) || '••••••••'}</span>
-                      </div>
                     </div>
                   </div>
 
@@ -758,7 +707,9 @@ export const StaffManagementModule: React.FC = () => {
                         onClick={() => {
                           setResetModalStaff(member);
                           setNewStaffPassword('');
+                          setShowNewStaffPassword(false);
                           setResetSuccessMessage('');
+                          setResetErrorMessage('');
                         }}
                         title="Reset Staff Login Password"
                         className="p-1 px-2.5 text-[9px] font-mono font-bold border border-violet-800/40 hover:border-violet-600 bg-violet-950/30 text-violet-300 rounded-lg cursor-pointer select-none transition-colors flex items-center gap-1"
@@ -894,7 +845,7 @@ export const StaffManagementModule: React.FC = () => {
               <div className="flex items-center justify-between">
                 <label className="text-[10px] font-mono text-zinc-400 uppercase font-bold flex items-center gap-1">
                   <Key className="w-3 h-3 text-violet-400" />
-                  <span>Account Login Password</span>
+                  <span>{editingStaffId ? 'New Password' : 'Account Login Password'}</span>
                   {!editingStaffId && <span className="text-rose-500">*</span>}
                 </label>
               </div>
@@ -903,7 +854,7 @@ export const StaffManagementModule: React.FC = () => {
                   type={showStaffPassword ? "text" : "password"}
                   required={!editingStaffId}
                   minLength={6}
-                  placeholder="Password"
+                  placeholder={editingStaffId ? "Leave blank to keep existing password" : "Password"}
                   value={staffPassword}
                   onChange={(e) => setStaffPassword(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 pr-10 text-xs text-white placeholder-zinc-500 focus:border-violet-500 outline-none font-mono"
@@ -917,6 +868,42 @@ export const StaffManagementModule: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {editingStaffId && (
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-mono text-zinc-400 uppercase font-bold block">
+                  CURRENT PASSWORD
+                </label>
+                <div className="relative">
+                  <input
+                    type={currentStaffPassword && !loadingCurrentPassword && !showCurrentPassword ? "password" : "text"}
+                    readOnly
+                    value={
+                      loadingCurrentPassword
+                        ? "Loading..."
+                        : currentStaffPassword
+                          ? currentStaffPassword
+                          : currentPasswordError
+                            ? currentPasswordError
+                            : "Not available (reset password once)"
+                    }
+                    aria-label="Current password"
+                    className={`w-full bg-zinc-900/70 border border-zinc-800 rounded-xl p-3 pr-10 outline-none font-mono text-xs ${
+                      currentStaffPassword && !loadingCurrentPassword ? 'text-white' : 'text-zinc-400 italic'
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    disabled={loadingCurrentPassword || !currentStaffPassword}
+                    onClick={() => setShowCurrentPassword(prev => !prev)}
+                    aria-label={showCurrentPassword ? "Hide current password" : "Show current password"}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer p-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* WhatsApp */}
             <div className="space-y-1.5">
@@ -1239,7 +1226,9 @@ export const StaffManagementModule: React.FC = () => {
                 onClick={() => {
                   setResetModalStaff(null);
                   setNewStaffPassword('');
+                  setShowNewStaffPassword(false);
                   setResetSuccessMessage('');
+                  setResetErrorMessage('');
                 }}
                 className="text-zinc-500 hover:text-zinc-300 p-1"
               >
@@ -1254,6 +1243,12 @@ export const StaffManagementModule: React.FC = () => {
               </div>
             ) : (
               <form onSubmit={handleResetStaffPasswordModal} className="space-y-4">
+                {resetErrorMessage && (
+                  <div className="bg-rose-500/10 border border-rose-500/30 text-rose-400 p-3 rounded-xl text-xs flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-rose-500 shrink-0" />
+                    <span>{resetErrorMessage}</span>
+                  </div>
+                )}
                 <div className="bg-zinc-900/60 border border-zinc-850 p-3 rounded-xl space-y-1.5 text-xs font-mono">
                   <div className="text-zinc-400 flex justify-between">
                     <span>Email ID:</span>
@@ -1277,7 +1272,10 @@ export const StaffManagementModule: React.FC = () => {
                       minLength={6}
                       placeholder="Enter new password"
                       value={newStaffPassword}
-                      onChange={(e) => setNewStaffPassword(e.target.value)}
+                      onChange={(e) => {
+                        setNewStaffPassword(e.target.value);
+                        if (resetErrorMessage) setResetErrorMessage('');
+                      }}
                       className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 pr-10 text-xs text-white placeholder-zinc-500 focus:border-violet-500 outline-none font-mono"
                     />
                     <button
@@ -1300,6 +1298,8 @@ export const StaffManagementModule: React.FC = () => {
                     onClick={() => {
                       setResetModalStaff(null);
                       setNewStaffPassword('');
+                      setShowNewStaffPassword(false);
+                      setResetErrorMessage('');
                     }}
                     className="w-1/2 py-2.5 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 font-bold text-xs rounded-xl cursor-pointer"
                   >

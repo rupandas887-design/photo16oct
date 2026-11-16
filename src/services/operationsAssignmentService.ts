@@ -1532,6 +1532,7 @@ export interface ExecuteSaveAssignmentsParams {
     remarks?: string;
     equipmentUpdates?: { equipmentId: string; status: string }[];
     equipmentHistoryInserts?: any[];
+    preFetchedDbAssignments?: any[];
   };
   existingStaffAssignments: any[];
   currentUserName?: string;
@@ -1570,9 +1571,11 @@ export async function executeSaveStaffAssignments(params: ExecuteSaveAssignments
   const assignDate = timestamp.split('T')[0];
   const changedBy = currentUserName || 'Operations Team';
 
-  // 1. Fetch existing assignments directly from DB to prevent stale state
+  // 1. Reuse pre-fetched DB assignments when provided to avoid duplicate round-trip queries
   let existingDbAssignments: any[] = [];
-  if (supabaseClient) {
+  if (Array.isArray(metaPayload?.preFetchedDbAssignments)) {
+    existingDbAssignments = metaPayload.preFetchedDbAssignments;
+  } else if (supabaseClient) {
     try {
       const { data: dbData } = await supabaseClient
         .from('staff_assignments')
@@ -1879,7 +1882,21 @@ export async function executeSaveStaffAssignments(params: ExecuteSaveAssignments
     }
   }
 
-  await Promise.allSettled(dbPromises);
+  const settled = await Promise.allSettled(dbPromises);
+  for (const res of settled) {
+    if (res.status === 'rejected') {
+      throw new Error(res.reason?.message || String(res.reason) || 'Failed to save staff assignment changes to database.');
+    }
+    const val = res.value;
+    if (val && typeof val === 'object') {
+      if (val.success === false) {
+        throw new Error(val.error || 'Failed to save staff assignment changes to database.');
+      }
+      if (val.error && typeof val.error === 'object' && val.error.message) {
+        throw new Error(val.error.message);
+      }
+    }
+  }
 
   return {
     success: true,

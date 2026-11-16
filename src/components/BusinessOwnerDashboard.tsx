@@ -41,7 +41,8 @@ import {
   TrendingUp,
   Briefcase,
   Video,
-  History
+  History,
+  Maximize2
 } from 'lucide-react';
 import { CameraLensStatsCard, CameraLensTheme } from './CameraLensStatsCard';
 import { calculateAllPendingRecords } from '../utils/paymentCalculations';
@@ -50,6 +51,7 @@ import { BusinessOwnerCardDetailModal } from './BusinessOwnerCardDetailModal';
 import { PaymentHistoryModal } from './PaymentHistoryModal';
 import { AddNoteModal } from './AddNoteModal';
 import { OrderHistoryModal } from './OrderHistoryModal';
+import { SafeProofImage } from './ui/SafeProofImage';
 import { formatINR, formatTime12Hour, formatDateDDMMYY, formatDateToDDMMYYYY, deserializeLeadEvents, resolveStorageUrl } from '../utils';
 import { performBusinessOwnerReview } from '../utils/businessOwnerReview';
 import { Order, Lead, Production, Payment } from '../types';
@@ -413,6 +415,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     staffAssignments = [],
     rawFootage = [],
     users = [],
+    clientAcceptanceVerifications = [],
     updateOrderStage, 
     updateProduction, 
     logActivity,
@@ -421,6 +424,85 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     setGlobalDateRange,
     statusHistory = []
   } = useRole();
+
+  const [finalImageLightbox, setFinalImageLightbox] = useState<{
+    url: string;
+    customerName: string;
+    projectId: string;
+    eventName: string;
+    fileName?: string;
+    uploadedAt?: string;
+  } | null>(null);
+
+  const resolveFinalImageForProject = useCallback((orderOrItem: any, matchedProd?: Production | null, matchedLead?: Lead | null) => {
+    const prod = matchedProd || (orderOrItem?.rawProd as Production | undefined) || (production || []).find(p =>
+      (orderOrItem?.production_id && p.production_id === orderOrItem.production_id) ||
+      (orderOrItem?.order_id && ((p as any).order_id === orderOrItem.order_id || p.tracking_id === orderOrItem.order_id)) ||
+      (orderOrItem?.lead_id && ((p as any).lead_id === orderOrItem.lead_id || p.tracking_id === orderOrItem.lead_id))
+    );
+    const valUploads = (prod?.validated_server_uploads && typeof prod.validated_server_uploads === 'object')
+      ? prod.validated_server_uploads
+      : {};
+    const ids = [
+      orderOrItem?.order_id,
+      orderOrItem?.lead_id,
+      (prod as any)?.order_id,
+      prod?.tracking_id,
+      prod?.production_id
+    ].filter(Boolean).map(v => String(v).trim().toLowerCase());
+
+    const matchingVerif = (clientAcceptanceVerifications || []).find(v => {
+      const vOrd = String(v.order_id || '').trim().toLowerCase();
+      const vProd = String(v.final_image_production_id || '').trim().toLowerCase();
+      return (vOrd && ids.includes(vOrd)) || (vProd && ids.includes(vProd));
+    });
+
+    const rawUrl =
+      (valUploads as any).final_image_url ||
+      (prod as any)?.final_image_url ||
+      orderOrItem?.final_image_url ||
+      matchingVerif?.final_image_url ||
+      matchingVerif?.proof_storage_path ||
+      '';
+    const resolvedUrl = resolveStorageUrl(rawUrl) || (rawUrl ? String(rawUrl).trim() : null);
+
+    return {
+      url: resolvedUrl,
+      fileName:
+        (valUploads as any).final_image_name ||
+        (prod as any)?.final_image_name ||
+        matchingVerif?.final_image_name ||
+        matchingVerif?.proof_file_name ||
+        '',
+      uploadedAt:
+        (valUploads as any).final_image_uploaded_at ||
+        (prod as any)?.final_image_uploaded_at ||
+        matchingVerif?.final_image_uploaded_at ||
+        matchingVerif?.updated_at ||
+        '',
+      eventName:
+        (valUploads as any).final_image_event_name ||
+        (prod as any)?.final_image_event_name ||
+        matchingVerif?.final_image_event_name ||
+        orderOrItem?.custom_event_name ||
+        orderOrItem?.event_type ||
+        matchedLead?.custom_event_name ||
+        matchedLead?.event_type ||
+        'Main Event',
+      customerName:
+        (valUploads as any).final_image_customer_name ||
+        matchingVerif?.final_image_customer_name ||
+        orderOrItem?.customer_name ||
+        matchedLead?.customer_name ||
+        (prod as any)?.customer_name ||
+        'Customer',
+      projectId:
+        (valUploads as any).final_image_production_id ||
+        prod?.production_id ||
+        orderOrItem?.order_id ||
+        'N/A'
+    };
+  }, [production, clientAcceptanceVerifications]);
 
   // Logged-in Business Owner mobile computation
   const loggedInBusinessOwnerMobile = useMemo(() => {
@@ -949,6 +1031,13 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       }
       if (prod.footage_url) {
         item.footage_url = prod.footage_url;
+      }
+      const finalImgMeta = resolveFinalImageForProject(item, prod, item.rawLead);
+      if (finalImgMeta.url) {
+        item.final_image_url = finalImgMeta.url;
+        item.final_image_name = finalImgMeta.fileName;
+        item.final_image_event_name = finalImgMeta.eventName;
+        item.final_image_uploaded_at = finalImgMeta.uploadedAt;
       }
 
       const rawProdStatus = prod.editing_status || prod.production_status || (prod as any).status || 'Editing Started';
@@ -1808,12 +1897,83 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         <a href={item.proof_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-400 hover:underline font-mono">
           View Proof
         </a>
-      ) : <span className="text-zinc-500 text-xs">No Proof</span> }
+      ) : <span className="text-zinc-500 text-xs">No Proof</span> },
+      { key: 'final_image_url', label: 'Final Image', render: (item: any) => {
+        const meta = resolveFinalImageForProject(item, item.rawProd, item.rawLead);
+        if (!meta.url) {
+          return (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-400 font-mono text-[10px]">
+              Not Uploaded
+            </span>
+          );
+        }
+        return (
+          <button
+            type="button"
+            onClick={() => setFinalImageLightbox({
+              url: meta.url!,
+              customerName: meta.customerName,
+              projectId: meta.projectId,
+              eventName: meta.eventName,
+              fileName: meta.fileName,
+              uploadedAt: meta.uploadedAt
+            })}
+            className="inline-flex items-center gap-2 group cursor-pointer bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-lg p-1 pr-2.5 transition-colors"
+            title="View Final Image"
+          >
+            <img
+              src={meta.url}
+              alt="Final"
+              referrerPolicy="no-referrer"
+              className="w-8 h-6 rounded object-cover border border-zinc-800 shrink-0"
+            />
+            <span className="text-[10px] font-mono font-bold text-emerald-300">View</span>
+          </button>
+        );
+      }}
     ];
+
+    const finalImageOrderCol = {
+      key: 'final_image_url',
+      label: 'Final Image',
+      render: (item: any) => {
+        const meta = resolveFinalImageForProject(item, item.rawProd, item.rawLead);
+        if (!meta.url) {
+          return (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-400 font-mono text-[10px]">
+              Not Uploaded
+            </span>
+          );
+        }
+        return (
+          <button
+            type="button"
+            onClick={() => setFinalImageLightbox({
+              url: meta.url!,
+              customerName: meta.customerName,
+              projectId: meta.projectId,
+              eventName: meta.eventName,
+              fileName: meta.fileName,
+              uploadedAt: meta.uploadedAt
+            })}
+            className="inline-flex items-center gap-2 group cursor-pointer bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-lg p-1 pr-2.5 transition-colors"
+            title="View Final Image"
+          >
+            <img
+              src={meta.url}
+              alt="Final"
+              referrerPolicy="no-referrer"
+              className="w-8 h-6 rounded object-cover border border-zinc-800 shrink-0"
+            />
+            <span className="text-[10px] font-mono font-bold text-emerald-300">View</span>
+          </button>
+        );
+      }
+    };
 
     if (selectedCard === 'overview_revenue') return [...baseOrderCols, { key: 'quotation_amount', label: 'Quotation Amount', render: (item: any) => <span className="font-mono text-emerald-400 font-bold">{formatINR(item.quotation_amount || 0)}</span> }, { key: 'advance_received', label: 'Advance Received', render: (item: any) => <span className="font-mono text-zinc-400">{formatINR(item.advance_received || 0)}</span> }, actionCol];
     if (selectedCard === 'overview_active') return [...baseOrderCols, { key: 'current_stage', label: 'Status', render: (item: any) => <span className="px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 font-bold font-mono text-[10px]">{item.current_stage || 'In Progress'}</span> }, actionCol];
-    if (selectedCard === 'overview_approval') return [...baseOrderCols, { key: 'current_stage', label: 'Status', render: (item: any) => <span className="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold font-mono text-[10px]">{item.current_stage || 'Awaiting Approval'}</span> }, actionCol];
+    if (selectedCard === 'overview_approval') return [...baseOrderCols, { key: 'current_stage', label: 'Status', render: (item: any) => <span className="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold font-mono text-[10px]">{item.current_stage || 'Awaiting Approval'}</span> }, finalImageOrderCol, actionCol];
     if (selectedCard === 'overview_outstanding') return [...baseOrderCols, { key: 'totalRevenue', label: 'Total Revenue', render: (item: any) => <span className="font-mono text-zinc-400">{formatINR(item.totalRevenue || 0)}</span> }, { key: 'paymentReceived', label: 'Received', render: (item: any) => <span className="font-mono text-emerald-400">{formatINR(item.paymentReceived || 0)}</span> }, { key: 'outstandingAmount', label: 'Outstanding Balance', render: (item: any) => <span className="font-mono text-rose-400 font-bold">{formatINR(item.outstandingAmount || 0)}</span> }, actionCol];
 
     if (selectedCard === 'ops_event_end') {
@@ -1895,10 +2055,10 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
     if (selectedCard && (selectedCard.startsWith('sales_') || selectedCard === 'overview_sales')) return [...baseLeadCols, actionCol];
     if (selectedCard && (selectedCard.startsWith('ops_') || selectedCard === 'overview_ops')) return [...baseOpsCols, actionCol];
     if (selectedCard && (selectedCard.startsWith('prod_') || selectedCard === 'overview_prod' || selectedCard === 'overview_acceptance')) return [...baseProdCols, actionCol];
-    if (selectedCard === 'overview_closed') return [...baseOrderCols, { key: 'current_stage', label: 'Status', render: () => <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold font-mono text-[10px]">Closed & Completed</span> }, actionCol];
+    if (selectedCard === 'overview_closed') return [...baseOrderCols, { key: 'current_stage', label: 'Status', render: () => <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold font-mono text-[10px]">Closed & Completed</span> }, finalImageOrderCol, actionCol];
 
     return [...baseOrderCols, actionCol];
-  }, [selectedCard]);
+  }, [selectedCard, resolveFinalImageForProject]);
 
   const modalTitleAndMeta = useMemo(() => {
     switch (selectedCard) {
@@ -2811,6 +2971,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
                         <th className="py-3 px-4">Payment Status</th>
                         <th className="py-3 px-4">Outstanding Balance</th>
                         <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4">Final Image</th>
                         <th className="py-3 px-4 text-right">Action</th>
                       </tr>
                     </thead>
@@ -2828,6 +2989,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
                           paymentHistory
                         );
                         const customerMobile = order.customer_phone || order.mobile || lead?.phone || lead?.mobile || pay?.customer_phone || 'N/A';
+                        const finalImgMeta = resolveFinalImageForProject(order, prod, lead);
 
                         return (
                           <tr key={order.order_id} className="hover:bg-zinc-900/50 transition-colors">
@@ -2868,6 +3030,38 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
                               <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[10px] font-bold">
                                 {prod?.editing_status || order.current_stage || 'Client Acceptance'}
                               </span>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              {finalImgMeta.url ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setFinalImageLightbox({
+                                    url: finalImgMeta.url!,
+                                    customerName: finalImgMeta.customerName,
+                                    projectId: finalImgMeta.projectId,
+                                    eventName: finalImgMeta.eventName,
+                                    fileName: finalImgMeta.fileName,
+                                    uploadedAt: finalImgMeta.uploadedAt
+                                  })}
+                                  className="inline-flex items-center gap-2 p-1 pr-2.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-all cursor-pointer group"
+                                  title="Click to view Final Image clearly"
+                                >
+                                  <img
+                                    src={finalImgMeta.url}
+                                    alt={`Final Image - ${order.customer_name}`}
+                                    referrerPolicy="no-referrer"
+                                    className="w-11 h-8 rounded-lg object-cover border border-zinc-800 shrink-0 group-hover:scale-105 transition-transform"
+                                  />
+                                  <span className="text-[11px] font-mono font-bold text-emerald-300 flex items-center gap-1">
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>View</span>
+                                  </span>
+                                </button>
+                              ) : (
+                                <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 font-mono text-[10px] font-semibold">
+                                  Not Uploaded
+                                </span>
+                              )}
                             </td>
                             <td className="py-3.5 px-4 text-right">
                               <div className="flex items-center justify-end gap-2 flex-wrap">
@@ -3024,6 +3218,59 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
           orderId={noteModalOrder.order_id}
           customerName={noteModalOrder.customer_name || 'Customer'}
         />
+      )}
+
+      {/* FINAL IMAGE FULLSCREEN LIGHTBOX MODAL */}
+      {finalImageLightbox && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 bg-black/95 backdrop-blur-md z-[350] flex flex-col items-center justify-center p-3 sm:p-6"
+          onClick={() => setFinalImageLightbox(null)}
+        >
+          <div
+            className="w-full max-w-4xl bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-mono font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                  <span>Final Delivered Image — Visual Proof</span>
+                </div>
+                <div className="text-[11px] text-zinc-400 font-mono truncate mt-0.5">
+                  {finalImageLightbox.customerName} • {finalImageLightbox.projectId} • {finalImageLightbox.eventName}
+                  {finalImageLightbox.fileName ? ` • ${finalImageLightbox.fileName}` : ''}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={finalImageLightbox.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-mono flex items-center gap-1.5"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-sky-400" />
+                  <span className="hidden sm:inline">Open Original</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setFinalImageLightbox(null)}
+                  className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-3 sm:p-4 bg-black flex items-center justify-center">
+              <img
+                src={finalImageLightbox.url}
+                alt={`Final Delivered Image - ${finalImageLightbox.customerName}`}
+                referrerPolicy="no-referrer"
+                className="max-w-full max-h-[75vh] object-contain rounded-lg"
+              />
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
 
     </div>
@@ -5592,10 +5839,11 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
   onApprove,
   onReject
 }) => {
-  const { editorAssignments = [], quotations = [] } = useRole();
+  const { editorAssignments = [], quotations = [], clientAcceptanceVerifications = [] } = useRole();
   const isApprovingRef = useRef(false);
   const [isApproving, setIsApproving] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
+  const [showFinalImageLightbox, setShowFinalImageLightbox] = useState(false);
 
   const handleApproveSubmit = async () => {
     if (isApprovingRef.current || isApproving) return;
@@ -5926,6 +6174,187 @@ const ReviewAndCloseModal: React.FC<ReviewAndCloseModalProps> = ({
               ))}
             </div>
           </div>
+
+          {/* Section 3: Final Image (Visual Proof of Final Delivery) */}
+          {(() => {
+            const valUploads = (prod?.validated_server_uploads && typeof prod.validated_server_uploads === 'object')
+              ? prod.validated_server_uploads
+              : {};
+            const matchIds = [
+              order?.order_id,
+              order?.lead_id,
+              (prod as any)?.order_id,
+              prod?.tracking_id,
+              prod?.production_id
+            ].filter(Boolean).map(v => String(v).trim().toLowerCase());
+            const matchingVerif = (clientAcceptanceVerifications || []).find((v: any) => {
+              const vOrd = String(v.order_id || '').trim().toLowerCase();
+              const vProd = String(v.final_image_production_id || '').trim().toLowerCase();
+              return (vOrd && matchIds.includes(vOrd)) || (vProd && matchIds.includes(vProd));
+            });
+            const rawFinalUrl =
+              (valUploads as any).final_image_url ||
+              (prod as any)?.final_image_url ||
+              matchingVerif?.final_image_url ||
+              matchingVerif?.proof_storage_path ||
+              '';
+            const resolvedFinalUrl = resolveStorageUrl(rawFinalUrl) || (rawFinalUrl ? String(rawFinalUrl).trim() : null);
+            const finalFileName =
+              (valUploads as any).final_image_name ||
+              (prod as any)?.final_image_name ||
+              matchingVerif?.final_image_name ||
+              matchingVerif?.proof_file_name ||
+              '';
+            const finalUploadedAt =
+              (valUploads as any).final_image_uploaded_at ||
+              (prod as any)?.final_image_uploaded_at ||
+              matchingVerif?.final_image_uploaded_at ||
+              matchingVerif?.updated_at ||
+              '';
+            const finalEventName =
+              (valUploads as any).final_image_event_name ||
+              (prod as any)?.final_image_event_name ||
+              matchingVerif?.final_image_event_name ||
+              resolvedEvents[0]?.eventName ||
+              order?.custom_event_name ||
+              order?.event_type ||
+              'Main Event';
+            const finalProjectId =
+              (valUploads as any).final_image_production_id ||
+              prod?.production_id ||
+              order?.order_id ||
+              'N/A';
+
+            return (
+              <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>Final Image (Final Delivery Proof)</span>
+                  </h3>
+                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border ${
+                    resolvedFinalUrl
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      : 'bg-zinc-900 text-zinc-400 border-zinc-700'
+                  }`}>
+                    {resolvedFinalUrl ? 'Uploaded' : 'Not Uploaded'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-[11px] font-mono bg-zinc-950/70 border border-zinc-800/80 rounded-lg p-2.5">
+                  <div className="min-w-0">
+                    <span className="text-[10px] uppercase text-zinc-500 block font-bold">Customer</span>
+                    <span className="text-zinc-200 font-bold truncate block">{order?.customer_name || 'N/A'}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[10px] uppercase text-zinc-500 block font-bold">Project ID</span>
+                    <span className="text-amber-400 font-bold truncate block">{finalProjectId}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[10px] uppercase text-zinc-500 block font-bold">Event</span>
+                    <span className="text-zinc-200 font-bold truncate block">{finalEventName}</span>
+                  </div>
+                </div>
+
+                {resolvedFinalUrl ? (
+                  <div className="space-y-3">
+                    <div
+                      onClick={() => setShowFinalImageLightbox(true)}
+                      className="relative group cursor-pointer rounded-xl overflow-hidden border border-emerald-500/30 bg-zinc-950"
+                    >
+                      <SafeProofImage
+                        url={resolvedFinalUrl}
+                        alt={`Final Delivery Image - ${order?.customer_name || 'Order'}`}
+                        containerClassName="relative overflow-hidden h-52 sm:h-64 bg-zinc-950 flex items-center justify-center"
+                        className="w-full h-full object-contain"
+                        onClick={() => setShowFinalImageLightbox(true)}
+                        showExternalLink={false}
+                      />
+                      <div className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-lg bg-black/75 border border-zinc-700 text-white text-[10px] font-mono flex items-center gap-1.5">
+                        <Maximize2 className="w-3 h-3 text-emerald-400" />
+                        <span>Click to Enlarge</span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div className="min-w-0">
+                        <div className="font-mono text-zinc-200 font-semibold truncate">{finalFileName || 'Final Delivered Image'}</div>
+                        {finalUploadedAt && (
+                          <div className="text-[10px] font-mono text-zinc-400">
+                            Uploaded: {formatDateDDMMYY(finalUploadedAt)}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setShowFinalImageLightbox(true)}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>View Full Image</span>
+                        </button>
+                        <a
+                          href={resolvedFinalUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5 text-sky-400" />
+                          <span>Open Original</span>
+                        </a>
+                      </div>
+                    </div>
+
+                    {showFinalImageLightbox && (
+                      <div
+                        className="fixed inset-0 bg-black/95 backdrop-blur-md z-[360] flex flex-col items-center justify-center p-3 sm:p-6"
+                        onClick={() => setShowFinalImageLightbox(false)}
+                      >
+                        <div
+                          className="w-full max-w-4xl bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-xs font-mono font-bold uppercase tracking-wider text-emerald-400">
+                                Final Image — {order?.customer_name || 'Customer'}
+                              </div>
+                              <div className="text-[11px] text-zinc-400 font-mono truncate">
+                                {finalProjectId} • {finalEventName} {finalFileName ? `• ${finalFileName}` : ''}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setShowFinalImageLightbox(false)}
+                              className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white cursor-pointer"
+                            >
+                              <X className="w-5 h-5" />
+                            </button>
+                          </div>
+                          <div className="flex-1 overflow-auto p-3 sm:p-4 bg-black flex items-center justify-center">
+                            <img
+                              src={resolvedFinalUrl}
+                              alt={`Final Delivery Image - ${order?.customer_name || 'Order'}`}
+                              referrerPolicy="no-referrer"
+                              className="max-w-full max-h-[75vh] object-contain rounded-lg"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="bg-zinc-950/70 border border-dashed border-zinc-800 rounded-xl p-5 text-center space-y-1">
+                    <div className="text-xs font-mono font-bold text-zinc-300">Not Uploaded</div>
+                    <p className="text-[11px] text-zinc-500 font-sans">
+                      No Final Image has been uploaded in Production Dashboard → Client Approval for this project yet.
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Modal Action Bar */}

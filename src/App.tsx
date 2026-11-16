@@ -385,14 +385,16 @@ const MainAppContent: React.FC = () => {
     | 'password_reset'
     | 'notifications'
   >(() => {
-    const savedUser = localStorage.getItem('erp_current_user');
-    if (savedUser) {
-      const user = JSON.parse(savedUser);
-      if (user.role === 'Sales Team') return 'sales';
-      if (user.role === 'Operations Team') return 'operations';
-      if (user.role === 'Production Team') return 'production';
-      if (user.role === 'Operation Staff' || user.role === 'Production Staff') return 'staff_dashboard';
-    }
+    try {
+      const savedUser = localStorage.getItem('erp_current_user');
+      if (savedUser) {
+        const user = JSON.parse(savedUser);
+        if (user?.role === 'Sales Team') return 'sales';
+        if (user?.role === 'Operations Team') return 'operations';
+        if (user?.role === 'Production Team') return 'production';
+        if (user?.role === 'Operation Staff' || user?.role === 'Production Staff') return 'staff_dashboard';
+      }
+    } catch (_) {}
     return 'owner_overview';
   });
 

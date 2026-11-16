@@ -461,7 +461,7 @@ export interface Production {
   checklist_payment_from_sales?: boolean;
   checklist_edited_files_uploaded?: boolean;
   server_upload_validated?: boolean;
-  validated_server_uploads?: Record<string, boolean>;
+  validated_server_uploads?: Record<string, any>;
   checklist_client_communication_proof?: boolean;
   upload_name?: string;
   proof_name?: string;
@@ -469,6 +469,11 @@ export interface Production {
   delivery_method?: 'server_link' | 'physical_drive';
   server_link?: string;
   physical_drive_details?: string;
+  final_image_url?: string;
+  final_image_name?: string;
+  final_image_uploaded_at?: string;
+  final_image_event_id?: string;
+  final_image_event_name?: string;
 }
 
 export interface Payment {
@@ -601,6 +606,13 @@ export interface ClientAcceptanceVerification {
   delivery_method?: 'server_link' | 'physical_drive';
   server_link?: string;
   physical_drive_details?: string;
+  final_image_url?: string;
+  final_image_name?: string;
+  final_image_uploaded_at?: string;
+  final_image_event_id?: string;
+  final_image_event_name?: string;
+  final_image_customer_name?: string;
+  final_image_production_id?: string;
   created_at?: string;
   updated_at?: string;
 }

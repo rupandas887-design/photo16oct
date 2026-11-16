@@ -1,19 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useRole, getStaffCurrentPassword, fetchStaffCurrentPassword } from '../RoleContext';
+import { useRole } from '../RoleContext';
 import { 
   Users, UserCheck, ShieldAlert, PlusCircle, Edit, Mail, Phone, Calendar, Briefcase, Search, X,
   ChevronDown, Sparkles, Eye, EyeOff
 } from 'lucide-react';
 import { Staff } from '../../types';
 import { motion, AnimatePresence } from 'motion/react';
-import { createClient } from '@supabase/supabase-js';
 import { supabaseClient } from '../../supabaseClient';
 import { checkGlobalStaffUniqueness, formatStaffErrorMessage, verifyStaffDatabaseUniqueness, cleanPhone, cleanEmail, scrollToFirstError } from '../../utils';
 import { parseDateTimeToTimestamp } from '../ui/ListSortFilter';
 
 export const OperationsStaffManagement: React.FC = () => {
-  const { currentRole, staff, productionStaff = [], users = [], addStaff, updateStaff, operations, leads, orders, staffAssignments } = useRole();
+  const { currentRole, staff, productionStaff = [], users = [], addStaff, updateStaff, operations, leads, orders, staffAssignments, fetchStaffPasswordStatus } = useRole();
   const canEdit = currentRole === 'Operations Team' || currentRole === 'Business Owner';
 
   // Modal / Form state
@@ -23,8 +22,11 @@ export const OperationsStaffManagement: React.FC = () => {
   const [newSkill, setNewSkill] = useState('');
   const [showStaffModal, setShowStaffModal] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [currentStaffPassword, setCurrentStaffPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(true);
+  const [loadingCurrentPassword, setLoadingCurrentPassword] = useState(false);
+  const [currentPasswordError, setCurrentPasswordError] = useState('');
+  const currentPasswordReqIdRef = useRef(0);
   const [openSkillsStaffId, setOpenSkillsStaffId] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
   const [mobileError, setMobileError] = useState('');
@@ -74,24 +76,6 @@ export const OperationsStaffManagement: React.FC = () => {
       window.removeEventListener('close-all-event-dropdowns', handleOtherDropdownOpen);
     };
   }, []);
-
-  // Ensure current staff password remains in sync with users list
-  useEffect(() => {
-    if (editingId && showStaffModal) {
-      const activeStaff = staff.find((s: any) => s.staff_id === editingId) || 
-                          productionStaff.find((s: any) => s.staff_id === editingId);
-      if (activeStaff) {
-        const pwd = getStaffCurrentPassword(activeStaff, users);
-        if (pwd) {
-          setCurrentStaffPassword(pwd);
-        } else {
-          fetchStaffCurrentPassword(activeStaff, users).then(livePwd => {
-            if (livePwd) setCurrentStaffPassword(livePwd);
-          }).catch(() => {});
-        }
-      }
-    }
-  }, [editingId, showStaffModal, staff, productionStaff, users]);
 
   // Helper to extract staff-specific skills list
   const getStaffSkillsList = (st: Staff): string[] => {
@@ -146,20 +130,15 @@ export const OperationsStaffManagement: React.FC = () => {
   const [operatingId, setOperatingId] = useState<string | null>(null);
 
   const handleSelectEdit = (st: any) => {
+    const reqId = ++currentPasswordReqIdRef.current;
     setEditingId(st.staff_id);
     setShowStaffModal(true);
     setShowPassword(false);
-    setShowCurrentPassword(false);
+    setCurrentStaffPassword('');
+    setShowCurrentPassword(true);
+    setCurrentPasswordError('');
+    setLoadingCurrentPassword(true);
     setFormError('');
-
-    // Retrieve and show current password
-    const pwd = getStaffCurrentPassword(st, users);
-    setCurrentStaffPassword(pwd || '');
-    if (!pwd) {
-      fetchStaffCurrentPassword(st, users).then(livePwd => {
-        if (livePwd) setCurrentStaffPassword(livePwd);
-      }).catch(() => {});
-    }
 
     setForm({
       name: st.name,
@@ -180,15 +159,24 @@ export const OperationsStaffManagement: React.FC = () => {
       ? st.Skill.split(',').map((s: string) => s.trim()).filter(Boolean)
       : (Array.isArray(st.Skill) ? st.Skill : []);
     setSkills(loadedSkills);
+
+    fetchStaffPasswordStatus(st, 'operations').then((res) => {
+      if (currentPasswordReqIdRef.current !== reqId) return;
+      setCurrentStaffPassword(res.password || '');
+      setCurrentPasswordError(res.error || '');
+      setLoadingCurrentPassword(false);
+    });
   };
 
   const handleCancel = () => {
+    currentPasswordReqIdRef.current += 1;
     setEditingId(null);
     setShowStaffModal(false);
     setShowPassword(false);
-    setShowCurrentPassword(false);
     setCurrentStaffPassword('');
-    setCurrentStaffPassword('');
+    setShowCurrentPassword(true);
+    setLoadingCurrentPassword(false);
+    setCurrentPasswordError('');
     setFormError('');
     setForm({
       name: '',
@@ -292,142 +280,78 @@ export const OperationsStaffManagement: React.FC = () => {
       let originalMobile = null;
       let originalEmail = null;
       if (editingId) {
-        const originalStaff = staff.find(s => s.staff_id === editingId) || productionStaff.find(s => s.staff_id === editingId);
+        const originalStaff = staff.find(s => s.staff_id === editingId);
         if (originalStaff) {
           originalMobile = originalStaff.mobile;
           originalEmail = originalStaff.email;
           const u = users.find((x: any) => 
+            ((originalStaff as any).auth_user_id && x.id === (originalStaff as any).auth_user_id) ||
             (originalStaff.email && x.email?.toLowerCase() === originalStaff.email.toLowerCase()) ||
-            (originalStaff.mobile && x.mobile && String(x.mobile).replace(/\D/g, '') === String(originalStaff.mobile).replace(/\D/g, '')) ||
-            (originalStaff.email && x.username?.toLowerCase() === originalStaff.email.toLowerCase())
+            (originalStaff.mobile && x.mobile && String(x.mobile).replace(/\D/g, '') === String(originalStaff.mobile).replace(/\D/g, ''))
           );
           if (u?.id) targetUserId = u.id;
+          else if ((originalStaff as any).auth_user_id) targetUserId = (originalStaff as any).auth_user_id;
         }
       }
 
-      // Duplicate Check Validation against production_staff, users, operations_staff
-      const uniquenessCheck = await verifyStaffDatabaseUniqueness(
-        supabaseClient,
-        cleanMob,
-        form.email || (editingId ? undefined : finalEmail),
-        editingId || null,
-        targetUserId,
-        originalMobile,
-        originalEmail
-      );
+      // Duplicate Check Validation against production_staff, users, operations_staff when onboarding new staff
+      if (!editingId) {
+        const uniquenessCheck = await verifyStaffDatabaseUniqueness(
+          supabaseClient,
+          cleanMob,
+          form.email || finalEmail,
+          null,
+          targetUserId,
+          originalMobile,
+          originalEmail
+        );
 
-      if (uniquenessCheck.queryFailed) {
-        setFormError(uniquenessCheck.error || "Database query failed while checking staff uniqueness.");
-        setIsSaving(false);
-        return;
-      }
-
-      if (!uniquenessCheck.isUnique) {
-        if (uniquenessCheck.isMobileDuplicate && uniquenessCheck.isEmailDuplicate) {
-          setMobileError("This mobile number is already registered.");
-          setEmailError("This email address is already registered.");
-          setFormError("This mobile number is already registered. This email address is already registered.");
-        } else if (uniquenessCheck.isMobileDuplicate) {
-          setMobileError("This mobile number is already registered.");
-          setFormError("This mobile number is already registered.");
-        } else if (uniquenessCheck.isEmailDuplicate) {
-          setEmailError("This email address is already registered.");
-          setFormError("This email address is already registered.");
-        } else {
-          setFormError(uniquenessCheck.error || "Registration validation failed.");
+        if (uniquenessCheck.queryFailed) {
+          setFormError(uniquenessCheck.error || "Database query failed while checking staff uniqueness.");
+          setIsSaving(false);
+          return;
         }
-        setIsSaving(false);
-        return;
+
+        if (!uniquenessCheck.isUnique) {
+          if (uniquenessCheck.isMobileDuplicate && uniquenessCheck.isEmailDuplicate) {
+            setMobileError("This mobile number is already registered.");
+            setEmailError("This email address is already registered.");
+            setFormError("This mobile number is already registered. This email address is already registered.");
+          } else if (uniquenessCheck.isMobileDuplicate) {
+            setMobileError("This mobile number is already registered.");
+            setFormError("This mobile number is already registered.");
+          } else if (uniquenessCheck.isEmailDuplicate) {
+            setEmailError("This email address is already registered.");
+            setFormError("This email address is already registered.");
+          } else {
+            setFormError(uniquenessCheck.error || "Registration validation failed.");
+          }
+          setIsSaving(false);
+          return;
+        }
       }
 
       if (editingId) {
-        const originalStaff = staff.find(s => s.staff_id === editingId) || productionStaff.find(s => s.staff_id === editingId);
-        const targetEmail = originalStaff?.email || form.email || finalEmail;
-
-        if (!targetUserId && users && users.length > 0) {
-          const u = users.find((x: any) => 
-            (originalStaff?.email && x.email?.toLowerCase() === originalStaff.email.toLowerCase()) ||
-            (originalStaff?.mobile && x.mobile && String(x.mobile).replace(/\D/g, '') === String(originalStaff.mobile).replace(/\D/g, ''))
-          );
-          if (u?.id) targetUserId = u.id;
-        }
-
+        await updateStaff(editingId, {
+          ...submissionPayload,
+          ...(cleanPwd ? { password: cleanPwd } : {})
+        } as any);
         if (cleanPwd) {
-          // Update Supabase Auth via secure endpoint
-          try {
-            const authRes = await fetch('/api/auth/update-user', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                auth_id: targetUserId,
-                staff_id: editingId,
-                email: targetEmail,
-                mobile: originalStaff?.mobile || cleanMob,
-                password: cleanPwd,
-                name: form.name.trim(),
-                role: 'Operation Staff'
-              })
-            });
-            if (!authRes.ok) {
-              const errData = await authRes.json().catch(() => ({}));
-              console.warn("Auth endpoint notice:", errData);
-              if (errData.error && !errData.error.toLowerCase().includes('database error') && !errData.error.toLowerCase().includes('unexpected_failure')) {
-                setFormError(`Notice on authentication password update: ${errData.error}`);
-              }
-            } else {
-              setCurrentStaffPassword(cleanPwd);
-            }
-          } catch (authErr: any) {
-            console.warn("Auth update warning:", authErr);
-          }
+          setCurrentStaffPassword(cleanPwd);
+          setShowCurrentPassword(true);
         }
-
-        const userUpdates: any = {
-          name: form.name.trim()
-        };
-        if (cleanPwd) {
-          userUpdates.password = cleanPwd;
-        }
-
-        if (targetUserId) {
-          const { error: updateError } = await supabaseClient
-            .from('users')
-            .update(userUpdates)
-            .eq('id', targetUserId);
-            
-          if (updateError) {
-             console.error("Failed to update user in users table:", updateError);
-          }
-        } else {
-          // Fallback if not found by original staff details
-          if (targetEmail) {
-            await supabaseClient
-              .from('users')
-              .update(userUpdates)
-              .eq('email', targetEmail)
-              .eq('role', 'Operation Staff');
-          }
-          if (originalStaff?.mobile) {
-            await supabaseClient
-              .from('users')
-              .update(userUpdates)
-              .eq('mobile', originalStaff.mobile)
-              .eq('role', 'Operation Staff');
-          }
-        }
-
-        await updateStaff(editingId, submissionPayload);
         const toast = document.createElement('div');
         toast.className = 'fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-2 rounded-xl shadow-lg z-50 font-sans text-sm font-bold flex items-center gap-2 animate-in slide-in-from-bottom-5';
-        toast.innerHTML = '✅ Staff details updated successfully.';
+        toast.innerHTML = cleanPwd
+          ? '✅ Staff details & login password updated successfully.'
+          : '✅ Staff details updated successfully.';
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 3000);
         handleCancel();
       } else {
         await addStaff({
           ...submissionPayload,
-          password: finalPassword,
-          Password: finalPassword
+          password: finalPassword
         } as any);
         const toast = document.createElement('div');
         toast.className = 'fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-2 rounded-xl shadow-lg z-50 font-sans text-sm font-bold flex items-center gap-2 animate-in slide-in-from-bottom-5';
@@ -719,9 +643,9 @@ export const OperationsStaffManagement: React.FC = () => {
                 }}
                 className={`w-full min-w-0 bg-zinc-950 border rounded-xl px-3 py-2 text-white focus:outline-none focus:border-amber-500/50 ${editingId ? 'opacity-60 cursor-not-allowed bg-zinc-900/60 border-zinc-800' : formError && formError.toLowerCase().includes('mobile') ? 'border-rose-500/70' : 'border-zinc-850'}`}
               />
-              {formError && formError.toLowerCase().includes('mobile') && (
+              {!editingId && (mobileError || (formError && formError.toLowerCase().includes('mobile'))) && (
                 <p className="text-[11px] text-rose-400 font-sans mt-1">
-                  {formError}
+                  {mobileError || formError}
                 </p>
               )}
             </div>
@@ -740,16 +664,16 @@ export const OperationsStaffManagement: React.FC = () => {
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
                 className={`w-full min-w-0 bg-zinc-950 border border-zinc-850 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-amber-500/50 ${editingId ? 'opacity-60 cursor-not-allowed bg-zinc-900/60 border-zinc-800' : ''}`}
               />
-              {formError && formError.toLowerCase().includes('email') && (
+              {!editingId && (emailError || (formError && formError.toLowerCase().includes('email'))) && (
                 <p className="text-[11px] text-rose-400 font-sans mt-1">
-                  {formError}
+                  {emailError || formError}
                 </p>
               )}
             </div>
 
             <div className="min-w-0">
               <label className="block text-[11px] font-mono font-extrabold uppercase text-zinc-450 mb-1">
-                Password {editingId ? <span className="text-zinc-500 font-normal lowercase">(leave blank to keep current)</span> : <span className="text-zinc-500 font-normal lowercase">(optional, auto-generated if blank)</span>}
+                {editingId ? 'New Password' : 'Password'} {editingId ? <span className="text-zinc-500 font-normal lowercase">(leave blank to keep current)</span> : <span className="text-zinc-500 font-normal lowercase">(optional, auto-generated if blank)</span>}
               </label>
               <div className="relative">
                 <input
@@ -776,28 +700,47 @@ export const OperationsStaffManagement: React.FC = () => {
                   )}
                 </button>
               </div>
-              {editingId && (
-                <div className="mt-1.5 text-xs text-zinc-400 font-mono flex items-center gap-1.5 flex-wrap">
-                  <span>Current Password:</span>
-                  <span className="text-white font-medium select-all font-mono">
-                    {showCurrentPassword ? (currentStaffPassword || '********') : '********'}
-                  </span>
+            </div>
+            {editingId && (
+              <div className="min-w-0">
+                <label className="block text-[11px] font-mono font-extrabold uppercase text-zinc-450 mb-1">
+                  CURRENT PASSWORD
+                </label>
+                <div className="relative">
+                  <input
+                    type={currentStaffPassword && !loadingCurrentPassword && !showCurrentPassword ? "password" : "text"}
+                    readOnly
+                    value={
+                      loadingCurrentPassword
+                        ? "Loading..."
+                        : currentStaffPassword
+                          ? currentStaffPassword
+                          : currentPasswordError
+                            ? currentPasswordError
+                            : "Not available (reset password once)"
+                    }
+                    aria-label="Current password"
+                    className={`w-full min-w-0 bg-zinc-950/70 border border-zinc-850 rounded-xl px-3 py-2 pr-10 focus:outline-none font-mono text-xs ${
+                      currentStaffPassword && !loadingCurrentPassword ? 'text-white' : 'text-zinc-400 italic'
+                    }`}
+                  />
                   <button
                     type="button"
-                    onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                    className="inline-flex items-center justify-center text-zinc-450 hover:text-white transition-colors cursor-pointer p-0.5 rounded focus:outline-none"
+                    disabled={loadingCurrentPassword || !currentStaffPassword}
+                    onClick={() => setShowCurrentPassword(prev => !prev)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-450 hover:text-white transition-colors cursor-pointer p-1 disabled:opacity-40 disabled:cursor-not-allowed"
                     title={showCurrentPassword ? "Hide current password" : "Show current password"}
                     aria-label={showCurrentPassword ? "Hide current password" : "Show current password"}
                   >
                     {showCurrentPassword ? (
-                      <EyeOff className="w-3.5 h-3.5" />
+                      <EyeOff className="w-4 h-4" />
                     ) : (
-                      <Eye className="w-3.5 h-3.5" />
+                      <Eye className="w-4 h-4" />
                     )}
                   </button>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
             <div className="min-w-0">
               <label className="block text-[11px] font-mono font-extrabold uppercase text-zinc-450 mb-1">
                 WhatsApp Number

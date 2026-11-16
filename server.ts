@@ -459,10 +459,20 @@ async function startServer() {
     }
     const clone = { ...record };
 
-    if (table === 'production_staff') {
-      if ('password' in clone && clone.Password === undefined) {
-        clone.Password = clone.password;
-        delete clone.password;
+    if (table === 'production_staff' || table === 'operations_staff' || table === 'staff') {
+      delete clone.password;
+      delete clone.Password;
+      delete clone.current_password;
+      if (clone.notes && typeof clone.notes === 'string' && clone.notes.trim().startsWith('{')) {
+        try {
+          const parsedNotes = JSON.parse(clone.notes);
+          if (parsedNotes && typeof parsedNotes === 'object') {
+            delete parsedNotes.current_password;
+            delete parsedNotes.password;
+            delete parsedNotes.Password;
+            clone.notes = JSON.stringify(parsedNotes);
+          }
+        } catch (_) {}
       }
     }
 
@@ -1051,31 +1061,38 @@ async function startServer() {
 
       for (const itm of items) {
         if (!itm || typeof itm !== 'object') continue;
-        if (!itm.staff_id || !uuidRegex.test(String(itm.staff_id))) {
-          itm.staff_id = crypto.randomUUID ? crypto.randomUUID() : '55555555-5555-5555-5555-' + String(Math.floor(100000000000 + Math.random() * 900000000000));
+        if (operation !== 'update') {
+          if (!itm.staff_id || !uuidRegex.test(String(itm.staff_id))) {
+            itm.staff_id = crypto.randomUUID ? crypto.randomUUID() : '55555555-5555-5555-5555-' + String(Math.floor(100000000000 + Math.random() * 900000000000));
+          }
+          if (!itm.department) itm.department = 'Operations';
+          if (!itm.status) itm.status = 'Active';
+        } else if (itm.staff_id !== undefined && !uuidRegex.test(String(itm.staff_id))) {
+          delete itm.staff_id;
         }
-        let safeRole = itm.role || 'Photographer';
-        if (!allowedOpsRoles.includes(safeRole)) {
-          const rLower = String(safeRole).toLowerCase();
-          if (rLower.includes('video')) safeRole = 'Videographer';
-          else if (rLower.includes('assist')) safeRole = 'Assistant';
-          else if (rLower.includes('manag')) safeRole = 'Manager';
-          else safeRole = 'Photographer';
+
+        if (operation !== 'update' || itm.role !== undefined) {
+          let safeRole = itm.role || 'Photographer';
+          if (!allowedOpsRoles.includes(safeRole)) {
+            const rLower = String(safeRole).toLowerCase();
+            if (rLower.includes('video')) safeRole = 'Videographer';
+            else if (rLower.includes('assist')) safeRole = 'Assistant';
+            else if (rLower.includes('manag')) safeRole = 'Manager';
+            else safeRole = 'Photographer';
+          }
+          itm.role = safeRole;
         }
-        itm.role = safeRole;
 
         if (itm.whatsapp_number !== undefined && itm.whatsapp_number !== null) {
           const numStr = String(itm.whatsapp_number).replace(/\D/g, '').slice(-10);
           itm.whatsapp_number = numStr ? Number(numStr) : null;
-        } else if (itm.mobile) {
+        } else if (operation !== 'update' && itm.mobile) {
           const numStr = String(itm.mobile).replace(/\D/g, '').slice(-10);
           itm.whatsapp_number = numStr ? Number(numStr) : null;
         }
 
         if (!itm.Staff_Type && itm.staff_type) itm.Staff_Type = itm.staff_type;
         if (!itm.staff_type && itm.Staff_Type) itm.staff_type = itm.Staff_Type;
-        if (!itm.department) itm.department = 'Operations';
-        if (!itm.status) itm.status = 'Active';
       }
     }
 
@@ -1147,10 +1164,21 @@ async function startServer() {
         if (cleanE) orConds.push(`email.eq.${cleanE}`);
         if (cleanM && cleanM !== '0000000000') orConds.push(`mobile.eq.${cleanM}`);
 
+        const isSystemDivEmail = [
+          'owner@photocrew.com',
+          'founder@photocrew.com',
+          'sales@photocrew.com',
+          'sale@photocrew.com',
+          'operation@photocrew.com',
+          'operations@photocrew.com',
+          'production@photocrew.com'
+        ].includes(cleanE);
+
         if (orConds.length > 0) {
           const { data: existingRows } = await db.from('users').select('*').or(orConds.join(',')).limit(1);
           if (existingRows && existingRows.length > 0) {
             const existing = existingRows[0];
+            const isStaffAccount = !isSystemDivEmail && ['Operation Staff', 'Production Team'].includes(normalizedRole);
             const updates: any = {
               name: uItem.name || existing.name,
               mobile: cleanM || existing.mobile || '0000000000',
@@ -1158,7 +1186,11 @@ async function startServer() {
               active: uItem.active !== undefined ? uItem.active : existing.active
             };
             if (uItem.username) updates.username = uItem.username;
-            if (uItem.password) updates.password = uItem.password;
+            if (isStaffAccount) {
+              updates.password = null;
+            } else if (uItem.password) {
+              updates.password = uItem.password;
+            }
 
             let { data: upd, error: updErr } = await db.from('users').update(updates).eq('id', existing.id).select();
             if (updErr && updErr.message && updErr.message.includes('username')) {
@@ -1175,6 +1207,7 @@ async function startServer() {
 
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
         const validId = targetId && uuidRegex.test(targetId) ? targetId : crypto.randomUUID();
+        const isStaffInsert = !isSystemDivEmail && ['Operation Staff', 'Production Team'].includes(normalizedRole);
         const insertRecord: any = {
           id: validId,
           name: uItem.name || 'Staff',
@@ -1182,7 +1215,7 @@ async function startServer() {
           mobile: cleanM,
           role: normalizedRole,
           active: uItem.active !== undefined ? uItem.active : true,
-          password: uItem.password || null,
+          password: isStaffInsert ? null : (uItem.password || null),
           created_at: uItem.created_at || new Date().toISOString()
         };
         if (uItem.username) insertRecord.username = uItem.username;
@@ -1868,7 +1901,14 @@ async function startServer() {
         edited_folder_uploaded_to_server,
         delivery_method,
         server_link,
-        physical_drive_details
+        physical_drive_details,
+        final_image_url,
+        final_image_name,
+        final_image_uploaded_at,
+        final_image_event_id,
+        final_image_event_name,
+        final_image_customer_name,
+        final_image_production_id
       } = payload;
 
       if (!order_id) {
@@ -1908,13 +1948,20 @@ async function startServer() {
           folder_name: delivery_method === 'physical_drive' ? (physical_drive_details || folder_name || existingRecords[index].folder_name) : (folder_name !== undefined ? folder_name : existingRecords[index].folder_name),
           upload_link_path: delivery_method === 'physical_drive' ? '' : (resolvedLink || existingRecords[index].upload_link_path || ''),
           final_edited_footage_link: delivery_method === 'physical_drive' ? '' : (resolvedLink || existingRecords[index].final_edited_footage_link || existingRecords[index].upload_link_path || ''),
-          proof_file_name: proof_file_name !== undefined ? proof_file_name : existingRecords[index].proof_file_name,
-          proof_storage_path: proof_storage_path !== undefined ? proof_storage_path : existingRecords[index].proof_storage_path,
+          proof_file_name: final_image_name !== undefined ? final_image_name : (proof_file_name !== undefined ? proof_file_name : existingRecords[index].proof_file_name),
+          proof_storage_path: final_image_url !== undefined ? final_image_url : (proof_storage_path !== undefined ? proof_storage_path : existingRecords[index].proof_storage_path),
           consent_proof_verified: consent_proof_verified !== undefined ? Boolean(consent_proof_verified) : existingRecords[index].consent_proof_verified,
           edited_folder_uploaded_to_server: edited_folder_uploaded_to_server !== undefined ? Boolean(edited_folder_uploaded_to_server) : existingRecords[index].edited_folder_uploaded_to_server,
           delivery_method: delivery_method || existingRecords[index].delivery_method,
           server_link: delivery_method === 'server_link' ? (resolvedServerLink || existingRecords[index].server_link) : (delivery_method === 'physical_drive' ? undefined : existingRecords[index].server_link),
           physical_drive_details: delivery_method === 'physical_drive' ? (physical_drive_details || existingRecords[index].physical_drive_details) : (delivery_method === 'server_link' ? undefined : existingRecords[index].physical_drive_details),
+          final_image_url: final_image_url !== undefined ? final_image_url : existingRecords[index].final_image_url,
+          final_image_name: final_image_name !== undefined ? final_image_name : existingRecords[index].final_image_name,
+          final_image_uploaded_at: final_image_uploaded_at !== undefined ? final_image_uploaded_at : existingRecords[index].final_image_uploaded_at,
+          final_image_event_id: final_image_event_id !== undefined ? final_image_event_id : existingRecords[index].final_image_event_id,
+          final_image_event_name: final_image_event_name !== undefined ? final_image_event_name : existingRecords[index].final_image_event_name,
+          final_image_customer_name: final_image_customer_name !== undefined ? final_image_customer_name : existingRecords[index].final_image_customer_name,
+          final_image_production_id: final_image_production_id !== undefined ? final_image_production_id : existingRecords[index].final_image_production_id,
           updated_at: now
         };
         existingRecords[index] = savedRecord;
@@ -1930,13 +1977,20 @@ async function startServer() {
           folder_name: delivery_method === 'physical_drive' ? (physical_drive_details || folder_name || '') : (folder_name || ''),
           upload_link_path: delivery_method === 'physical_drive' ? '' : resolvedLink,
           final_edited_footage_link: delivery_method === 'physical_drive' ? '' : resolvedLink,
-          proof_file_name: proof_file_name || '',
-          proof_storage_path: proof_storage_path || '',
+          proof_file_name: final_image_name || proof_file_name || '',
+          proof_storage_path: final_image_url || proof_storage_path || '',
           consent_proof_verified: consent_proof_verified !== undefined ? Boolean(consent_proof_verified) : false,
           edited_folder_uploaded_to_server: edited_folder_uploaded_to_server !== undefined ? Boolean(edited_folder_uploaded_to_server) : false,
           delivery_method: delivery_method,
           server_link: delivery_method === 'server_link' ? resolvedServerLink : undefined,
           physical_drive_details: delivery_method === 'physical_drive' ? physical_drive_details : undefined,
+          final_image_url: final_image_url || '',
+          final_image_name: final_image_name || '',
+          final_image_uploaded_at: final_image_uploaded_at || '',
+          final_image_event_id: final_image_event_id || cleanEventId,
+          final_image_event_name: final_image_event_name || '',
+          final_image_customer_name: final_image_customer_name || '',
+          final_image_production_id: final_image_production_id || '',
           created_at: now,
           updated_at: now
         };
@@ -1969,12 +2023,16 @@ async function startServer() {
         // Suppress warning if table is not yet created in Postgres
       }
 
-      // Sync delivery method directly to linked Supabase production record
+      // Sync delivery method & Final Image directly to linked Supabase production record
       try {
         const db = getServerSupabase();
+        const orFilters = [`order_id.eq.${cleanOrderId}`, `tracking_id.eq.${cleanOrderId}`];
+        if (final_image_production_id) {
+          orFilters.push(`production_id.eq.${String(final_image_production_id).trim()}`);
+        }
         const { data: matchedProds } = await db.from('production')
           .select('production_id, validated_server_uploads')
-          .or(`order_id.eq.${cleanOrderId},tracking_id.eq.${cleanOrderId}`)
+          .or(orFilters.join(','))
           .limit(5);
 
         if (Array.isArray(matchedProds) && matchedProds.length > 0) {
@@ -1985,18 +2043,40 @@ async function startServer() {
             } else if (savedRecord.delivery_method === 'server_link') {
               delete (prevUploads as any).physical_drive_details;
             }
-            const nextUploads = {
+            if (final_image_url === '') {
+              delete (prevUploads as any).final_image_url;
+              delete (prevUploads as any).final_image_name;
+              delete (prevUploads as any).final_image_uploaded_at;
+              delete (prevUploads as any).final_image_order_id;
+              delete (prevUploads as any).final_image_production_id;
+              delete (prevUploads as any).final_image_event_id;
+              delete (prevUploads as any).final_image_event_name;
+              delete (prevUploads as any).final_image_customer_name;
+            }
+            const nextUploads: any = {
               ...prevUploads,
-              delivery_method: savedRecord.delivery_method,
+              ...(savedRecord.delivery_method ? { delivery_method: savedRecord.delivery_method } : {}),
               ...(savedRecord.delivery_method === 'server_link' ? { server_link: savedRecord.server_link } : {}),
-              ...(savedRecord.delivery_method === 'physical_drive' ? { physical_drive_details: savedRecord.physical_drive_details } : {})
+              ...(savedRecord.delivery_method === 'physical_drive' ? { physical_drive_details: savedRecord.physical_drive_details } : {}),
+              ...(final_image_url ? {
+                final_image_url,
+                final_image_name: savedRecord.final_image_name || '',
+                final_image_uploaded_at: savedRecord.final_image_uploaded_at || now,
+                final_image_order_id: cleanOrderId,
+                final_image_production_id: mProd.production_id,
+                final_image_event_id: savedRecord.final_image_event_id || cleanEventId,
+                final_image_event_name: savedRecord.final_image_event_name || '',
+                final_image_customer_name: savedRecord.final_image_customer_name || ''
+              } : {})
             };
             const prodUp: any = {
-              validated_server_uploads: nextUploads,
-              delivery_link: savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '',
-              upload_link_path: savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '',
-              final_edited_footage_link: savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : ''
+              validated_server_uploads: nextUploads
             };
+            if (savedRecord.delivery_method) {
+              prodUp.delivery_link = savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '';
+              prodUp.upload_link_path = savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '';
+              prodUp.final_edited_footage_link = savedRecord.delivery_method === 'server_link' ? (savedRecord.server_link || '') : '';
+            }
             if (savedRecord.delivery_method === 'physical_drive' && savedRecord.physical_drive_details) {
               prodUp.folder_name = savedRecord.physical_drive_details;
             }
@@ -2027,7 +2107,16 @@ async function startServer() {
           // Merge dbRecords with file records
           const map = new Map<string, any>();
           records.forEach((r: any) => map.set(`${String(r.order_id).trim().toLowerCase()}__${String(r.event_id || 'default').trim().toLowerCase()}`, r));
-          dbRecords.forEach((r: any) => map.set(`${String(r.order_id).trim().toLowerCase()}__${String(r.event_id || 'default').trim().toLowerCase()}`, { ...map.get(`${String(r.order_id).trim().toLowerCase()}__${String(r.event_id || 'default').trim().toLowerCase()}`), ...r }));
+          dbRecords.forEach((r: any) => {
+            const key = `${String(r.order_id).trim().toLowerCase()}__${String(r.event_id || 'default').trim().toLowerCase()}`;
+            const existing = map.get(key) || {};
+            map.set(key, {
+              ...existing,
+              ...r,
+              final_image_url: existing.final_image_url ?? r.final_image_url ?? r.proof_storage_path ?? '',
+              final_image_name: existing.final_image_name ?? r.final_image_name ?? r.proof_file_name ?? ''
+            });
+          });
           records = Array.from(map.values());
           writeCaVerificationsToFile(records);
         }
@@ -2362,100 +2451,1001 @@ async function startServer() {
     }
   });
 
+  const getStaffPasswordEncryptionKey = (): Buffer => {
+    const rawKey = (process.env.STAFF_PASSWORD_ENCRYPTION_KEY || '').trim();
+    if (/^[0-9a-fA-F]{64}$/.test(rawKey)) {
+      return Buffer.from(rawKey, 'hex');
+    }
+    if (rawKey.length > 0) {
+      return crypto.createHash('sha256').update(rawKey, 'utf8').digest();
+    }
+    return crypto
+      .createHmac('sha256', SUPABASE_SERVICE_ROLE_KEY || 'photocrew-fallback-key')
+      .update('staff-password-encryption-v1')
+      .digest();
+  };
+
+  const encryptStaffPassword = (plainPassword: string): string => {
+    const key = getStaffPasswordEncryptionKey();
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const encrypted = Buffer.concat([cipher.update(plainPassword, 'utf8'), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    return `enc:v1:${iv.toString('base64')}:${authTag.toString('base64')}:${encrypted.toString('base64')}`;
+  };
+
+  const decryptStaffPassword = (storedValue: any): string | null => {
+    if (typeof storedValue !== 'string' || !storedValue.startsWith('enc:v1:')) return null;
+    const parts = storedValue.split(':');
+    if (parts.length !== 5) return null;
+    try {
+      const iv = Buffer.from(parts[2], 'base64');
+      const authTag = Buffer.from(parts[3], 'base64');
+      const encrypted = Buffer.from(parts[4], 'base64');
+      if (iv.length !== 12 || authTag.length !== 16) return null;
+      const key = getStaffPasswordEncryptionKey();
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAuthTag(authTag);
+      const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+      return decrypted.toString('utf8');
+    } catch (e) {
+      console.warn('[Server Auth] Failed to decrypt staff password:', (e as any)?.message || e);
+      return null;
+    }
+  };
+
+  const getManagerSessionSigningKey = (): Buffer => {
+    return crypto
+      .createHmac('sha256', getStaffPasswordEncryptionKey())
+      .update('erp-manager-session-v1')
+      .digest();
+  };
+
+  const signManagerSessionToken = (payloadObj: { uid: string; email: string; role: string }): string => {
+    const body = {
+      ...payloadObj,
+      iat: Date.now(),
+      exp: Date.now() + 7 * 24 * 60 * 60 * 1000
+    };
+    const payloadB64 = Buffer.from(JSON.stringify(body), 'utf8').toString('base64url');
+    const sigB64 = crypto
+      .createHmac('sha256', getManagerSessionSigningKey())
+      .update(payloadB64)
+      .digest('base64url');
+    return `${payloadB64}.${sigB64}`;
+  };
+
+  const verifyManagerSessionToken = (token: string): { uid: string; email: string; role: string } | null => {
+    if (!token || typeof token !== 'string' || !token.includes('.')) return null;
+    const [payloadB64, sigB64] = token.split('.');
+    if (!payloadB64 || !sigB64) return null;
+    try {
+      const expectedSig = crypto
+        .createHmac('sha256', getManagerSessionSigningKey())
+        .update(payloadB64)
+        .digest('base64url');
+      const sigBuf = Buffer.from(sigB64, 'utf8');
+      const expBuf = Buffer.from(expectedSig, 'utf8');
+      if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+        return null;
+      }
+      const parsed = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+      if (!parsed || typeof parsed.exp !== 'number' || Date.now() > parsed.exp) return null;
+      return {
+        uid: String(parsed.uid || ''),
+        email: cleanEmail(parsed.email),
+        role: String(parsed.role || '')
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const extractNotesAuthUserIdServer = (notesVal: any): string | null => {
+    if (!notesVal) return null;
+    try {
+      let parsed = typeof notesVal === 'string' ? JSON.parse(notesVal) : notesVal;
+      if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+      if (parsed && typeof parsed === 'object') {
+        if (parsed.auth_user_id) return String(parsed.auth_user_id).trim();
+        if (parsed.notes && typeof parsed.notes === 'string') {
+          try {
+            const nested = JSON.parse(parsed.notes);
+            if (nested?.auth_user_id) return String(nested.auth_user_id).trim();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    return null;
+  };
+
+  const isSystemDivisionAccountServer = (opts: { id?: string | null; email?: string | null }): string | null => {
+    const em = cleanEmail(opts.email);
+    const uid = String(opts.id || '').trim();
+    if (
+      em === 'owner@photocrew.com' ||
+      em === 'founder@photocrew.com' ||
+      uid === '00000000-0000-0000-0000-000000000001' ||
+      uid === 'df6765f5-eb55-4ba4-9efe-9676684d08f5' ||
+      uid === 'U-001'
+    ) return 'Business Owner';
+
+    if (
+      em === 'sales@photocrew.com' ||
+      em === 'sale@photocrew.com' ||
+      uid === '00000000-0000-0000-0000-000000000002' ||
+      uid === 'U-002'
+    ) return 'Sales Team';
+
+    if (
+      em === 'operation@photocrew.com' ||
+      em === 'operations@photocrew.com' ||
+      uid === '00000000-0000-0000-0000-000000000003' ||
+      uid === 'f58de2d0-aba7-4ecf-9b11-89933ce7b545' ||
+      uid === 'U-003'
+    ) return 'Operations Team';
+
+    if (
+      em === 'production@photocrew.com' ||
+      uid === '00000000-0000-0000-0000-000000000004' ||
+      uid === '6eb78be8-6e79-40bc-8567-231c3c98cb45' ||
+      uid === 'U-004'
+    ) return 'Production Team';
+
+    return null;
+  };
+
+  const resolveCallerAuthoritativeRole = async (
+    db: any,
+    caller: { id?: string | null; email?: string | null; mobile?: string | null; metadataRole?: string | null }
+  ): Promise<{ role: string; active: boolean }> => {
+    const callerId = String(caller.id || '').trim();
+    const callerEmail = cleanEmail(caller.email);
+    const callerMobile = cleanPhone(caller.mobile);
+    const callerMob10 = callerMobile.length >= 10 ? callerMobile.slice(-10) : callerMobile;
+
+    let dbUserRow: any = null;
+    if (callerId) {
+      const { data } = await db.from('users').select('id, email, mobile, role, active').eq('id', callerId).maybeSingle();
+      if (data) dbUserRow = data;
+    }
+    if (!dbUserRow && callerEmail) {
+      const { data } = await db.from('users').select('id, email, mobile, role, active').ilike('email', callerEmail).maybeSingle();
+      if (data) dbUserRow = data;
+    }
+
+    const isActive = dbUserRow
+      ? (dbUserRow.active !== false && String(dbUserRow.active) !== 'false' && dbUserRow.active !== 0 && String(dbUserRow.active) !== '0')
+      : true;
+
+    const sysRole = isSystemDivisionAccountServer({ id: callerId || dbUserRow?.id, email: callerEmail || dbUserRow?.email });
+    if (sysRole) {
+      return { role: sysRole, active: isActive };
+    }
+
+    // Disambiguate non-system accounts against staff tables BEFORE reading public.users.role
+    const [opRes, prodRes] = await Promise.all([
+      db.from('operations_staff').select('staff_id, email, mobile, notes, status'),
+      db.from('production_staff').select('staff_id, email, mobile, notes, status')
+    ]);
+
+    const matchesStaffRow = (row: any) => {
+      if (!row) return false;
+      const rStaffId = String(row.staff_id || '').trim();
+      const rAuthId = extractNotesAuthUserIdServer(row.notes) || '';
+      const rEmail = cleanEmail(row.email);
+      const rMob = cleanPhone(row.mobile);
+      const rMob10 = rMob.length >= 10 ? rMob.slice(-10) : rMob;
+      if (callerId && (rStaffId === callerId || rAuthId === callerId)) return true;
+      if (callerEmail && rEmail && rEmail === callerEmail) return true;
+      if (callerMob10 && callerMob10.length >= 7 && rMob10 && rMob10 === callerMob10) return true;
+      return false;
+    };
+
+    const inOp = (opRes.data || []).some(matchesStaffRow);
+    const inProd = (prodRes.data || []).some(matchesStaffRow);
+
+    if (inOp && !inProd) return { role: 'Operation Staff', active: isActive };
+    if (inProd && !inOp) return { role: 'Production Staff', active: isActive };
+    if (inOp && inProd) {
+      const opAuth = callerId && (opRes.data || []).some((r: any) => extractNotesAuthUserIdServer(r.notes) === callerId || r.staff_id === callerId);
+      const prodAuth = callerId && (prodRes.data || []).some((r: any) => extractNotesAuthUserIdServer(r.notes) === callerId || r.staff_id === callerId);
+      if (opAuth && !prodAuth) return { role: 'Operation Staff', active: isActive };
+      if (prodAuth && !opAuth) return { role: 'Production Staff', active: isActive };
+      return { role: 'Operation Staff', active: isActive };
+    }
+
+    const rawRole = String(dbUserRow?.role || caller.metadataRole || '').trim();
+    const lowerRole = rawRole.toLowerCase();
+    if (lowerRole === 'production staff' || lowerRole.includes('editor')) return { role: 'Production Staff', active: isActive };
+    if (lowerRole === 'operation staff' || lowerRole === 'operations staff' || lowerRole.includes('photographer') || lowerRole.includes('drone') || lowerRole.includes('cinematographer')) {
+      return { role: 'Operation Staff', active: isActive };
+    }
+    if (lowerRole.includes('owner') || lowerRole.includes('business')) return { role: 'Business Owner', active: isActive };
+    if (lowerRole.includes('sales')) return { role: 'Sales Team', active: isActive };
+    if (lowerRole.includes('production') || lowerRole.includes('prod')) return { role: 'Production Team', active: isActive };
+    if (lowerRole.includes('operation') || lowerRole.includes('op')) return { role: 'Operations Team', active: isActive };
+
+    return { role: rawRole || 'Operation Staff', active: isActive };
+  };
+
+  const normalizeAuthRole = (role?: string, staffTypeHint?: string): string => {
+    const hint = String(staffTypeHint || '').trim().toLowerCase();
+    const r = String(role || '').trim().toLowerCase();
+    if (r.includes('owner') || r.includes('business')) return 'Business Owner';
+    if (r.includes('sales')) return 'Sales Team';
+    if (hint === 'production' || r.includes('prod') || r.includes('editor')) return 'Production Team';
+    if (hint === 'operations') return 'Operation Staff';
+    if (r.includes('op') && r.includes('staff')) return 'Operation Staff';
+    if (r.includes('op') && r.includes('team')) return 'Operations Team';
+    return 'Operation Staff';
+  };
+
+  const findAuthUserPaginated = async (
+    db: any,
+    opts: { authId?: string | null; email?: string | null; mobile?: string | null; allowEmailMismatch?: boolean }
+  ): Promise<any | null> => {
+    const targetEmail = cleanEmail(opts.email);
+    const targetMobile = cleanPhone(opts.mobile);
+
+    const isMatchingUser = (user: any, allowMismatch?: boolean): boolean => {
+      if (!user) return false;
+      if (allowMismatch || !targetEmail) return true;
+      const authEmail = cleanEmail(user.email);
+      const origEmail = cleanEmail(user.user_metadata?.original_email);
+      const metaMobile = cleanPhone(user.user_metadata?.mobile);
+      if (!authEmail || authEmail === targetEmail) return true;
+      if (origEmail && origEmail === targetEmail) return true;
+      if (targetMobile && targetMobile.length >= 7 && metaMobile && metaMobile === targetMobile) return true;
+      if (targetMobile && targetMobile.length >= 7 && authEmail === `${targetMobile}@photocrew.com`) return true;
+      return false;
+    };
+
+    if (opts.authId) {
+      try {
+        const { data: byIdData, error: byIdErr } = await db.auth.admin.getUserById(opts.authId);
+        if (!byIdErr && byIdData?.user) {
+          if (isMatchingUser(byIdData.user, opts.allowEmailMismatch)) {
+            return byIdData.user;
+          }
+          console.warn('[Server Auth] Ignoring authId mapped to different email:', byIdData.user.email, 'expected:', targetEmail);
+        }
+      } catch (_) {}
+    }
+
+    if (!targetEmail && (!targetMobile || targetMobile.length < 7 || targetMobile === '0000000000')) {
+      return null;
+    }
+
+    // Fast path 1: check staff tables (operations_staff & production_staff) for notes.auth_user_id
+    if (targetEmail || (targetMobile && targetMobile.length >= 7 && targetMobile !== '0000000000')) {
+      try {
+        const [opCheck, prodCheck] = await Promise.all([
+          targetEmail
+            ? db.from('operations_staff').select('notes, mobile').ilike('email', targetEmail).maybeSingle()
+            : db.from('operations_staff').select('notes, mobile').eq('mobile', targetMobile).maybeSingle(),
+          targetEmail
+            ? db.from('production_staff').select('notes, mobile').ilike('email', targetEmail).maybeSingle()
+            : db.from('production_staff').select('notes, mobile').eq('mobile', targetMobile).maybeSingle()
+        ]);
+        const notesIds = [
+          extractNotesAuthUserIdServer(opCheck?.data?.notes),
+          extractNotesAuthUserIdServer(prodCheck?.data?.notes)
+        ].filter(Boolean) as string[];
+        for (const nid of notesIds) {
+          if (nid && nid !== opts.authId) {
+            const { data: byIdData, error: byIdErr } = await db.auth.admin.getUserById(nid);
+            if (!byIdErr && byIdData?.user) {
+              return byIdData.user;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Fast path 2: check public.users by email/mobile to find candidate auth ID directly
+    if (targetEmail) {
+      try {
+        const { data: uRow } = await db.from('users').select('id').ilike('email', targetEmail).maybeSingle();
+        if (uRow?.id && uRow.id !== opts.authId) {
+          const { data: byIdData, error: byIdErr } = await db.auth.admin.getUserById(uRow.id);
+          if (!byIdErr && byIdData?.user && isMatchingUser(byIdData.user, false)) {
+            return byIdData.user;
+          }
+        }
+      } catch (_) {}
+    }
+    if (targetMobile && targetMobile.length >= 7 && targetMobile !== '0000000000') {
+      try {
+        const { data: uRow } = await db.from('users').select('id').eq('mobile', targetMobile).maybeSingle();
+        if (uRow?.id && uRow.id !== opts.authId) {
+          const { data: byIdData, error: byIdErr } = await db.auth.admin.getUserById(uRow.id);
+          if (!byIdErr && byIdData?.user) {
+            return byIdData.user;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Use small page size (10) and skip corrupt pages rather than aborting the whole scan
+    let page = 1;
+    const perPage = 10;
+    let mobileCandidate: any = null;
+    let consecutiveErrors = 0;
+
+    while (page <= 80) {
+      try {
+        const { data: listData, error: listErr } = await db.auth.admin.listUsers({ page, perPage });
+        if (listErr) {
+          console.warn(`[Server Auth listUsers error page ${page}]:`, listErr.message);
+          consecutiveErrors++;
+          if (consecutiveErrors >= 5) break;
+          page++;
+          continue;
+        }
+        consecutiveErrors = 0;
+        const usersList = listData?.users || [];
+        if (usersList.length === 0) break;
+
+        if (targetEmail) {
+          const emailMatch = usersList.find((u: any) =>
+            cleanEmail(u.email) === targetEmail || cleanEmail(u.user_metadata?.original_email) === targetEmail
+          );
+          if (emailMatch) return emailMatch;
+        }
+
+        if (!mobileCandidate && targetMobile && targetMobile.length >= 7 && targetMobile !== '0000000000') {
+          mobileCandidate = usersList.find((u: any) => {
+            const uPhone = cleanPhone(u.phone);
+            const uMetaMob = cleanPhone(u.user_metadata?.mobile);
+            const uEm = cleanEmail(u.email);
+            return (uPhone && uPhone === targetMobile) ||
+              (uMetaMob && uMetaMob === targetMobile) ||
+              (uEm === `${targetMobile}@photocrew.com`);
+          }) || null;
+          if (!targetEmail && mobileCandidate) return mobileCandidate;
+        }
+
+        if (usersList.length < perPage) break;
+        page++;
+      } catch (e) {
+        console.warn(`[Server Auth listUsers exception page ${page}]:`, e);
+        consecutiveErrors++;
+        if (consecutiveErrors >= 5) break;
+        page++;
+      }
+    }
+
+    return mobileCandidate || null;
+  };
+
+  const createOrRecoverAuthUser = async (
+    db: any,
+    params: {
+      email?: string | null;
+      mobile?: string | null;
+      staffId?: string | null;
+      password: string;
+      name?: string;
+      normalizedRole: string;
+      active?: boolean;
+      encPwd: string;
+    }
+  ): Promise<{ user: any | null; error?: string }> => {
+    const cleanEmailStr = cleanEmail(params.email);
+    const cleanMobileStr = cleanPhone(params.mobile);
+    const primaryEmail = cleanEmailStr || `${cleanMobileStr || 'staff'}@photocrew.com`;
+    const baseUserMeta = {
+      name: params.name || 'Staff Member',
+      role: params.normalizedRole || 'Operation Staff',
+      mobile: cleanMobileStr || '',
+      ...(cleanEmailStr ? { original_email: cleanEmailStr } : {})
+    };
+
+    const ensureEncPwdOnUser = async (u: any): Promise<any> => {
+      if (u && u.app_metadata?.enc_pwd !== params.encPwd) {
+        const { data: metaUpd } = await db.auth.admin.updateUserById(u.id, {
+          app_metadata: { ...(u.app_metadata || {}), enc_pwd: params.encPwd }
+        });
+        if (metaUpd?.user) return metaUpd.user;
+      }
+      return u;
+    };
+
+    const { data, error } = await db.auth.admin.createUser({
+      email: primaryEmail,
+      password: params.password,
+      email_confirm: true,
+      ...(params.active === false ? { ban_duration: '876000h' } : {}),
+      user_metadata: baseUserMeta,
+      app_metadata: { enc_pwd: params.encPwd }
+    });
+
+    if (!error && data?.user) {
+      return { user: await ensureEncPwdOnUser(data.user) };
+    }
+
+    const errMsg = String(error?.message || '').toLowerCase();
+    const isAlreadyExists = errMsg.includes('already') || errMsg.includes('registered') || errMsg.includes('exists');
+    const isGoTrueDbError =
+      errMsg.includes('database error') ||
+      errMsg.includes('checking email') ||
+      errMsg.includes('loading user') ||
+      errMsg.includes('unexpected_failure');
+
+    if (isAlreadyExists) {
+      const existingAuth = await findAuthUserPaginated(db, {
+        email: primaryEmail,
+        mobile: cleanMobileStr || null,
+        allowEmailMismatch: true
+      });
+      if (existingAuth) {
+        const cleanedMeta = { ...(existingAuth.user_metadata || {}), ...baseUserMeta };
+        delete cleanedMeta.current_password;
+        const { data: updData, error: updErr } = await db.auth.admin.updateUserById(existingAuth.id, {
+          password: params.password,
+          email_confirm: true,
+          ...(params.active !== undefined ? { ban_duration: params.active === false ? '876000h' : 'none' } : {}),
+          user_metadata: cleanedMeta,
+          app_metadata: { ...(existingAuth.app_metadata || {}), enc_pwd: params.encPwd }
+        });
+        if (!updErr && (updData?.user || existingAuth)) {
+          return { user: updData?.user || existingAuth };
+        }
+      }
+    }
+
+    // Fallback when GoTrue has a corrupt legacy row on primaryEmail ("Database error checking email" / "Database error loading user")
+    if (isGoTrueDbError || isAlreadyExists) {
+      const staffSlug = String(params.staffId || cleanMobileStr || Date.now())
+        .replace(/[^a-zA-Z0-9]/g, '')
+        .toLowerCase();
+      const aliasCandidates: string[] = [];
+      if (cleanMobileStr && cleanMobileStr.length >= 7 && `${cleanMobileStr}@photocrew.com` !== primaryEmail) {
+        aliasCandidates.push(`${cleanMobileStr}@photocrew.com`);
+      }
+      if (staffSlug) {
+        aliasCandidates.push(`staff.${staffSlug}@photocrew.com`);
+      }
+      aliasCandidates.push(`auth.${cleanMobileStr || staffSlug || 'user'}.${Date.now()}@photocrew.com`);
+
+      for (const aliasEmail of aliasCandidates) {
+        const existingAlias = await findAuthUserPaginated(db, {
+          email: aliasEmail,
+          mobile: cleanMobileStr || null,
+          allowEmailMismatch: true
+        });
+        if (existingAlias) {
+          const cleanedMeta = { ...(existingAlias.user_metadata || {}), ...baseUserMeta };
+          delete cleanedMeta.current_password;
+          const { data: updAlias, error: updAliasErr } = await db.auth.admin.updateUserById(existingAlias.id, {
+            password: params.password,
+            email_confirm: true,
+            ...(params.active !== undefined ? { ban_duration: params.active === false ? '876000h' : 'none' } : {}),
+            user_metadata: cleanedMeta,
+            app_metadata: { ...(existingAlias.app_metadata || {}), enc_pwd: params.encPwd }
+          });
+          if (!updAliasErr && (updAlias?.user || existingAlias)) {
+            return { user: updAlias?.user || existingAlias };
+          }
+        }
+
+        const { data: aliasCreated, error: aliasErr } = await db.auth.admin.createUser({
+          email: aliasEmail,
+          password: params.password,
+          email_confirm: true,
+          ...(params.active === false ? { ban_duration: '876000h' } : {}),
+          user_metadata: baseUserMeta,
+          app_metadata: { enc_pwd: params.encPwd }
+        });
+        if (!aliasErr && aliasCreated?.user) {
+          return { user: await ensureEncPwdOnUser(aliasCreated.user) };
+        }
+      }
+    }
+
+    return { user: null, error: error?.message || 'Failed to configure authentication credentials' };
+  };
+
+  const syncPublicUserRow = async (
+    db: any,
+    params: {
+      authUserId: string;
+      name?: string;
+      email?: string | null;
+      mobile?: string | null;
+      normalizedRole?: string;
+      active?: boolean;
+    }
+  ): Promise<any | null> => {
+    const cleanEmailStr = cleanEmail(params.email);
+    const cleanMobileStr = cleanPhone(params.mobile);
+
+    let existingById: any = null;
+    let existingByEmail: any = null;
+
+    try {
+      const { data } = await db.from('users').select('*').eq('id', params.authUserId).maybeSingle();
+      if (data) existingById = data;
+    } catch (_) {}
+
+    if (cleanEmailStr) {
+      try {
+        const { data } = await db.from('users').select('*').ilike('email', cleanEmailStr).maybeSingle();
+        if (data) existingByEmail = data;
+      } catch (_) {}
+    }
+
+    let resolvedRowId = params.authUserId;
+    let useInPlaceUpdateOnEmail = false;
+
+    if (existingByEmail && existingByEmail.id !== params.authUserId) {
+      if (existingById) {
+        try {
+          const { error: delErr } = await db.from('users').delete().eq('id', existingByEmail.id);
+          if (delErr) useInPlaceUpdateOnEmail = true;
+        } catch (_) {
+          useInPlaceUpdateOnEmail = true;
+        }
+      } else {
+        try {
+          const { error: updIdErr } = await db.from('users').update({ id: params.authUserId, password: null }).eq('id', existingByEmail.id);
+          if (!updIdErr) {
+            existingById = { ...existingByEmail, id: params.authUserId };
+          } else {
+            // Preserve existing row ID if FK references block ID change
+            resolvedRowId = existingByEmail.id;
+            existingById = existingByEmail;
+            useInPlaceUpdateOnEmail = true;
+          }
+        } catch (_) {
+          resolvedRowId = existingByEmail.id;
+          existingById = existingByEmail;
+          useInPlaceUpdateOnEmail = true;
+        }
+      }
+    }
+
+    const baseRow: any = {
+      id: useInPlaceUpdateOnEmail && existingById ? existingById.id : resolvedRowId,
+      name: params.name || existingById?.name || existingByEmail?.name || 'Staff',
+      email: cleanEmailStr || existingById?.email || existingByEmail?.email || `${cleanMobileStr || 'staff'}@photocrew.com`,
+      mobile: cleanMobileStr || existingById?.mobile || existingByEmail?.mobile || '0000000000',
+      role: params.normalizedRole || existingById?.role || existingByEmail?.role || 'Operation Staff',
+      active: params.active !== undefined ? params.active : (existingById?.active ?? existingByEmail?.active ?? true),
+      password: null
+    };
+
+    const upsertWithOptionalUsername = async (payload: any) => {
+      let attemptPayload = { ...payload };
+      if (!existingById && attemptPayload.email) {
+        attemptPayload.username = attemptPayload.email;
+        attemptPayload.created_at = new Date().toISOString();
+      }
+      let res = existingById
+        ? await db.from('users').update(attemptPayload).eq('id', attemptPayload.id).select()
+        : await db.from('users').upsert(attemptPayload, { onConflict: 'id' }).select();
+
+      if (res.error && res.error.message && res.error.message.includes('username')) {
+        delete attemptPayload.username;
+        res = existingById
+          ? await db.from('users').update(attemptPayload).eq('id', attemptPayload.id).select()
+          : await db.from('users').upsert(attemptPayload, { onConflict: 'id' }).select();
+      }
+      if (res.error && existingByEmail && !existingById) {
+        // Fallback: update existingByEmail without changing its primary key if unique constraint on email tripped
+        const { id: _ignoredId, ...emailUpdates } = attemptPayload;
+        res = await db.from('users').update(emailUpdates).eq('id', existingByEmail.id).select();
+      }
+      if (res.error) {
+        console.warn('[Server Auth syncPublicUserRow warning]:', res.error.message);
+        return null;
+      }
+      return res.data?.[0] || attemptPayload;
+    };
+
+    return await upsertWithOptionalUsername(baseRow);
+  };
+
+  const authenticateCallerIdentity = async (
+    db: any,
+    req: any
+  ): Promise<{ id?: string | null; email?: string | null; mobile?: string | null; metadataRole?: string | null } | null> => {
+    const authHeader = String(req?.headers?.authorization || '').trim();
+    if (authHeader.toLowerCase().startsWith('bearer ')) {
+      const jwt = authHeader.slice(7).trim();
+      if (jwt && jwt !== SUPABASE_ANON_KEY) {
+        try {
+          const { data: userData, error: jwtErr } = await db.auth.getUser(jwt);
+          if (!jwtErr && userData?.user) {
+            return {
+              id: userData.user.id,
+              email: userData.user.email,
+              mobile: userData.user.user_metadata?.mobile,
+              metadataRole: userData.user.user_metadata?.role
+            };
+          }
+        } catch (_) {}
+      }
+    }
+
+    const erpToken = String(req?.headers?.['x-erp-session'] || '').trim();
+    const verified = verifyManagerSessionToken(erpToken);
+    if (verified) {
+      return {
+        id: verified.uid,
+        email: verified.email,
+        metadataRole: verified.role
+      };
+    }
+
+    return null;
+  };
+
+  let cachedOpsPasswordColumns: string[] | null = null;
+  const getOperationsPasswordColumns = async (db: any): Promise<string[]> => {
+    if (cachedOpsPasswordColumns && cachedOpsPasswordColumns.length > 0) {
+      return cachedOpsPasswordColumns;
+    }
+    const detected: string[] = [];
+    try {
+      const specRes = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+        }
+      });
+      if (specRes.ok) {
+        const spec = await specRes.json().catch(() => null);
+        const props = spec?.definitions?.operations_staff?.properties;
+        if (props && typeof props === 'object') {
+          if ('password' in props) detected.push('password');
+          if ('Password' in props) detected.push('Password');
+        }
+      }
+    } catch (_) {}
+
+    if (detected.length === 0) {
+      const { error: lowerErr } = await db.from('operations_staff').select('password').limit(1);
+      if (!lowerErr) detected.push('password');
+      const { error: upperErr } = await db.from('operations_staff').select('Password').limit(1);
+      if (!upperErr) detected.push('Password');
+    }
+
+    if (detected.length > 0) {
+      cachedOpsPasswordColumns = detected;
+    }
+    return detected;
+  };
+
+  const syncStaffPasswordColumnsOnRow = async (
+    db: any,
+    params: {
+      table: 'production_staff' | 'operations_staff';
+      staffId: string;
+      extraUpdates?: Record<string, any>;
+      password?: string | null;
+    }
+  ): Promise<{ success: boolean; error?: string }> => {
+    const payload: Record<string, any> = { ...(params.extraUpdates || {}) };
+    const cleanPwd = typeof params.password === 'string' && params.password.trim() !== '' ? params.password.trim() : null;
+
+    if (params.table === 'production_staff') {
+      if (cleanPwd !== null) {
+        payload.Password = cleanPwd;
+      }
+      if (Object.keys(payload).length === 0) return { success: true };
+      const { error } = await db.from('production_staff').update(payload).eq('staff_id', params.staffId);
+      if (error) {
+        console.error('[Server Auth] Failed updating production_staff row:', error.message);
+        return { success: false, error: error.message };
+      }
+      return { success: true };
+    }
+
+    if (cleanPwd !== null) {
+      const opsCols = await getOperationsPasswordColumns(db);
+      for (const col of opsCols) {
+        payload[col] = cleanPwd;
+      }
+    }
+    if (Object.keys(payload).length === 0) return { success: true };
+    const { error } = await db.from('operations_staff').update(payload).eq('staff_id', params.staffId);
+    if (error) {
+      console.error('[Server Auth] Failed updating operations_staff row:', error.message);
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  };
+
+  const syncStaffNotesAuthId = async (
+    db: any,
+    params: {
+      table: 'production_staff' | 'operations_staff';
+      staffId?: string | null;
+      email?: string | null;
+      authUserId: string;
+      password?: string | null;
+    }
+  ): Promise<{ success: boolean; error?: string }> => {
+    const cleanEmailStr = cleanEmail(params.email);
+    if (!params.staffId && !cleanEmailStr) return { success: true };
+
+    try {
+      let query = db.from(params.table).select('staff_id, notes');
+      if (params.staffId) {
+        query = query.eq('staff_id', params.staffId);
+      } else if (cleanEmailStr) {
+        query = query.ilike('email', cleanEmailStr);
+      }
+
+      const { data: rows, error: findErr } = await query;
+      if (findErr) {
+        return { success: false, error: findErr.message };
+      }
+      if (!Array.isArray(rows) || rows.length === 0) return { success: true };
+
+      for (const row of rows) {
+        let notesObj: any = {};
+        if (row.notes) {
+          if (typeof row.notes === 'string') {
+            const trimmed = row.notes.trim();
+            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+              try {
+                let parsed = JSON.parse(trimmed);
+                if (typeof parsed === 'string') {
+                  try { parsed = JSON.parse(parsed); } catch (_) {}
+                }
+                if (parsed && typeof parsed === 'object') {
+                  notesObj = parsed;
+                }
+              } catch (_) {
+                notesObj = { notes: row.notes };
+              }
+            } else {
+              notesObj = { notes: row.notes };
+            }
+          } else if (typeof row.notes === 'object') {
+            notesObj = { ...row.notes };
+          }
+        }
+
+        notesObj.auth_user_id = params.authUserId;
+        delete notesObj.current_password;
+        delete notesObj.password;
+        delete notesObj.Password;
+        if (notesObj.notes && typeof notesObj.notes === 'string' && notesObj.notes.trim().startsWith('{')) {
+          try {
+            const inner = JSON.parse(notesObj.notes);
+            if (inner && typeof inner === 'object') {
+              delete inner.current_password;
+              delete inner.password;
+              delete inner.Password;
+              notesObj.notes = inner.notes || '';
+            }
+          } catch (_) {}
+        }
+
+        const serializedNotes = JSON.stringify(notesObj);
+        const updRes = await syncStaffPasswordColumnsOnRow(db, {
+          table: params.table,
+          staffId: row.staff_id,
+          extraUpdates: { notes: serializedNotes },
+          password: params.password ?? null
+        });
+        if (!updRes.success) {
+          return updRes;
+        }
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.warn(`[Server Auth syncStaffNotesAuthId warning for ${params.table}]:`, err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  };
+
+  app.post('/api/auth/resolve-login-email', async (req, res) => {
+    const { identifier } = req.body || {};
+    try {
+      const cleanInput = String(identifier ?? '').trim();
+      if (!cleanInput) {
+        return res.json({ success: true, emails: [] });
+      }
+      const db = getServerSupabase();
+      const lowerInput = cleanInput.toLowerCase();
+      const digits = cleanInput.replace(/\D/g, '');
+      const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+      const isPhone = !cleanInput.includes('@') && digits.length >= 7 && !/^0+$/.test(digits);
+
+      const parseNotesAuthId = (notesVal: any): string | null => {
+        if (!notesVal) return null;
+        try {
+          let parsed = typeof notesVal === 'string' ? JSON.parse(notesVal) : notesVal;
+          if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+          if (parsed?.auth_user_id) return String(parsed.auth_user_id).trim();
+        } catch (_) {}
+        return null;
+      };
+
+      const matchesRow = (r: any) => {
+        if (!r) return false;
+        const rEmail = String(r.email ?? '').trim().toLowerCase();
+        const rUser = String(r.username ?? '').trim().toLowerCase();
+        if (rEmail && rEmail === lowerInput) return true;
+        if (rUser && rUser === lowerInput) return true;
+        if (isPhone) {
+          const rMob = String(r.mobile ?? r.mobile_number ?? '').replace(/\D/g, '');
+          const rWa = String(r.whatsapp_number ?? '').replace(/\D/g, '');
+          const rMob10 = rMob.length >= 10 ? rMob.slice(-10) : rMob;
+          const rWa10 = rWa.length >= 10 ? rWa.slice(-10) : rWa;
+          if (rMob && !/^0+$/.test(rMob) && (rMob === digits || (last10.length >= 7 && rMob10 === last10))) return true;
+          if (rWa && !/^0+$/.test(rWa) && (rWa === digits || (last10.length >= 7 && rWa10 === last10))) return true;
+        }
+        return false;
+      };
+
+      const [prodRes, opRes, usersRes] = await Promise.all([
+        db.from('production_staff').select('staff_id, email, mobile, whatsapp_number, notes'),
+        db.from('operations_staff').select('staff_id, email, mobile, whatsapp_number, notes'),
+        db.from('users').select('id, email, username, mobile')
+      ]);
+
+      const candidateAuthIds = new Set<string>();
+      const candidateEmails = new Set<string>();
+
+      for (const ps of (prodRes.data || [])) {
+        if (matchesRow(ps)) {
+          const aid = parseNotesAuthId(ps.notes);
+          if (aid) candidateAuthIds.add(aid);
+          if (ps.email && String(ps.email).includes('@')) candidateEmails.add(String(ps.email).trim().toLowerCase());
+        }
+      }
+      for (const os of (opRes.data || [])) {
+        if (matchesRow(os)) {
+          const aid = parseNotesAuthId(os.notes);
+          if (aid) candidateAuthIds.add(aid);
+          if (os.email && String(os.email).includes('@')) candidateEmails.add(String(os.email).trim().toLowerCase());
+        }
+      }
+      for (const u of (usersRes.data || [])) {
+        if (matchesRow(u)) {
+          if (u.id) candidateAuthIds.add(String(u.id).trim());
+          if (u.email && String(u.email).includes('@')) candidateEmails.add(String(u.email).trim().toLowerCase());
+        }
+      }
+
+      const resolvedEmails = new Set<string>();
+      if (db.auth && db.auth.admin) {
+        for (const aid of candidateAuthIds) {
+          try {
+            const { data: gu } = await db.auth.admin.getUserById(aid);
+            const authEm = gu?.user?.email ? String(gu.user.email).trim().toLowerCase() : '';
+            if (authEm && authEm.includes('@')) resolvedEmails.add(authEm);
+          } catch (_) {}
+        }
+      }
+      for (const em of candidateEmails) {
+        resolvedEmails.add(em);
+      }
+
+      res.json({ success: true, emails: Array.from(resolvedEmails) });
+    } catch (err: any) {
+      res.json({ success: true, emails: [] });
+    }
+  });
+
   app.post('/api/auth/create-user', async (req, res) => {
-    const { email, password, name, role, mobile, active = true, staff_id } = req.body;
+    const { email, password, name, role, mobile, active = true, staff_id, staff_type } = req.body;
     try {
       const db = getServerSupabase();
       if (!db.auth.admin) {
         return res.status(400).json({ success: false, error: 'Service Role Key not configured on server' });
       }
-      
+
+      const callerIdentity = await authenticateCallerIdentity(db, req);
+      if (!callerIdentity) {
+        return res.status(401).json({ success: false, error: 'Authentication required to create staff credentials.' });
+      }
+      const callerAuth = await resolveCallerAuthoritativeRole(db, callerIdentity);
+      if (!callerAuth.active) {
+        return res.status(403).json({ success: false, error: 'Account is deactivated.' });
+      }
+      if (!new Set(['Business Owner', 'Production Team', 'Operations Team']).has(callerAuth.role)) {
+        return res.status(403).json({ success: false, error: 'You are not authorized to create staff credentials.' });
+      }
+
+      const cleanPwd = typeof password === 'string' ? password.trim() : '';
+      if (!cleanPwd || cleanPwd.length < 6) {
+        return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long.' });
+      }
+
       const cleanEmailStr = cleanEmail(email);
       const cleanMobileStr = cleanPhone(mobile);
-      console.log(`[Server Auth] Creating user ${cleanEmailStr} (mobile: ${cleanMobileStr}) with role ${role}`);
-      
+      const normalizedRole = normalizeAuthRole(role, staff_type);
+      const resolvedTable: 'production_staff' | 'operations_staff' | null =
+        staff_type === 'production' || normalizedRole === 'Production Team'
+          ? 'production_staff'
+          : (staff_type === 'operations' || normalizedRole === 'Operation Staff')
+            ? 'operations_staff'
+            : null;
+
+      if (callerAuth.role === 'Production Team' && resolvedTable === 'operations_staff') {
+        return res.status(403).json({ success: false, error: 'Production Manager can only create Production staff credentials.' });
+      }
+      if (callerAuth.role === 'Operations Team' && resolvedTable === 'production_staff') {
+        return res.status(403).json({ success: false, error: 'Operation Manager can only create Operation staff credentials.' });
+      }
+
+      console.log(`[Server Auth] Creating user ${cleanEmailStr} with role ${normalizedRole}`);
+
       // Global uniqueness check before creating
       const uniqueCheck = await checkGlobalUniquenessInDb(
-        db, 
-        cleanMobileStr, 
-        cleanEmailStr, 
-        null, 
-        null, 
-        null, 
+        db,
+        cleanMobileStr,
+        cleanEmailStr,
+        null,
+        null,
+        null,
         staff_id || null
       );
       if (!uniqueCheck.isUnique) {
-        return res.status(400).json({ 
-          success: false, 
+        return res.status(400).json({
+          success: false,
           error: uniqueCheck.error,
           isMobileDuplicate: uniqueCheck.isMobileDuplicate,
           isEmailDuplicate: uniqueCheck.isEmailDuplicate
         });
       }
 
-      let authUser: any = null;
-      const { data, error } = await db.auth.admin.createUser({
+      const encPwd = encryptStaffPassword(cleanPwd);
+      const createdOrRecovered = await createOrRecoverAuthUser(db, {
         email: cleanEmailStr,
-        password,
-        email_confirm: true,
-        user_metadata: { name, role, mobile: cleanMobileStr }
+        mobile: cleanMobileStr,
+        staffId: staff_id || null,
+        password: cleanPwd,
+        name,
+        normalizedRole,
+        active,
+        encPwd
       });
-
-      if (error) {
-        const errMsg = (error.message || '').toLowerCase();
-        if (errMsg.includes('already') || errMsg.includes('registered') || errMsg.includes('exists')) {
-          // If the auth account already exists (e.g. from an orphaned record), reuse & update credentials
-          try {
-            const { data: listData } = await db.auth.admin.listUsers();
-            const existingAuth = (listData?.users || []).find((u: any) => cleanEmail(u.email) === cleanEmailStr);
-            if (existingAuth) {
-              const { data: updData } = await db.auth.admin.updateUserById(existingAuth.id, {
-                password,
-                user_metadata: { name, role, mobile: cleanMobileStr }
-              });
-              authUser = updData?.user || existingAuth;
-            }
-          } catch (listErr) {
-            console.warn('[Server Auth find existing error]', listErr);
-          }
-        }
-        if (!authUser) {
-          return res.status(400).json({ success: false, error: error.message });
-        }
-      } else {
-        authUser = data.user;
+      if (!createdOrRecovered.user) {
+        return res.status(400).json({ success: false, error: createdOrRecovered.error || 'Failed to create authentication account' });
       }
+      const authUser = createdOrRecovered.user;
 
-      let normalizedRole = 'Operation Staff';
-      if (role) {
-        const r = String(role).trim().toLowerCase();
-        if (r.includes('owner') || r.includes('business')) normalizedRole = 'Business Owner';
-        else if (r.includes('sales')) normalizedRole = 'Sales Team';
-        else if (r.includes('prod')) normalizedRole = 'Production Team'; // users table constraint only allows Production Team
-        else if (r.includes('editor')) normalizedRole = 'Production Team';
-        else if (r.includes('op') && r.includes('staff')) normalizedRole = 'Operation Staff';
-        else if (r.includes('op') && r.includes('team')) normalizedRole = 'Operations Team';
-        else normalizedRole = 'Operation Staff';
-      }
-
-      const userRecord: any = {
-        id: authUser.id,
+      const syncedUserRecord = await syncPublicUserRow(db, {
+        authUserId: authUser.id,
         name,
         email: cleanEmailStr,
-        mobile: cleanMobileStr || '0000000000',
-        username: cleanEmailStr,
-        role: normalizedRole,
-        active,
-        password,
-        created_at: new Date().toISOString()
-      };
-      
-      const { data: insData, error: insErr } = await db.from('users').upsert(userRecord, { onConflict: 'email' }).select();
-      if (insErr) {
-        console.warn(`[Server Auth DB Upsert Warning]`, insErr);
+        mobile: cleanMobileStr,
+        normalizedRole,
+        active
+      });
+
+      if (resolvedTable && (staff_id || cleanEmailStr)) {
+        const staffSyncRes = await syncStaffNotesAuthId(db, {
+          table: resolvedTable,
+          staffId: staff_id || null,
+          email: cleanEmailStr,
+          authUserId: authUser.id,
+          password: cleanPwd
+        });
+        if (!staffSyncRes.success) {
+          return res.status(500).json({
+            success: false,
+            error: staffSyncRes.error || `Failed to save password in ${resolvedTable}`
+          });
+        }
       }
 
-      res.json({ success: true, data: { user: authUser, record: insData?.[0] || userRecord } });
+      res.json({
+        success: true,
+        auth_user_id: authUser.id,
+        data: {
+          user: { id: authUser.id, email: authUser.email, role: normalizedRole },
+          record: syncedUserRecord
+        }
+      });
     } catch (err: any) {
       console.error(`[Server Auth Create Exception]`, err);
       res.status(500).json({ success: false, error: err.message || String(err) });
@@ -2469,7 +3459,6 @@ async function startServer() {
       const cleanEmailStr = cleanEmail(email);
       const cleanMobileStr = cleanPhone(mobile);
 
-      // 1. Delete from public.users table by matching criteria
       if (staff_id) {
         await db.from('users').delete().eq('id', staff_id);
       }
@@ -2477,25 +3466,19 @@ async function startServer() {
         await db.from('users').delete().eq('id', auth_id);
       }
       if (cleanEmailStr) {
-        await db.from('users').delete().eq('email', cleanEmailStr);
+        await db.from('users').delete().ilike('email', cleanEmailStr);
       }
       if (cleanMobileStr && cleanMobileStr.length >= 7 && cleanMobileStr !== '0000000000') {
         await db.from('users').delete().eq('mobile', cleanMobileStr);
       }
 
-      // 2. Delete from Supabase Auth if admin api available
       if (db.auth && db.auth.admin) {
-        if (auth_id) {
-          try { await db.auth.admin.deleteUser(auth_id); } catch (_) {}
-        }
-        if (cleanEmailStr) {
-          try {
-            const { data: listData } = await db.auth.admin.listUsers();
-            const foundUser = (listData?.users || []).find((u: any) => cleanEmail(u.email) === cleanEmailStr);
-            if (foundUser?.id) {
-              await db.auth.admin.deleteUser(foundUser.id);
-            }
-          } catch (_) {}
+        const foundAuth = await findAuthUserPaginated(db, {
+          authId: auth_id || null,
+          email: cleanEmailStr || null
+        });
+        if (foundAuth?.id) {
+          try { await db.auth.admin.deleteUser(foundAuth.id); } catch (_) {}
         }
       }
 
@@ -2507,411 +3490,714 @@ async function startServer() {
   });
 
   app.post('/api/auth/update-user', async (req, res) => {
-    const { auth_id, staff_id, email, password, name, role, mobile, active } = req.body;
+    const { auth_id, staff_id, email, password, name, role, mobile, active, staff_type } = req.body;
     try {
       const db = getServerSupabase();
       if (!db.auth.admin) {
         return res.status(400).json({ success: false, error: 'Service Role Key not configured' });
       }
-      
+
+      const callerIdentity = await authenticateCallerIdentity(db, req);
+      if (!callerIdentity) {
+        return res.status(401).json({ success: false, error: 'Authentication required to update staff credentials.' });
+      }
+      const callerAuth = await resolveCallerAuthoritativeRole(db, callerIdentity);
+      if (!callerAuth.active) {
+        return res.status(403).json({ success: false, error: 'Account is deactivated.' });
+      }
+      if (!new Set(['Business Owner', 'Production Team', 'Operations Team']).has(callerAuth.role)) {
+        return res.status(403).json({ success: false, error: 'You are not authorized to update staff credentials.' });
+      }
+
+      const cleanPwd = typeof password === 'string' && password.trim() !== '' ? password.trim() : null;
+      if (cleanPwd !== null && cleanPwd.length < 6) {
+        return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long.' });
+      }
+
       const roleStr = String(role || '').trim().toLowerCase();
-      const isStaffRole = ['staff', 'team', 'editor', 'operation', 'production', 'sales'].some(r => roleStr.includes(r));
-      let cleanMobile: string | undefined = mobile ? cleanPhone(mobile) : undefined;
-      let cleanEmail: string | undefined = email ? (typeof email === 'string' ? email.trim().toLowerCase() : undefined) : undefined;
-      const cleanMobileStr = cleanMobile;
-      const cleanEmailStr = cleanEmail;
+      const isStaffRole =
+        staff_type === 'production' ||
+        staff_type === 'operations' ||
+        ['staff', 'team', 'editor', 'operation', 'production', 'sales'].some(r => roleStr.includes(r));
 
-      // Identify whether mobile or email belongs to the account being updated
-      let existingMobileFound: string | null = null;
-      let existingEmailFound: string | null = null;
+      let cleanMobileStr: string | undefined = mobile ? cleanPhone(mobile) : undefined;
+      let cleanEmailStr: string | undefined = email ? cleanEmail(email) : undefined;
 
-      if (auth_id) {
-        const { data: userRec } = await db.from('users').select('id, email, mobile').eq('id', auth_id).maybeSingle();
-        if (userRec?.mobile) existingMobileFound = cleanPhone(userRec.mobile);
-        if (userRec?.email) existingEmailFound = String(userRec.email).trim().toLowerCase();
-      }
-      if (staff_id) {
-        const { data: opRec } = await db.from('operations_staff').select('staff_id, email, mobile').eq('staff_id', staff_id).maybeSingle();
-        if (opRec?.mobile && !existingMobileFound) existingMobileFound = cleanPhone(opRec.mobile);
-        if (opRec?.email && !existingEmailFound) existingEmailFound = String(opRec.email).trim().toLowerCase();
-        
-        if (!existingMobileFound || !existingEmailFound) {
-          const { data: prodRec } = await db.from('production_staff').select('staff_id, email, mobile').eq('staff_id', staff_id).maybeSingle();
-          if (prodRec?.mobile && !existingMobileFound) existingMobileFound = cleanPhone(prodRec.mobile);
-          if (prodRec?.email && !existingEmailFound) existingEmailFound = String(prodRec.email).trim().toLowerCase();
-        }
-      }
+      // Resolve authoritative staff record strictly from the right table (never cross tables)
+      let resolvedStaffTable: 'production_staff' | 'operations_staff' | null =
+        staff_type === 'production' ? 'production_staff' : (staff_type === 'operations' ? 'operations_staff' : null);
+      let existingStaffRecord: any = null;
+      let staffAuthId: string | null = null;
 
-      // Check global uniqueness when updating mobile or email (skip if unchanged for existing staff member)
-      if (cleanMobileStr || cleanEmailStr) {
-        let isEmailUnchanged = false;
-        let isMobileUnchanged = false;
-
-        if (staff_id) {
-          const { data: currentProd } = await db.from('production_staff').select('email, mobile').eq('staff_id', staff_id).maybeSingle();
-          if (currentProd) {
-            if (cleanEmailStr && currentProd.email && currentProd.email.trim().toLowerCase() === cleanEmailStr) isEmailUnchanged = true;
-            if (cleanMobileStr && currentProd.mobile && cleanPhone(currentProd.mobile) === cleanMobileStr) isMobileUnchanged = true;
+      const parseNotesAuthId = (notesVal: any): string | null => {
+        if (!notesVal) return null;
+        try {
+          let parsed = typeof notesVal === 'string' ? JSON.parse(notesVal) : notesVal;
+          if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+          if (parsed?.auth_user_id) return String(parsed.auth_user_id).trim();
+          if (parsed?.notes && typeof parsed.notes === 'string') {
+            const nested = JSON.parse(parsed.notes);
+            if (nested?.auth_user_id) return String(nested.auth_user_id).trim();
           }
-          if (!isEmailUnchanged || !isMobileUnchanged) {
-            const { data: currentOps } = await db.from('operations_staff').select('email, mobile').eq('staff_id', staff_id).maybeSingle();
-            if (currentOps) {
-              if (cleanEmailStr && currentOps.email && currentOps.email.trim().toLowerCase() === cleanEmailStr) isEmailUnchanged = true;
-              if (cleanMobileStr && currentOps.mobile && cleanPhone(currentOps.mobile) === cleanMobileStr) isMobileUnchanged = true;
+        } catch (_) {}
+        return null;
+      };
+
+      if (staff_id) {
+        if (resolvedStaffTable === 'production_staff') {
+          const { data } = await db.from('production_staff').select('*').eq('staff_id', staff_id).maybeSingle();
+          if (data) existingStaffRecord = data;
+        } else if (resolvedStaffTable === 'operations_staff') {
+          const { data } = await db.from('operations_staff').select('*').eq('staff_id', staff_id).maybeSingle();
+          if (data) existingStaffRecord = data;
+        } else {
+          const preferProd = roleStr.includes('prod') || roleStr.includes('editor') || String(staff_id).startsWith('STF-');
+          const firstTable = preferProd ? 'production_staff' : 'operations_staff';
+          const secondTable = preferProd ? 'operations_staff' : 'production_staff';
+          const { data: firstRec } = await db.from(firstTable).select('*').eq('staff_id', staff_id).maybeSingle();
+          if (firstRec) {
+            existingStaffRecord = firstRec;
+            resolvedStaffTable = firstTable;
+          } else {
+            const { data: secondRec } = await db.from(secondTable).select('*').eq('staff_id', staff_id).maybeSingle();
+            if (secondRec) {
+              existingStaffRecord = secondRec;
+              resolvedStaffTable = secondTable;
             }
           }
         }
+      } else if (resolvedStaffTable && cleanEmailStr) {
+        const { data } = await db.from(resolvedStaffTable).select('*').ilike('email', cleanEmailStr).maybeSingle();
+        if (data) existingStaffRecord = data;
+      }
 
-        if (!isEmailUnchanged || !isMobileUnchanged) {
+      if (callerAuth.role === 'Production Team' && resolvedStaffTable === 'operations_staff') {
+        return res.status(403).json({ success: false, error: 'Production Manager can only update Production staff credentials.' });
+      }
+      if (callerAuth.role === 'Operations Team' && resolvedStaffTable === 'production_staff') {
+        return res.status(403).json({ success: false, error: 'Operation Manager can only update Operation staff credentials.' });
+      }
+
+      if (existingStaffRecord) {
+        staffAuthId = existingStaffRecord.auth_user_id || parseNotesAuthId(existingStaffRecord.notes);
+        if (existingStaffRecord.email) cleanEmailStr = cleanEmail(existingStaffRecord.email);
+        if (existingStaffRecord.mobile) cleanMobileStr = cleanPhone(existingStaffRecord.mobile);
+      }
+
+      let existingMobileFound: string | null = existingStaffRecord?.mobile ? cleanPhone(existingStaffRecord.mobile) : null;
+      let existingEmailFound: string | null = existingStaffRecord?.email ? cleanEmail(existingStaffRecord.email) : null;
+
+      if ((!existingEmailFound || !existingMobileFound) && auth_id) {
+        const { data: userRec } = await db.from('users').select('id, email, mobile').eq('id', auth_id).maybeSingle();
+        if (userRec?.mobile && !existingMobileFound) existingMobileFound = cleanPhone(userRec.mobile);
+        if (userRec?.email && !existingEmailFound) existingEmailFound = cleanEmail(userRec.email);
+      }
+
+      // Check global uniqueness only if email or mobile is being changed
+      if ((cleanMobileStr || cleanEmailStr) && !existingStaffRecord) {
+        const emailChanged = Boolean(cleanEmailStr && existingEmailFound && cleanEmailStr !== existingEmailFound);
+        const mobileChanged = Boolean(cleanMobileStr && existingMobileFound && cleanMobileStr !== existingMobileFound);
+        if (emailChanged || mobileChanged) {
           const uniqueCheck = await checkGlobalUniquenessInDb(
-            db, 
-            isMobileUnchanged ? null : (cleanMobileStr || existingMobileFound), 
-            isEmailUnchanged ? null : (cleanEmailStr || existingEmailFound), 
-            auth_id, 
-            existingEmailFound || cleanEmailStr, 
-            existingMobileFound || cleanMobileStr, 
+            db,
+            mobileChanged ? cleanMobileStr : null,
+            emailChanged ? cleanEmailStr : null,
+            auth_id,
+            existingEmailFound || cleanEmailStr,
+            existingMobileFound || cleanMobileStr,
             staff_id
           );
           if (!uniqueCheck.isUnique) {
-            return res.status(400).json({ 
-              success: false, 
+            return res.status(400).json({
+              success: false,
               error: uniqueCheck.error,
               isMobileDuplicate: uniqueCheck.isMobileDuplicate,
-              isEmailDuplicate: uniqueCheck.isEmailDuplicate 
+              isEmailDuplicate: uniqueCheck.isEmailDuplicate
             });
           }
         }
       }
 
-      // Determine auth user ID with strict email/mobile verification
-      let targetAuthId: string | null = auth_id || null;
+      // Determine target auth user with strict email verification
       let targetAuthUser: any = null;
+      let targetAuthId: string | null = null;
 
-      // 1. If auth_id provided, inspect user and verify email match
-      if (targetAuthId) {
-        try {
-          const { data: uData, error: uErr } = await db.auth.admin.getUserById(targetAuthId);
-          if (!uErr && uData?.user) {
-            // Verify if cleanEmail matches; if auth_id belongs to a foreign user, discard it
-            if (cleanEmail && uData.user.email && uData.user.email.trim().toLowerCase() !== cleanEmail) {
-              console.warn('[Server Auth] Provided auth_id belongs to a different email:', uData.user.email, 'expected:', cleanEmail);
-              targetAuthUser = null;
-              targetAuthId = null;
-            } else {
-              targetAuthUser = uData.user;
-            }
-          } else {
-            targetAuthUser = null;
-            targetAuthId = null;
-          }
-        } catch (e) {
-          targetAuthUser = null;
-          targetAuthId = null;
-        }
+      const candidateAuthId = staffAuthId || auth_id || null;
+      if (candidateAuthId) {
+        targetAuthUser = await findAuthUserPaginated(db, {
+          authId: candidateAuthId,
+          email: cleanEmailStr || null,
+          allowEmailMismatch: Boolean(staffAuthId && existingStaffRecord)
+        });
+        if (targetAuthUser) targetAuthId = targetAuthUser.id;
       }
 
-      // 2. Look up matching user in public.users table to get their true auth ID
-      if (!targetAuthUser && cleanEmail) {
+      if (!targetAuthUser && cleanEmailStr) {
         try {
-          const { data: uRow } = await db.from('users').select('id, email, mobile').ilike('email', cleanEmail).maybeSingle();
+          const { data: uRow } = await db.from('users').select('id, email').ilike('email', cleanEmailStr).maybeSingle();
           if (uRow?.id) {
-            const { data: uAuth, error: uAuthErr } = await db.auth.admin.getUserById(uRow.id);
-            if (!uAuthErr && uAuth?.user) {
-              targetAuthUser = uAuth.user;
-              targetAuthId = uAuth.user.id;
-            }
+            targetAuthUser = await findAuthUserPaginated(db, { authId: uRow.id, email: cleanEmailStr });
+            if (targetAuthUser) targetAuthId = targetAuthUser.id;
           }
-        } catch (e) {}
+        } catch (_) {}
       }
 
-      // 3. If not found yet and staff_id provided, check production_staff notes and email
-      if (!targetAuthUser && staff_id) {
-        try {
-          const { data: psRec } = await db.from('production_staff').select('notes, email, mobile').eq('staff_id', staff_id).maybeSingle();
-          if (psRec?.notes) {
-            try {
-              let parsed = typeof psRec.notes === 'string' ? JSON.parse(psRec.notes) : psRec.notes;
-              if (typeof parsed === 'string') parsed = JSON.parse(parsed);
-              if (parsed.auth_user_id) {
-                const { data: psAuth, error: psAuthErr } = await db.auth.admin.getUserById(parsed.auth_user_id);
-                if (!psAuthErr && psAuth?.user) {
-                  const psEmail = cleanEmail || (psRec.email ? psRec.email.trim().toLowerCase() : null);
-                  if (!psEmail || psAuth.user.email?.trim().toLowerCase() === psEmail) {
-                    targetAuthUser = psAuth.user;
-                    targetAuthId = psAuth.user.id;
-                  }
-                }
-              }
-            } catch (e) {}
-          }
-          if (!cleanEmail && psRec?.email) cleanEmail = psRec.email.trim().toLowerCase();
-          if (!cleanMobile && psRec?.mobile) cleanMobile = cleanPhone(psRec.mobile);
-        } catch (e) {}
+      if (!targetAuthUser && (cleanEmailStr || cleanMobileStr)) {
+        targetAuthUser = await findAuthUserPaginated(db, {
+          email: cleanEmailStr || null,
+          mobile: cleanEmailStr ? null : (cleanMobileStr || null)
+        });
+        if (targetAuthUser) targetAuthId = targetAuthUser.id;
       }
 
-      // 4. If target auth user still not found, search paginated auth.users by email or phone/mobile
-      if (!targetAuthUser && (cleanEmail || cleanMobile)) {
-        try {
-          let page = 1;
-          while (page <= 5) {
-            const { data: listData } = await db.auth.admin.listUsers({ page, perPage: 50 });
-            const usersList = listData?.users || [];
-            const found = usersList.find((u: any) =>
-              (cleanEmail && u.email?.trim().toLowerCase() === cleanEmail) ||
-              (cleanMobile && (cleanPhone(u.phone) === cleanMobile || cleanPhone(u.user_metadata?.mobile) === cleanMobile))
-            );
-            if (found) {
-              targetAuthUser = found;
-              targetAuthId = found.id;
-              break;
-            }
-            if (usersList.length < 50) break;
-            page++;
-          }
-        } catch (e) {}
-      }
+      const normalizedRole = role ? normalizeAuthRole(role, staff_type) : undefined;
 
-      // 5. If user doesn't exist in Supabase Auth yet and password is provided, create the auth user
-      if (!targetAuthUser && password) {
-        if (!cleanEmail && !cleanMobile) {
+      // Create or recover auth user if not yet present and a password is being set
+      if (!targetAuthUser && cleanPwd) {
+        if (!cleanEmailStr && !cleanMobileStr) {
           return res.status(404).json({ success: false, error: 'Staff authentication account not found' });
         }
-        const createEmail = cleanEmail || `${cleanMobile}@photocrew.com`;
-        const { data: created, error: createErr } = await db.auth.admin.createUser({
-          email: createEmail,
-          password: password,
-          user_metadata: { name: name || 'Staff Member', role: role || 'Production Staff', mobile: cleanMobile },
-          email_confirm: true
+        const encPwd = encryptStaffPassword(cleanPwd);
+        const recovered = await createOrRecoverAuthUser(db, {
+          email: cleanEmailStr,
+          mobile: cleanMobileStr,
+          staffId: existingStaffRecord?.staff_id || staff_id || null,
+          password: cleanPwd,
+          name: name || existingStaffRecord?.name || 'Staff Member',
+          normalizedRole: normalizedRole || 'Operation Staff',
+          active,
+          encPwd
         });
-        if (createErr) {
-          console.error('[Server Auth Create User Error]', createErr);
-          return res.status(400).json({ success: false, error: createErr.message || 'Failed to create authentication credentials' });
+        if (!recovered.user) {
+          return res.status(400).json({ success: false, error: recovered.error || 'Failed to create authentication credentials' });
         }
-        targetAuthUser = created.user;
-        targetAuthId = created.user.id;
+        targetAuthUser = recovered.user;
+        targetAuthId = recovered.user.id;
       }
 
-      // Prepare updates for Supabase Auth
-      const updates: any = {};
-      if (password) updates.password = password;
-      // Never attempt to re-set email if it already matches targetAuthUser or for locked staff records
-      if (cleanEmail && !isStaffRole && targetAuthUser?.email?.trim().toLowerCase() !== cleanEmail) {
-        updates.email = cleanEmail;
-      }
-      if (name || role || cleanMobile) {
-        updates.user_metadata = {
-          ...(targetAuthUser?.user_metadata || {}),
-          ...(name ? { name } : {}),
-          ...(role ? { role } : {}),
-          ...(cleanMobile ? { mobile: cleanMobile } : {})
-        };
-      }
-      
-      // Update Supabase Auth credentials securely and verify success
-      if (targetAuthId) {
-        if (password) {
-          const { data: updData, error: authUpdErr } = await db.auth.admin.updateUserById(targetAuthId, updates);
-          if (authUpdErr) {
-            console.error('[Server Auth Password Update Error]', authUpdErr);
-            return res.status(400).json({ success: false, error: authUpdErr.message || 'Authentication provider failed to update password' });
-          }
-        } else if (Object.keys(updates).length > 0) {
-          const { error: nonPwErr } = await db.auth.admin.updateUserById(targetAuthId, updates);
-          if (nonPwErr) {
-            console.warn('[Server Auth Non-Password Update Warning]', nonPwErr.message);
-          }
-        }
-      } else if (password) {
+      if (cleanPwd && !targetAuthId) {
         return res.status(404).json({ success: false, error: 'Could not find or create authentication account for staff member' });
       }
-      
-      // Update users table - Do NOT store plaintext password!
-      const userUpdates: any = {};
-      if (name) userUpdates.name = name;
-      if (cleanEmail && !isStaffRole) userUpdates.email = cleanEmail;
-      if (role) {
-        const r = String(role).trim().toLowerCase();
-        if (r.includes('owner') || r.includes('business')) userUpdates.role = 'Business Owner';
-        else if (r.includes('sales')) userUpdates.role = 'Sales Team';
-        else if (r.includes('prod') || r.includes('editor')) userUpdates.role = 'Production Team'; // users table constraint allows Production Team
-        else if (r.includes('op') && r.includes('staff')) userUpdates.role = 'Operation Staff';
-        else if (r.includes('op') && r.includes('team')) userUpdates.role = 'Operations Team';
-        else userUpdates.role = 'Production Team';
-      }
-      if (cleanMobile !== undefined) userUpdates.mobile = cleanMobile;
-      if (active !== undefined) userUpdates.active = active;
-      if (password) {
-        // Clear plaintext password field in database to prevent storing plaintext passwords
-        userUpdates.password = null;
-      }
-      
-      let dbData: any[] | null = null;
+
+      // Update Supabase Auth securely (never alter staff email/identity on password or profile update)
       if (targetAuthId) {
-        const { data: res1 } = await db.from('users').update(userUpdates).eq('id', targetAuthId).select();
-        if (Array.isArray(res1) && res1.length > 0) dbData = res1;
-      }
-      if (cleanEmail) {
-        const { data: res2 } = await db.from('users').update(userUpdates).ilike('email', cleanEmail).select();
-        if (Array.isArray(res2) && res2.length > 0 && !dbData) dbData = res2;
-      }
-      if (cleanMobile) {
-        const { data: res3 } = await db.from('users').update(userUpdates).eq('mobile', cleanMobile).select();
-        if (Array.isArray(res3) && res3.length > 0 && !dbData) dbData = res3;
-      }
+        const cleanedMeta: any = { ...(targetAuthUser?.user_metadata || {}) };
+        delete cleanedMeta.current_password;
+        if (name) cleanedMeta.name = name;
+        if (normalizedRole) cleanedMeta.role = normalizedRole;
+        if (cleanMobileStr) cleanedMeta.mobile = cleanMobileStr;
+        if (cleanEmailStr && !cleanedMeta.original_email) cleanedMeta.original_email = cleanEmailStr;
 
-      // Update production_staff table notes with targetAuthId and synchronize Password column with secure hash
-      if (staff_id || cleanEmail || cleanMobile) {
-        try {
-          let psQuery = db.from('production_staff').select('staff_id, notes');
-          if (staff_id) psQuery = psQuery.eq('staff_id', staff_id);
-          else if (cleanEmail) psQuery = psQuery.ilike('email', cleanEmail);
-          else if (cleanMobile) psQuery = psQuery.eq('mobile', cleanMobile);
+        const updates: any = {
+          user_metadata: cleanedMeta,
+          email_confirm: true
+        };
+        if (cleanPwd) {
+          updates.password = cleanPwd;
+          updates.app_metadata = {
+            ...(targetAuthUser?.app_metadata || {}),
+            enc_pwd: encryptStaffPassword(cleanPwd)
+          };
+        }
+        if (active !== undefined) {
+          updates.ban_duration = active === false ? '876000h' : 'none';
+        }
+        if (cleanEmailStr && !isStaffRole && cleanEmail(targetAuthUser?.email) !== cleanEmailStr) {
+          updates.email = cleanEmailStr;
+        }
 
-          const { data: psRows, error: psFindErr } = await psQuery;
-          if (psFindErr) {
-            console.error('[Server Auth PS Find Error]', psFindErr);
-            return res.status(500).json({ success: false, error: 'Failed to find production staff record' });
-          }
-
-          if (psRows && psRows.length > 0) {
-            for (const row of psRows) {
-              let notesObj: any = {};
-              try {
-                if (row.notes) {
-                  notesObj = typeof row.notes === 'string' ? JSON.parse(row.notes) : row.notes;
-                  if (typeof notesObj === 'string') notesObj = JSON.parse(notesObj);
-                }
-              } catch (e) {}
-              if (targetAuthId) {
-                notesObj.auth_user_id = targetAuthId;
-              }
-              if (notesObj.notes) delete notesObj.notes; // clean any doubly stringified notes
-              const psUpdates: any = { notes: JSON.stringify(notesObj) };
-              if (password) {
-                // Securely hash password using SHA-256 before saving to production_staff.Password
-                const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-                psUpdates.Password = passwordHash;
-                notesObj.current_password = password;
-                psUpdates.notes = JSON.stringify(notesObj);
-              }
-              const { error: psUpdErr } = await db.from('production_staff').update(psUpdates).eq('staff_id', row.staff_id);
-              if (psUpdErr) {
-                console.error('[Server Auth PS Sync Error]', psUpdErr);
-                return res.status(500).json({ success: false, error: 'Failed to synchronize password in production staff table' });
-              }
+        const { error: authUpdErr } = await db.auth.admin.updateUserById(targetAuthId, updates);
+        if (authUpdErr) {
+          console.error('[Server Auth Update Error]', authUpdErr);
+          if (cleanPwd) {
+            const recovered = await createOrRecoverAuthUser(db, {
+              email: cleanEmailStr,
+              mobile: cleanMobileStr,
+              staffId: existingStaffRecord?.staff_id || staff_id || null,
+              password: cleanPwd,
+              name: name || existingStaffRecord?.name || 'Staff Member',
+              normalizedRole: normalizedRole || 'Operation Staff',
+              active,
+              encPwd: encryptStaffPassword(cleanPwd)
+            });
+            if (recovered.user) {
+              targetAuthUser = recovered.user;
+              targetAuthId = recovered.user.id;
+            } else {
+              return res.status(400).json({ success: false, error: authUpdErr.message || 'Authentication provider failed to update password' });
             }
+          } else {
+            console.warn('[Server Auth Non-Password Update Warning]', authUpdErr.message);
           }
-        } catch (psErr: any) {
-          console.error('[Server Auth PS Sync Exception]', psErr);
-          return res.status(500).json({ success: false, error: psErr.message || 'Error synchronizing production staff record' });
         }
       }
-      
-      res.json({ success: true, auth_user_id: targetAuthId, data: { record: dbData?.[0] || userUpdates } });
+
+      // Sync public.users strictly without plaintext passwords for staff accounts
+      let syncedRecord: any = null;
+      if (targetAuthId) {
+        syncedRecord = await syncPublicUserRow(db, {
+          authUserId: targetAuthId,
+          name: name || existingStaffRecord?.name,
+          email: cleanEmailStr || targetAuthUser?.email,
+          mobile: cleanMobileStr,
+          normalizedRole,
+          active
+        });
+      }
+
+      // Sync auth_user_id and (only when changed) password column in resolved staff table
+      if (targetAuthId && resolvedStaffTable) {
+        const staffSyncRes = await syncStaffNotesAuthId(db, {
+          table: resolvedStaffTable,
+          staffId: existingStaffRecord?.staff_id || staff_id || null,
+          email: cleanEmailStr || null,
+          authUserId: targetAuthId,
+          password: cleanPwd
+        });
+        if (!staffSyncRes.success && cleanPwd) {
+          return res.status(500).json({
+            success: false,
+            error: staffSyncRes.error || `Failed to synchronize password column on ${resolvedStaffTable}`
+          });
+        }
+      } else if (cleanPwd && resolvedStaffTable && existingStaffRecord?.staff_id) {
+        const directPwdRes = await syncStaffPasswordColumnsOnRow(db, {
+          table: resolvedStaffTable,
+          staffId: existingStaffRecord.staff_id,
+          password: cleanPwd
+        });
+        if (!directPwdRes.success) {
+          return res.status(500).json({
+            success: false,
+            error: directPwdRes.error || `Failed to save password on ${resolvedStaffTable}`
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        auth_user_id: targetAuthId,
+        data: { record: syncedRecord }
+      });
     } catch (err: any) {
       console.error(`[Server Auth Update Exception]`, err);
       res.status(500).json({ success: false, error: err.message || String(err) });
     }
   });
 
-  // Endpoint to retrieve current password for a staff member for authorized manager display
+  // Issue a short-lived signed session token for system division manager/owner accounts logging in via legacy DB password fallback or Supabase Auth
+  app.post('/api/auth/manager-session', async (req, res) => {
+    try {
+      const db = getServerSupabase();
+
+      // 1. Also allow an already-authenticated Supabase Auth manager/owner JWT to mint an ERP manager fallback token
+      const authHeader = String(req?.headers?.authorization || '').trim();
+      if (authHeader.toLowerCase().startsWith('bearer ')) {
+        const jwt = authHeader.slice(7).trim();
+        if (jwt && jwt !== SUPABASE_ANON_KEY) {
+          try {
+            const { data: userData, error: jwtErr } = await db.auth.getUser(jwt);
+            if (!jwtErr && userData?.user) {
+              const authInfo = await resolveCallerAuthoritativeRole(db, {
+                id: userData.user.id,
+                email: userData.user.email,
+                mobile: userData.user.user_metadata?.mobile,
+                metadataRole: userData.user.user_metadata?.role
+              });
+              if (authInfo.active && ['Business Owner', 'Operations Team', 'Production Team', 'Sales Team'].includes(authInfo.role)) {
+                const token = signManagerSessionToken({
+                  uid: String(userData.user.id),
+                  email: cleanEmail(userData.user.email),
+                  role: authInfo.role
+                });
+                return res.json({ success: true, token, role: authInfo.role });
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      // 2. Credential verification against public.users (check all matching candidate rows for duplicate emails)
+      const { identifier, email, password } = req.body || {};
+      const cleanInput = String(email || identifier || '').trim();
+      const cleanPwd = String(password || '').trim();
+      if (!cleanInput || !cleanPwd) {
+        return res.status(400).json({ success: false, error: 'Credentials required' });
+      }
+
+      const lowerInput = cleanInput.toLowerCase();
+      const digits = cleanInput.replace(/\D/g, '');
+      const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+
+      const { data: allUsers, error: uErr } = await db.from('users').select('id, email, username, mobile, role, active, password');
+      if (uErr || !Array.isArray(allUsers)) {
+        return res.status(500).json({ success: false, error: 'Failed to verify credentials' });
+      }
+
+      const candidates = allUsers.filter((u: any) => {
+        const uEmail = cleanEmail(u.email);
+        const uUser = cleanEmail(u.username);
+        const uMob = cleanPhone(u.mobile);
+        const uMob10 = uMob.length >= 10 ? uMob.slice(-10) : uMob;
+        if (uEmail && uEmail === lowerInput) return true;
+        if (uUser && uUser === lowerInput) return true;
+        if (!cleanInput.includes('@') && last10.length >= 7 && uMob10 === last10) return true;
+        return false;
+      });
+
+      if (candidates.length === 0) {
+        return res.status(401).json({ success: false, error: 'Invalid credentials' });
+      }
+
+      const bBuf = Buffer.from(cleanPwd, 'utf8');
+      const activePasswordMatched = candidates.find((u: any) => {
+        const isActive = u.active !== false && String(u.active) !== 'false' && u.active !== 0 && String(u.active) !== '0';
+        const storedPwd = String(u.password ?? '').trim();
+        if (!isActive || !storedPwd) return false;
+        const aBuf = Buffer.from(storedPwd, 'utf8');
+        return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
+      });
+
+      if (!activePasswordMatched) {
+        const anyMatchedPwd = candidates.some((u: any) => {
+          const storedPwd = String(u.password ?? '').trim();
+          if (!storedPwd) return false;
+          const aBuf = Buffer.from(storedPwd, 'utf8');
+          return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
+        });
+        if (anyMatchedPwd) {
+          return res.status(403).json({ success: false, error: 'Account is deactivated' });
+        }
+        const anyHasPwd = candidates.some((u: any) => String(u.password ?? '').trim() !== '');
+        if (!anyHasPwd) {
+          return res.status(401).json({ success: false, error: 'Account uses standard Auth login' });
+        }
+        return res.status(401).json({ success: false, error: 'Invalid credentials' });
+      }
+
+      const authInfo = await resolveCallerAuthoritativeRole(db, {
+        id: activePasswordMatched.id,
+        email: activePasswordMatched.email,
+        mobile: activePasswordMatched.mobile,
+        metadataRole: activePasswordMatched.role
+      });
+      if (!['Business Owner', 'Operations Team', 'Production Team', 'Sales Team'].includes(authInfo.role)) {
+        return res.status(403).json({ success: false, error: 'Not authorized for manager session' });
+      }
+
+      const token = signManagerSessionToken({
+        uid: String(activePasswordMatched.id),
+        email: cleanEmail(activePasswordMatched.email),
+        role: authInfo.role
+      });
+
+      return res.json({ success: true, token, role: authInfo.role });
+    } catch (err: any) {
+      console.error('[Server Auth Manager Session Error]', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to create manager session' });
+    }
+  });
+
+  app.post('/api/auth/verify-session', async (req, res) => {
+    try {
+      const db = getServerSupabase();
+      const callerIdentity = await authenticateCallerIdentity(db, req);
+      if (!callerIdentity) {
+        return res.status(401).json({ success: false, valid: false, error: 'Session missing or expired' });
+      }
+      const callerAuth = await resolveCallerAuthoritativeRole(db, callerIdentity);
+      if (!callerAuth.active) {
+        return res.status(403).json({ success: false, valid: false, error: 'Account is deactivated' });
+      }
+      return res.json({ success: true, valid: true, role: callerAuth.role });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to verify session' });
+    }
+  });
+
+  // RBAC-protected endpoint to retrieve the decrypted current password of an authorized staff member
   app.post('/api/auth/get-staff-password', async (req, res) => {
     try {
       const db = getServerSupabase();
       if (!db.auth.admin) {
-        return res.status(400).json({ success: false, error: 'Service Role Key not configured' });
+        return res.status(500).json({ success: false, error: 'Service Role Key not configured on server' });
       }
 
-      const { staff_id, email, mobile, auth_id } = req.body;
-      let targetAuthId = auth_id;
-      const cleanEmail = email ? email.trim().toLowerCase() : null;
-      let cleanMobile = mobile ? cleanPhone(mobile) : null;
-      const mobile10 = cleanMobile && cleanMobile.length >= 10 ? cleanMobile.slice(-10) : cleanMobile;
+      // 1. Authenticate caller via Supabase JWT or signed ERP manager token
+      const callerIdentity = await authenticateCallerIdentity(db, req);
 
-      // 1. Check production_staff table notes or unhashed Password
-      if (staff_id || cleanEmail || cleanMobile) {
-        let psQuery = db.from('production_staff').select('notes, Password, mobile');
-        if (staff_id) psQuery = psQuery.eq('staff_id', staff_id);
-        else if (cleanEmail) psQuery = psQuery.ilike('email', cleanEmail);
-        else if (cleanMobile) psQuery = psQuery.ilike('mobile', `%${mobile10}%`);
+      if (!callerIdentity) {
+        return res.status(401).json({ success: false, error: 'Authentication required to view staff credentials.' });
+      }
 
-        const { data: psRows } = await psQuery.limit(1);
-        if (psRows && psRows.length > 0) {
-          const row = psRows[0];
-          try {
-            if (row.notes) {
-              const parsed = JSON.parse(row.notes);
-              if (parsed.current_password && !/^[a-f0-9]{32,128}$/i.test(parsed.current_password.trim())) {
-                return res.json({ success: true, password: parsed.current_password });
-              }
-              if (parsed.notes && typeof parsed.notes === 'string') {
-                try {
-                  const nested = JSON.parse(parsed.notes);
-                  if (nested.current_password && !/^[a-f0-9]{32,128}$/i.test(nested.current_password.trim())) {
-                    return res.json({ success: true, password: nested.current_password });
-                  }
-                  if (!targetAuthId && nested.auth_user_id) targetAuthId = nested.auth_user_id;
-                } catch (e) {}
-              }
-              if (!targetAuthId && parsed.auth_user_id) targetAuthId = parsed.auth_user_id;
+      const callerAuth = await resolveCallerAuthoritativeRole(db, callerIdentity);
+      if (!callerAuth.active) {
+        return res.status(403).json({ success: false, error: 'Account is deactivated.' });
+      }
+
+      const allowedManagerRoles = new Set(['Business Owner', 'Production Team', 'Operations Team']);
+      if (!allowedManagerRoles.has(callerAuth.role)) {
+        return res.status(403).json({ success: false, error: 'You are not authorized to view staff passwords.' });
+      }
+
+      // 2. Resolve target staff member and their authoritative department from database
+      const { staff_id, staff_type, auth_id, email, mobile } = req.body || {};
+      const cleanStaffId = staff_id ? String(staff_id).trim() : '';
+      const cleanAuthId = auth_id ? String(auth_id).trim() : '';
+      const cleanTargetEmail = cleanEmail(email);
+      const cleanTargetMobile = cleanPhone(mobile);
+      const requestedType = staff_type === 'production' || staff_type === 'operations' ? staff_type : null;
+
+      let prodMatch: any = null;
+      let opMatch: any = null;
+
+      if (cleanStaffId) {
+        const [pRes, oRes] = await Promise.all([
+          db.from('production_staff').select('*').eq('staff_id', cleanStaffId).maybeSingle(),
+          db.from('operations_staff').select('*').eq('staff_id', cleanStaffId).maybeSingle()
+        ]);
+        if (pRes.data) prodMatch = pRes.data;
+        if (oRes.data) opMatch = oRes.data;
+      }
+
+      if (!prodMatch && !opMatch && cleanTargetEmail) {
+        const [pRes, oRes] = await Promise.all([
+          db.from('production_staff').select('*').ilike('email', cleanTargetEmail).maybeSingle(),
+          db.from('operations_staff').select('*').ilike('email', cleanTargetEmail).maybeSingle()
+        ]);
+        if (pRes.data) prodMatch = pRes.data;
+        if (oRes.data) opMatch = oRes.data;
+      }
+
+      if (!prodMatch && !opMatch && cleanTargetMobile && cleanTargetMobile.length >= 7) {
+        const [pRes, oRes] = await Promise.all([
+          db.from('production_staff').select('*').eq('mobile', cleanTargetMobile).maybeSingle(),
+          db.from('operations_staff').select('*').eq('mobile', cleanTargetMobile).maybeSingle()
+        ]);
+        if (pRes.data) prodMatch = pRes.data;
+        if (oRes.data) opMatch = oRes.data;
+      }
+
+      let targetDept: 'production' | 'operations' | null = null;
+      let targetStaffRecord: any = null;
+      if (prodMatch && !opMatch) {
+        targetDept = 'production';
+        targetStaffRecord = prodMatch;
+      } else if (opMatch && !prodMatch) {
+        targetDept = 'operations';
+        targetStaffRecord = opMatch;
+      } else if (prodMatch && opMatch) {
+        if (requestedType === 'operations') {
+          targetDept = 'operations';
+          targetStaffRecord = opMatch;
+        } else {
+          targetDept = 'production';
+          targetStaffRecord = prodMatch;
+        }
+      } else if (requestedType) {
+        targetDept = requestedType;
+      }
+
+      // 3. Enforce strict department-level RBAC
+      if (callerAuth.role === 'Production Team' && targetDept !== 'production') {
+        return res.status(403).json({ success: false, error: 'Production Manager can only view passwords of Production staff.' });
+      }
+      if (callerAuth.role === 'Operations Team' && targetDept !== 'operations') {
+        return res.status(403).json({ success: false, error: 'Operation Manager can only view passwords of Operation staff.' });
+      }
+
+      const resolvedStaffAuthId =
+        targetStaffRecord?.auth_user_id ||
+        extractNotesAuthUserIdServer(targetStaffRecord?.notes) ||
+        cleanAuthId ||
+        null;
+      const resolvedEmail = cleanEmail(targetStaffRecord?.email || cleanTargetEmail);
+      const resolvedMobile = cleanPhone(targetStaffRecord?.mobile || cleanTargetMobile);
+
+      // Never expose system division account passwords (e.g. if a test staff row reused Founder/Manager email)
+      if (isSystemDivisionAccountServer({ id: resolvedStaffAuthId, email: resolvedEmail })) {
+        return res.status(403).json({ success: false, error: 'Cannot retrieve password for system division account.' });
+      }
+
+      const targetAuthUser = await findAuthUserPaginated(db, {
+        authId: resolvedStaffAuthId,
+        email: resolvedEmail || null,
+        mobile: resolvedEmail ? null : (resolvedMobile || null),
+        allowEmailMismatch: Boolean(resolvedStaffAuthId && targetStaffRecord)
+      });
+
+      if (targetAuthUser) {
+        if (
+          isSystemDivisionAccountServer({ id: targetAuthUser.id, email: targetAuthUser.email }) ||
+          String(targetAuthUser.user_metadata?.role || '').trim().toLowerCase() === 'business owner'
+        ) {
+          return res.status(403).json({ success: false, error: 'Cannot retrieve password for system division account.' });
+        }
+
+        // Only fall back to Auth-derived role check when targetDept was not already verified from staff tables
+        if (!targetDept) {
+          const targetAuthRole = await resolveCallerAuthoritativeRole(db, {
+            id: targetAuthUser.id,
+            email: targetAuthUser.email,
+            mobile: targetAuthUser.user_metadata?.mobile,
+            metadataRole: targetAuthUser.user_metadata?.role
+          });
+          if (callerAuth.role === 'Production Team' && targetAuthRole.role !== 'Production Staff') {
+            return res.status(403).json({ success: false, error: 'Production Manager can only view passwords of Production staff.' });
+          }
+          if (callerAuth.role === 'Operations Team' && targetAuthRole.role !== 'Operation Staff') {
+            return res.status(403).json({ success: false, error: 'Operation Manager can only view passwords of Operation staff.' });
+          }
+        }
+      }
+
+      const isHashedOrEncrypted = (val: any): boolean => {
+        if (typeof val !== 'string') return true;
+        const t = val.trim();
+        if (!t) return true;
+        if (t.startsWith('enc:v1:') || t.startsWith('$2a$') || t.startsWith('$2b$') || t.startsWith('$2y$') || t.startsWith('$argon2')) {
+          return true;
+        }
+        if (/^[0-9a-f]{64}$/i.test(t) || /^[0-9a-f]{32}$/i.test(t)) return true;
+        return false;
+      };
+
+      const extractNotesCurrentPwd = (notesVal: any): string | null => {
+        if (!notesVal) return null;
+        try {
+          let parsed = typeof notesVal === 'string' ? JSON.parse(notesVal) : notesVal;
+          if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+          if (parsed && typeof parsed === 'object') {
+            const raw = parsed.current_password || parsed.password || parsed.Password;
+            if (raw && !isHashedOrEncrypted(String(raw))) return String(raw).trim();
+            if (parsed.notes && typeof parsed.notes === 'string' && parsed.notes.trim().startsWith('{')) {
+              const nested = JSON.parse(parsed.notes);
+              const nRaw = nested?.current_password || nested?.password || nested?.Password;
+              if (nRaw && !isHashedOrEncrypted(String(nRaw))) return String(nRaw).trim();
             }
-          } catch (e) {}
-          if (row.Password && !/^[a-f0-9]{32,128}$/i.test(row.Password.trim()) && !row.Password.startsWith('$2')) {
-            return res.json({ success: true, password: row.Password.trim() });
           }
-          if (row.mobile && !cleanMobile) {
-            cleanMobile = (row.mobile || '').replace(/\D/g, '');
-          }
+        } catch (_) {}
+        return null;
+      };
+
+      let resolvedPassword: string | null = null;
+      let hadValidEncPwd = false;
+
+      // 1. Primary source: AES-256-GCM encrypted password in Auth app_metadata
+      const encPwd = targetAuthUser?.app_metadata?.enc_pwd;
+      if (encPwd) {
+        const decrypted = decryptStaffPassword(encPwd);
+        if (decrypted !== null && !isHashedOrEncrypted(decrypted)) {
+          resolvedPassword = decrypted;
+          hadValidEncPwd = true;
         }
       }
 
-      // 2. Check Supabase Auth user_metadata
-      if (targetAuthId) {
-        const { data: userData } = await db.auth.admin.getUserById(targetAuthId);
-        if (userData?.user?.user_metadata?.current_password) {
-          const cp = String(userData.user.user_metadata.current_password).trim();
-          if (!/^[a-f0-9]{32,128}$/i.test(cp) && !cp.startsWith('$2')) {
-            return res.json({ success: true, password: cp });
+      // 2. Legacy fallback: verified plaintext / SHA-256-matched password from DB or Auth metadata (never return hashes)
+      if (!resolvedPassword) {
+        let matchedDbUser: any = null;
+        const candidateDbIds = [targetAuthUser?.id, resolvedStaffAuthId].filter(Boolean) as string[];
+        for (const uid of candidateDbIds) {
+          const { data: uRow } = await db.from('users').select('id, email, mobile, role, password').eq('id', uid).maybeSingle();
+          if (uRow) {
+            matchedDbUser = uRow;
+            break;
           }
         }
-      }
-
-      // 3. Check auth.users by email or mobile
-      if (cleanEmail || cleanMobile) {
-        const { data: listData } = await db.auth.admin.listUsers();
-        const found = (listData?.users || []).find((u: any) => {
-          const uEmail = u.email?.toLowerCase();
-          const uMobile = (u.user_metadata?.mobile || u.phone || '').replace(/\D/g, '');
-          if (cleanEmail && uEmail === cleanEmail) return true;
-          if (cleanMobile && uMobile && (uMobile === cleanMobile || (mobile10 && uMobile.endsWith(mobile10)))) return true;
-          return false;
-        });
-        if (found?.user_metadata?.current_password) {
-          const cp = String(found.user_metadata.current_password).trim();
-          if (!/^[a-f0-9]{32,128}$/i.test(cp) && !cp.startsWith('$2')) {
-            return res.json({ success: true, password: cp });
+        if (!matchedDbUser && resolvedEmail) {
+          const { data: uRow } = await db.from('users').select('id, name, email, mobile, role, password').ilike('email', resolvedEmail).maybeSingle();
+          if (uRow) matchedDbUser = uRow;
+        }
+        if (!matchedDbUser && resolvedMobile && resolvedMobile.length >= 7 && resolvedMobile !== '0000000000') {
+          const { data: mobRows } = await db.from('users').select('id, name, email, mobile, role, password').eq('mobile', resolvedMobile);
+          if (Array.isArray(mobRows) && mobRows.length > 0) {
+            const targetNameLower = String(targetStaffRecord?.name || '').trim().toLowerCase();
+            matchedDbUser =
+              mobRows.find((u: any) => targetNameLower && String(u.name || '').trim().toLowerCase() === targetNameLower) ||
+              mobRows.find((u: any) => !isSystemDivisionAccountServer({ id: u.id, email: u.email })) ||
+              null;
           }
         }
-      }
 
-      // 4. Check users table
-      if (cleanEmail || cleanMobile || targetAuthId) {
-        let uQuery = db.from('users').select('password');
-        if (targetAuthId) uQuery = uQuery.eq('id', targetAuthId);
-        else if (cleanEmail) uQuery = uQuery.ilike('email', cleanEmail);
-        else if (cleanMobile) uQuery = uQuery.ilike('mobile', `%${mobile10}%`);
+        const dbUserIsSystem = matchedDbUser && (
+          isSystemDivisionAccountServer({ id: matchedDbUser.id, email: matchedDbUser.email }) ||
+          String(matchedDbUser.role || '').trim().toLowerCase() === 'business owner'
+        );
 
-        const { data: uRows } = await uQuery.limit(1);
-        if (uRows && uRows.length > 0 && uRows[0]?.password && !/^[a-f0-9]{32,128}$/i.test(uRows[0].password.trim()) && !String(uRows[0].password).trim().startsWith('$2')) {
-          return res.json({ success: true, password: uRows[0].password.trim() });
+        const dbUserPwd = !dbUserIsSystem && matchedDbUser?.password && !isHashedOrEncrypted(String(matchedDbUser.password))
+          ? String(matchedDbUser.password).trim()
+          : null;
+        const notesPwd = extractNotesCurrentPwd(targetStaffRecord?.notes);
+        const metaPwd = [
+          targetAuthUser?.user_metadata?.current_password,
+          targetAuthUser?.user_metadata?.password
+        ].find(v => v && !isHashedOrEncrypted(String(v)));
+        const staffRowRawPwd = targetStaffRecord?.Password ?? targetStaffRecord?.password ?? null;
+        const staffRowPlain = staffRowRawPwd && !isHashedOrEncrypted(String(staffRowRawPwd))
+          ? String(staffRowRawPwd).trim()
+          : null;
+
+        // If the staff record stores a SHA-256 hash, check if any real candidate matches it mathematically
+        if (typeof staffRowRawPwd === 'string' && /^[0-9a-f]{64}$/i.test(staffRowRawPwd.trim())) {
+          const hashTarget = staffRowRawPwd.trim().toLowerCase();
+          const hashCandidates = [
+            dbUserPwd,
+            metaPwd ? String(metaPwd).trim() : null,
+            notesPwd,
+            resolvedMobile && resolvedMobile.length >= 6 ? resolvedMobile : null,
+            resolvedMobile && resolvedMobile.length >= 6 ? `${resolvedMobile}@123` : null
+          ].filter(Boolean) as string[];
+          for (const cand of hashCandidates) {
+            const digest = crypto.createHash('sha256').update(cand).digest('hex').toLowerCase();
+            if (digest === hashTarget) {
+              resolvedPassword = cand;
+              break;
+            }
+          }
+        }
+
+        if (!resolvedPassword) {
+          resolvedPassword = dbUserPwd || (metaPwd ? String(metaPwd).trim() : null) || notesPwd || staffRowPlain || null;
+        }
+
+        // Persist AES-256-GCM enc_pwd onto targetAuthUser for fast future retrieval
+        if (resolvedPassword && targetAuthUser && !hadValidEncPwd) {
+          try {
+            await db.auth.admin.updateUserById(targetAuthUser.id, {
+              app_metadata: {
+                ...(targetAuthUser.app_metadata || {}),
+                enc_pwd: encryptStaffPassword(resolvedPassword)
+              }
+            });
+          } catch (_) {}
         }
       }
 
-      // 5. If no plaintext password is stored in auth or database (e.g. stored only as secure hash), return null
-      return res.json({ success: true, password: null });
+      if (!resolvedPassword) {
+        return res.json({ success: true, password: null, requiresReset: true });
+      }
+
+      // Ensure the corresponding staff profile table password column is synchronized whenever empty, hashed, or stale
+      if (targetStaffRecord?.staff_id && (targetDept === 'production' || targetDept === 'operations')) {
+        const staffTableName = targetDept === 'production' ? 'production_staff' : 'operations_staff';
+        const existingColVal = targetStaffRecord.Password ?? targetStaffRecord.password ?? null;
+        const needsTableSync =
+          !existingColVal ||
+          isHashedOrEncrypted(String(existingColVal)) ||
+          String(existingColVal).trim() !== resolvedPassword;
+        if (needsTableSync) {
+          await syncStaffPasswordColumnsOnRow(db, {
+            table: staffTableName,
+            staffId: targetStaffRecord.staff_id,
+            password: resolvedPassword
+          }).catch(() => {});
+        }
+      }
+
+      return res.json({ success: true, password: resolvedPassword, requiresReset: false });
     } catch (err: any) {
-      console.error('[get-staff-password] error:', err);
-      return res.status(500).json({ success: false, error: err.message });
+      console.error('[Server Auth Get Staff Password Error]', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to retrieve staff password' });
     }
   });
 
@@ -2921,13 +4207,26 @@ async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production' && hasDist;
 
   if (!isProduction) {
-    console.log('[Server] Mounting Vite development middleware...');
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
+    console.log('[Server] Initializing Vite development middleware...');
+    let viteInstance: any = null;
+    const viteReadyPromise = (async () => {
+      const { createServer: createViteServer } = await import('vite');
+      viteInstance = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      console.log('[Server] Vite development middleware ready.');
+      return viteInstance;
+    })();
+
+    app.use(async (req, res, next) => {
+      try {
+        const vite = viteInstance || (await viteReadyPromise);
+        return vite.middlewares(req, res, next);
+      } catch (err) {
+        return next(err);
+      }
     });
-    app.use(vite.middlewares);
   } else {
     console.log('[Server] Serving production static assets from dist...');
     app.use(express.static(distPath));
@@ -2942,3 +4241,4 @@ async function startServer() {
 }
 
 startServer();
+
