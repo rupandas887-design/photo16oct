@@ -208,8 +208,9 @@ export const ProductionStaffDirectoryModule: React.FC = () => {
     try {
       if (editingStaff) {
         // Edit Mode
-        const newPasswordValue = formPassword.trim();
-        if (newPasswordValue && newPasswordValue.length < 6) {
+        const hasNewPwd = typeof formPassword === 'string' && formPassword.trim() !== '';
+        const newPasswordValue = hasNewPwd ? formPassword : '';
+        if (hasNewPwd && newPasswordValue.length < 6) {
           setFormError("Password must be at least 6 characters.");
           showToast('error', "Password must be at least 6 characters.");
           setIsSaving(false);
@@ -221,26 +222,30 @@ export const ProductionStaffDirectoryModule: React.FC = () => {
           ...payload,
           employee_id: formEmployeeId.trim(),
           city: formCity.trim() || 'N/A',
-          ...(newPasswordValue ? { password: newPasswordValue } : {})
+          ...(hasNewPwd ? { password: newPasswordValue } : {})
         } as any);
-        if (newPasswordValue) {
+        if (hasNewPwd) {
+          setFormPassword('');
           setCurrentStaffPassword(newPasswordValue);
           setShowCurrentPassword(true);
+          setCurrentPasswordError('');
+          const refreshedStatus = await fetchStaffPasswordStatus(editingStaff, 'production');
+          if (refreshedStatus?.password) {
+            setCurrentStaffPassword(refreshedStatus.password);
+          }
+          showToast('success', '✅ Production staff credentials and password updated successfully.');
+          setIsSaving(false);
+          return;
         }
 
-        showToast(
-          'success',
-          newPasswordValue
-            ? '✅ Production staff credentials and password updated successfully.'
-            : '✅ Production staff profile updated successfully.'
-        );
+        showToast('success', '✅ Production staff profile updated successfully.');
         setIsFormOpen(false);
         setEditingStaff(null);
       } else {
         // New Staff Mode
-        const cleanPwd = formPassword.trim();
-        const finalPwd = cleanPwd || `${formMobile.replace(/\D/g, '')}@123`;
-        if (cleanPwd && cleanPwd.length < 6) {
+        const hasEnteredPwd = typeof formPassword === 'string' && formPassword.trim() !== '';
+        const finalPwd = hasEnteredPwd ? formPassword : `${formMobile.replace(/\D/g, '')}@123`;
+        if (hasEnteredPwd && formPassword.length < 6) {
           setFormError('Password must be at least 6 characters.');
           showToast('error', 'Password must be at least 6 characters.');
           setIsSaving(false);

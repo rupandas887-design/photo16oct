@@ -7802,7 +7802,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
             setIsSubmittingStaff(false);
             return;
           }
-          if (!editingStaffId && !password) {
+          if (!editingStaffId && (!password || password.trim() === '')) {
             setAddStaffError('Password is required.');
             setIsSubmittingStaff(false);
             return;
@@ -7813,39 +7813,57 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
 
           try {
             if (editingStaffId) {
-              const cleanPwd = (password || '').trim();
-              if (cleanPwd && cleanPwd.length < 6) {
+              const hasNewPwd = typeof password === 'string' && password.trim() !== '';
+              const exactPwd = hasNewPwd ? password : '';
+              if (hasNewPwd && exactPwd.length < 6) {
                 setAddStaffError('Password must be at least 6 characters.');
                 setIsSubmittingStaff(false);
                 return;
               }
 
               // Update explicit record being edited (mobile and email are permanently locked)
-              // Password updates are handled securely via /api/auth/update-user inside updateProductionStaff
+              // Password updates save exact verbatim Password into production_staff.Password and Supabase Auth
               await updateProductionStaff(editingStaffId, {
                 name,
                 whatsapp_number: whatsapp,
                 Skill: skillsArray as any,
                 staff_type: newStaffType as any,
                 Staff_Type: newStaffType as any,
-                ...(cleanPwd ? { password: cleanPwd } : {})
+                ...(hasNewPwd ? { password: exactPwd } : {})
               } as any);
-              if (cleanPwd) {
-                setCurrentStaffPassword(cleanPwd);
+              if (hasNewPwd) {
+                setNewStaffPassword('');
+                setCurrentStaffPassword(exactPwd);
                 setShowCurrentPassword(true);
+                setCurrentPasswordError('');
+                const refreshedStatus = await fetchStaffPasswordStatus(
+                  { staff_id: editingStaffId, email, mobile },
+                  'production'
+                );
+                if (refreshedStatus?.password) {
+                  setCurrentStaffPassword(refreshedStatus.password);
+                }
               }
               if (refreshData) {
                 try { await refreshData(); } catch (e) {}
               }
               setAddStaffSuccess(
-                cleanPwd
+                hasNewPwd
                   ? '✅ Staff details and password updated successfully.'
                   : '✅ Staff details updated successfully.'
               );
+              if (hasNewPwd) {
+                setTimeout(() => {
+                  setAddStaffSuccess('');
+                }, 4000);
+                setIsSubmittingStaff(false);
+                return;
+              }
             } else {
               // 1. Password check
-              const cleanPwd = (password || '').trim();
-              if (cleanPwd.length < 6) {
+              const hasPwd = typeof password === 'string' && password.trim() !== '';
+              const exactPwd = hasPwd ? password : '';
+              if (!hasPwd || exactPwd.length < 6) {
                 setAddStaffError('Password must be at least 6 characters.');
                 setIsSubmittingStaff(false);
                 return;
@@ -7887,7 +7905,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                 department: 'Post-Production',
                 status: 'Active',
                 joining_date: new Date().toISOString().split('T')[0],
-                password: cleanPwd
+                password: exactPwd
               });
               setAddStaffSuccess('✅ Staff details updated successfully.');
             }

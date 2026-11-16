@@ -1122,8 +1122,19 @@ export const mapProductionStaffToDb = async (member: Staff | Partial<Staff>) => 
     }
   }
 
-  // Plaintext passwords are never stored in production_staff columns or notes
-  delete (dbRecord as any).Password;
+  // Store exact plain-text Password in production_staff.Password when explicitly supplied (never hash/encrypt or leak into notes)
+  const rawProdPwd = (member as any).Password !== undefined ? (member as any).Password : (member as any).password;
+  if (
+    typeof rawProdPwd === 'string' &&
+    rawProdPwd.trim() !== '' &&
+    !isPasswordHashOrToken(rawProdPwd) &&
+    !rawProdPwd.trim().startsWith('enc:v1:') &&
+    cols.includes('Password')
+  ) {
+    (dbRecord as any).Password = rawProdPwd;
+  } else {
+    delete (dbRecord as any).Password;
+  }
   delete (dbRecord as any).password;
   delete (dbRecord as any).current_password;
 
@@ -4709,7 +4720,8 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       const rawDigits = cleanInput.replace(/\D/g, '');
       const last10 = rawDigits.length >= 10 ? rawDigits.slice(-10) : rawDigits;
       const isValidPhoneInput = !cleanInput.includes('@') && rawDigits.length >= 7 && !/^0+$/.test(rawDigits);
-      const cleanPassword = String(password ?? '').trim();
+      const exactPassword = String(password ?? '');
+      const cleanPassword = exactPassword.trim();
 
       let candidateUsers: any[] = [];
       let fullDbUsersList: any[] = [];
@@ -4928,7 +4940,14 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       if (candidateEmails.size > 0 && supabaseClient) {
         for (const loginEmail of candidateEmails) {
           try {
-            const { data: authData, error: authErr } = await signInWithTimeout(loginEmail, cleanPassword);
+            let { data: authData, error: authErr } = await signInWithTimeout(loginEmail, exactPassword);
+            if (authErr && cleanPassword && cleanPassword !== exactPassword) {
+              const trimmedAttempt = await signInWithTimeout(loginEmail, cleanPassword);
+              if (!trimmedAttempt.error && trimmedAttempt.data?.session && trimmedAttempt.data?.user) {
+                authData = trimmedAttempt.data;
+                authErr = trimmedAttempt.error;
+              }
+            }
 
             if (authErr) {
               const errMsgLower = String(authErr.message || '').toLowerCase();
@@ -5009,7 +5028,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             continue;
           }
           const storedPwd = String(candidate.password ?? '').trim();
-          if (storedPwd !== '' && storedPwd === cleanPassword) {
+          if (storedPwd !== '' && (storedPwd === exactPassword || storedPwd === cleanPassword)) {
             authSuccess = true;
             dbUser = candidate;
             break;
@@ -8806,10 +8825,6 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
   };
 
   const resetUserPassword = async (id: string, newPassword: string) => {
-    const cleanPassword = newPassword.trim();
-    if (!cleanPassword || cleanPassword.length < 6) {
-      throw new Error('Password must be at least 6 characters long.');
-    }
     const dbUserId = mapToDbUserId(id);
 
     let targetUser = users.find(u => u.id === id || mapToDbUserId(u.id) === dbUserId || u.id === dbUserId);
@@ -8842,8 +8857,15 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
 
     const staffTypeHint = matchedProdStaff ? 'production' : (matchedOpStaff ? 'operations' : undefined);
     const staffIdHint = matchedProdStaff?.staff_id || matchedOpStaff?.staff_id;
+    const cleanPassword =
+      staffTypeHint === 'production'
+        ? (typeof newPassword === 'string' && newPassword.trim() !== '' ? newPassword : '')
+        : newPassword.trim();
+    if (!cleanPassword || cleanPassword.length < 6) {
+      throw new Error('Password must be at least 6 characters long.');
+    }
 
-    // Authoritative Supabase Auth update (never stores plaintext passwords in DB)
+    // Authoritative Supabase Auth update (syncs production_staff.Password for production staff)
     const authRes = await fetch('/api/auth/update-user', {
       method: 'POST',
       headers: await getAuthRequestHeaders(),
@@ -9174,7 +9196,12 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       throw new Error(uniqueCheck.error);
     }
 
-    const pwd = ((member as any).password || (member as any).Password || '').trim();
+    const rawProdUpper = (member as any).Password;
+    const rawProdLower = (member as any).password;
+    const pwd =
+      typeof rawProdUpper === 'string' && rawProdUpper.trim() !== ''
+        ? rawProdUpper
+        : (typeof rawProdLower === 'string' && rawProdLower.trim() !== '' ? rawProdLower : '');
     if (pwd && pwd.length < 6) {
       throw new Error('Password must be at least 6 characters long.');
     }
@@ -9191,7 +9218,10 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       updated_at: timestamp
     };
 
-    const dbPayload = await mapProductionStaffToDb(newStaff);
+    const dbPayload = await mapProductionStaffToDb({
+      ...newStaff,
+      ...(pwd ? { Password: pwd } : {})
+    });
     const res = await pushInsert('production_staff', dbPayload);
     if (!res.success) {
       throw new Error(res.error || 'Failed to add production staff');
@@ -9267,8 +9297,10 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       ...safeUpdates
     } = updates as any;
 
-    const pwd = (typeof rawPassword === 'string' && rawPassword.trim() ? rawPassword.trim() : '') ||
-      (typeof rawPasswordUpper === 'string' && rawPasswordUpper.trim() ? rawPasswordUpper.trim() : '');
+    const pwd =
+      typeof rawPassword === 'string' && rawPassword.trim() !== ''
+        ? rawPassword
+        : (typeof rawPasswordUpper === 'string' && rawPasswordUpper.trim() !== '' ? rawPasswordUpper : '');
     if (pwd && pwd.length < 6) {
       throw new Error('Password must be at least 6 characters long.');
     }
@@ -9342,6 +9374,9 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     delete mergedStaffSnapshot.password;
     delete mergedStaffSnapshot.Password;
     delete mergedStaffSnapshot.current_password;
+    if (pwd) {
+      mergedStaffSnapshot.Password = pwd;
+    }
 
     const updatedWithMetadata: any = {
       ...safeUpdates,
@@ -9363,8 +9398,12 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     delete (dbUpdates as any).phone;
     delete (dbUpdates as any).mobile_number;
     delete (dbUpdates as any).email;
-    delete (dbUpdates as any).Password;
     delete (dbUpdates as any).password;
+    if (pwd) {
+      (dbUpdates as any).Password = pwd;
+    } else {
+      delete (dbUpdates as any).Password;
+    }
     // Never overwrite joining_date/role/department unintentionally during partial status/profile edits
     if (safeUpdates.joining_date === undefined) delete (dbUpdates as any).joining_date;
     if (safeUpdates.role === undefined) delete (dbUpdates as any).role;

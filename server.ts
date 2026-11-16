@@ -459,9 +459,39 @@ async function startServer() {
     }
     const clone = { ...record };
 
-    if (table === 'production_staff' || table === 'operations_staff' || table === 'staff') {
+    if (table === 'operations_staff' || table === 'staff') {
       delete clone.password;
       delete clone.Password;
+      delete clone.current_password;
+      if (clone.notes && typeof clone.notes === 'string' && clone.notes.trim().startsWith('{')) {
+        try {
+          const parsedNotes = JSON.parse(clone.notes);
+          if (parsedNotes && typeof parsedNotes === 'object') {
+            delete parsedNotes.current_password;
+            delete parsedNotes.password;
+            delete parsedNotes.Password;
+            clone.notes = JSON.stringify(parsedNotes);
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (table === 'production_staff') {
+      const rawCapPwd = clone.Password;
+      const isValidPlainProdPwd =
+        typeof rawCapPwd === 'string' &&
+        rawCapPwd.trim() !== '' &&
+        !rawCapPwd.trim().startsWith('enc:v1:') &&
+        !/^[0-9a-f]{32}$/i.test(rawCapPwd.trim()) &&
+        !/^[0-9a-f]{40}$/i.test(rawCapPwd.trim()) &&
+        !/^[0-9a-f]{64}$/i.test(rawCapPwd.trim()) &&
+        !/^[0-9a-f]{128}$/i.test(rawCapPwd.trim()) &&
+        !/^\$2[aby]?\$\d{2}\$/.test(rawCapPwd.trim()) &&
+        !rawCapPwd.trim().startsWith('$argon2');
+      if (!isValidPlainProdPwd) {
+        delete clone.Password;
+      }
+      delete clone.password;
       delete clone.current_password;
       if (clone.notes && typeof clone.notes === 'string' && clone.notes.trim().startsWith('{')) {
         try {
@@ -3128,11 +3158,10 @@ async function startServer() {
     }
   ): Promise<{ success: boolean; error?: string }> => {
     const payload: Record<string, any> = { ...(params.extraUpdates || {}) };
-    const cleanPwd = typeof params.password === 'string' && params.password.trim() !== '' ? params.password.trim() : null;
 
     if (params.table === 'production_staff') {
-      if (cleanPwd !== null) {
-        payload.Password = cleanPwd;
+      if (typeof params.password === 'string' && params.password.trim() !== '') {
+        payload.Password = params.password;
       }
       if (Object.keys(payload).length === 0) return { success: true };
       const { error } = await db.from('production_staff').update(payload).eq('staff_id', params.staffId);
@@ -3143,6 +3172,7 @@ async function startServer() {
       return { success: true };
     }
 
+    const cleanPwd = typeof params.password === 'string' && params.password.trim() !== '' ? params.password.trim() : null;
     if (cleanPwd !== null) {
       const opsCols = await getOperationsPasswordColumns(db);
       for (const col of opsCols) {
@@ -3354,11 +3384,6 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'You are not authorized to create staff credentials.' });
       }
 
-      const cleanPwd = typeof password === 'string' ? password.trim() : '';
-      if (!cleanPwd || cleanPwd.length < 6) {
-        return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long.' });
-      }
-
       const cleanEmailStr = cleanEmail(email);
       const cleanMobileStr = cleanPhone(mobile);
       const normalizedRole = normalizeAuthRole(role, staff_type);
@@ -3374,6 +3399,14 @@ async function startServer() {
       }
       if (callerAuth.role === 'Operations Team' && resolvedTable === 'production_staff') {
         return res.status(403).json({ success: false, error: 'Operation Manager can only create Operation staff credentials.' });
+      }
+
+      const cleanPwd =
+        resolvedTable === 'production_staff'
+          ? (typeof password === 'string' && password.trim() !== '' ? password : '')
+          : (typeof password === 'string' ? password.trim() : '');
+      if (!cleanPwd || cleanPwd.length < 6) {
+        return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long.' });
       }
 
       console.log(`[Server Auth] Creating user ${cleanEmailStr} with role ${normalizedRole}`);
@@ -3509,10 +3542,7 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'You are not authorized to update staff credentials.' });
       }
 
-      const cleanPwd = typeof password === 'string' && password.trim() !== '' ? password.trim() : null;
-      if (cleanPwd !== null && cleanPwd.length < 6) {
-        return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long.' });
-      }
+      const hasRawPwd = typeof password === 'string' && password.trim() !== '';
 
       const roleStr = String(role || '').trim().toLowerCase();
       const isStaffRole =
@@ -3576,6 +3606,13 @@ async function startServer() {
       }
       if (callerAuth.role === 'Operations Team' && resolvedStaffTable === 'production_staff') {
         return res.status(403).json({ success: false, error: 'Operation Manager can only update Operation staff credentials.' });
+      }
+
+      const cleanPwd = hasRawPwd
+        ? (resolvedStaffTable === 'production_staff' ? password : password.trim())
+        : null;
+      if (cleanPwd !== null && cleanPwd.length < 6) {
+        return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long.' });
       }
 
       if (existingStaffRecord) {
@@ -4107,8 +4144,8 @@ async function startServer() {
       let hadValidEncPwd = false;
 
       const staffRowRawPwd = targetStaffRecord?.Password ?? targetStaffRecord?.password ?? null;
-      const staffRowPlain = staffRowRawPwd && !isHashedOrEncrypted(String(staffRowRawPwd))
-        ? String(staffRowRawPwd).trim()
+      const staffRowPlain = staffRowRawPwd && String(staffRowRawPwd).trim() !== '' && !isHashedOrEncrypted(String(staffRowRawPwd))
+        ? (targetDept === 'production' ? String(staffRowRawPwd) : String(staffRowRawPwd).trim())
         : null;
 
       // 1. Primary source for Production Staff: plain-text 'Password' column in production_staff
@@ -4227,7 +4264,9 @@ async function startServer() {
         const needsTableSync =
           !existingColVal ||
           isHashedOrEncrypted(String(existingColVal)) ||
-          String(existingColVal).trim() !== resolvedPassword;
+          (targetDept === 'production'
+            ? String(existingColVal) !== resolvedPassword
+            : String(existingColVal).trim() !== resolvedPassword);
         if (needsTableSync) {
           await syncStaffPasswordColumnsOnRow(db, {
             table: staffTableName,
