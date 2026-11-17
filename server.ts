@@ -2749,8 +2749,10 @@ async function startServer() {
       if (data) dbUserRow = data;
     }
     if (!dbUserRow && callerEmail) {
-      const { data } = await db.from('users').select('id, email, mobile, role, active').ilike('email', callerEmail).maybeSingle();
-      if (data) dbUserRow = data;
+      const { data } = await db.from('users').select('id, email, mobile, role, active').ilike('email', callerEmail).limit(10);
+      if (Array.isArray(data) && data.length > 0) {
+        dbUserRow = data.find((r: any) => r.active !== false && String(r.active) !== 'false') || data[0];
+      }
     }
 
     const isActive = dbUserRow
@@ -3421,12 +3423,30 @@ async function startServer() {
         return null;
       };
 
+      const getAliasTerms = (val: string): string[] => {
+        const v = val.trim().toLowerCase();
+        if (v === 'owner@photocrew.com' || v === 'founder@photocrew.com' || v === 'owner' || v === 'founder') {
+          return [v, 'owner@photocrew.com', 'founder@photocrew.com', 'owner'];
+        }
+        if (v === 'operation@photocrew.com' || v === 'operations@photocrew.com' || v === 'operation' || v === 'operations') {
+          return [v, 'operation@photocrew.com', 'operations@photocrew.com', 'operation'];
+        }
+        if (v === 'production@photocrew.com' || v === 'production') {
+          return [v, 'production@photocrew.com', 'production'];
+        }
+        if (v === 'sales@photocrew.com' || v === 'sale@photocrew.com') {
+          return [v, 'sales@photocrew.com', 'sale@photocrew.com'];
+        }
+        return [v];
+      };
+      const aliasSet = new Set<string>(getAliasTerms(lowerInput));
+
       const matchesRow = (r: any) => {
         if (!r) return false;
         const rEmail = String(r.email ?? '').trim().toLowerCase();
         const rUser = String(r.username ?? '').trim().toLowerCase();
-        if (rEmail && rEmail === lowerInput) return true;
-        if (rUser && rUser === lowerInput) return true;
+        if (rEmail && aliasSet.has(rEmail)) return true;
+        if (rUser && aliasSet.has(rUser)) return true;
         if (isPhone) {
           const rMob = String(r.mobile ?? r.mobile_number ?? '').replace(/\D/g, '');
           const rWa = String(r.whatsapp_number ?? '').replace(/\D/g, '');
@@ -4078,16 +4098,38 @@ async function startServer() {
         });
       }
 
+      const expandSystemAliases = (term: string): string[] => {
+        const t = term.trim().toLowerCase();
+        if (t === 'owner@photocrew.com' || t === 'founder@photocrew.com' || t === 'owner' || t === 'founder') {
+          return [t, 'owner@photocrew.com', 'founder@photocrew.com', 'owner'];
+        }
+        if (t === 'operation@photocrew.com' || t === 'operations@photocrew.com' || t === 'operation' || t === 'operations') {
+          return [t, 'operation@photocrew.com', 'operations@photocrew.com', 'operation'];
+        }
+        if (t === 'production@photocrew.com' || t === 'production') {
+          return [t, 'production@photocrew.com', 'production'];
+        }
+        if (t === 'sales@photocrew.com' || t === 'sale@photocrew.com') {
+          return [t, 'sales@photocrew.com', 'sale@photocrew.com'];
+        }
+        return [t];
+      };
+      const expandedLowerTerms = new Set<string>();
+      for (const term of lookupTerms) {
+        for (const alias of expandSystemAliases(term)) {
+          expandedLowerTerms.add(alias);
+        }
+      }
+
       const candidates = allUsers.filter((u: any) => {
         if (targetUserId && String(u.id || '').trim() === targetUserId) return true;
         const uEmail = cleanEmail(u.email);
         const uUser = cleanEmail(u.username);
         const uMob = cleanPhone(u.mobile);
         const uMob10 = uMob.length >= 10 ? uMob.slice(-10) : uMob;
+        if (uEmail && expandedLowerTerms.has(uEmail)) return true;
+        if (uUser && expandedLowerTerms.has(uUser)) return true;
         for (const term of lookupTerms) {
-          const lowerTerm = term.toLowerCase();
-          if (uEmail && uEmail === lowerTerm) return true;
-          if (uUser && uUser === lowerTerm) return true;
           if (!term.includes('@')) {
             const digits = term.replace(/\D/g, '');
             const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
@@ -4120,10 +4162,19 @@ async function startServer() {
         return timingEq(storedTrimmed, cleanPwd) || (rawPwd !== cleanPwd && timingEq(storedExact, rawPwd));
       };
 
-      const activePasswordMatched = candidates.find((u: any) => {
-        const isActive = u.active !== false && String(u.active) !== 'false' && u.active !== 0 && String(u.active) !== '0';
-        return isActive && passwordsMatch(u.password);
-      });
+      // Prefer exact targetUserId match if its password matches; then non-placeholder Auth UUID rows; otherwise any active matching row
+      const isRowActive = (u: any) =>
+        u.active !== false && String(u.active) !== 'false' && u.active !== 0 && String(u.active) !== '0';
+      const isRealAuthUuid = (idVal: any) => {
+        const s = String(idVal || '').trim();
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) && !s.startsWith('00000000-0000-0000-0000-');
+      };
+
+      const allActivePasswordMatches = candidates.filter((u: any) => isRowActive(u) && passwordsMatch(u.password));
+      const activePasswordMatched =
+        allActivePasswordMatches.find((u: any) => targetUserId && String(u.id || '').trim() === targetUserId) ||
+        allActivePasswordMatches.find((u: any) => isRealAuthUuid(u.id)) ||
+        allActivePasswordMatches[0];
 
       if (!activePasswordMatched) {
         const anyMatchedPwd = candidates.some((u: any) => passwordsMatch(u.password));
@@ -4171,8 +4222,23 @@ async function startServer() {
         });
       }
 
+      // Synchronize Supabase Auth password in the background if this manager has a corresponding Auth UUID and authenticated via DB fallback
+      const matchedIdStr = String(activePasswordMatched.id || '').trim();
+      if (!jwt && db.auth?.admin) {
+        for (const matchedRow of allActivePasswordMatches) {
+          const rowId = String(matchedRow.id || '').trim();
+          if (isRealAuthUuid(rowId)) {
+            db.auth.admin.updateUserById(rowId, {
+              password: String(matchedRow.password).trim(),
+              email_confirm: true,
+              ban_duration: 'none'
+            }).catch(() => {});
+          }
+        }
+      }
+
       const token = signManagerSessionToken({
-        uid: String(activePasswordMatched.id),
+        uid: matchedIdStr,
         email: cleanEmail(activePasswordMatched.email),
         role: authInfo.role
       });
@@ -4181,7 +4247,7 @@ async function startServer() {
       return res.json({
         success: true,
         token,
-        userId: String(activePasswordMatched.id),
+        userId: matchedIdStr,
         email: cleanEmail(activePasswordMatched.email),
         role: authInfo.role
       });
@@ -4552,25 +4618,45 @@ async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production' && hasDist;
 
   if (!isProduction) {
-    console.log('[Server] Initializing Vite development middleware...');
     let viteInstance: any = null;
-    const viteReadyPromise = (async () => {
-      const { createServer: createViteServer } = await import('vite');
-      viteInstance = await createViteServer({
-        server: { middlewareMode: true },
-        appType: 'spa',
-      });
-      console.log('[Server] Vite development middleware ready.');
-      return viteInstance;
-    })();
+    let viteInitPromise: Promise<any> | null = null;
+
+    const getViteServer = () => {
+      if (viteInstance) return Promise.resolve(viteInstance);
+      if (!viteInitPromise) {
+        console.log('[Server] Initializing Vite development middleware...');
+        viteInitPromise = (async () => {
+          const { createServer: createViteServer } = await import('vite');
+          viteInstance = await createViteServer({
+            server: { middlewareMode: true },
+            appType: 'spa',
+          });
+          console.log('[Server] Vite development middleware ready.');
+          return viteInstance;
+        })();
+      }
+      return viteInitPromise;
+    };
 
     app.use(async (req, res, next) => {
       try {
-        const vite = viteInstance || (await viteReadyPromise);
+        // Respond immediately to HEAD readiness probes even while Vite is warming up
+        if (!viteInstance && req.method === 'HEAD' && (req.path === '/' || req.path === '/index.html')) {
+          return res.status(200).end();
+        }
+        const vite = viteInstance || (await getViteServer());
         return vite.middlewares(req, res, next);
       } catch (err) {
         return next(err);
       }
+    });
+
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://0.0.0.0:${PORT}`);
+      // Warm up Vite right after the HTTP socket is listening on port 3000
+      setImmediate(() => {
+        getViteServer().catch(err => console.error('[Server] Vite init error:', err));
+      });
     });
   } else {
     console.log('[Server] Serving production static assets from dist...');
@@ -4578,11 +4664,11 @@ async function startServer() {
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
-  }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
-  });
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
 startServer();

@@ -658,6 +658,7 @@ export const fetchStaffPasswordStatus = async (
     const headers = await getAuthRequestHeaders();
     const res = await fetch('/api/auth/get-staff-password', {
       method: 'POST',
+      credentials: 'include',
       headers,
       body: JSON.stringify({
         staff_id: member.staff_id || member.id || undefined,
@@ -4821,6 +4822,23 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       let candidateUsers: any[] = [];
       let fullDbUsersList: any[] = [];
 
+      const getLoginAliasSet = (inputLower: string): Set<string> => {
+        if (inputLower === 'owner@photocrew.com' || inputLower === 'founder@photocrew.com' || inputLower === 'owner' || inputLower === 'founder') {
+          return new Set([inputLower, 'owner@photocrew.com', 'founder@photocrew.com', 'owner']);
+        }
+        if (inputLower === 'operation@photocrew.com' || inputLower === 'operations@photocrew.com' || inputLower === 'operation' || inputLower === 'operations') {
+          return new Set([inputLower, 'operation@photocrew.com', 'operations@photocrew.com', 'operation']);
+        }
+        if (inputLower === 'production@photocrew.com' || inputLower === 'production') {
+          return new Set([inputLower, 'production@photocrew.com', 'production']);
+        }
+        if (inputLower === 'sales@photocrew.com' || inputLower === 'sale@photocrew.com') {
+          return new Set([inputLower, 'sales@photocrew.com', 'sale@photocrew.com']);
+        }
+        return new Set([inputLower]);
+      };
+      const inputAliasSet = getLoginAliasSet(cleanInputLower);
+
       const matchesUserInput = (u: any) => {
         if (!u) return false;
         const uEmail = String(u.email ?? '').trim().toLowerCase();
@@ -4829,8 +4847,8 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         const uPhoneLast10 = uPhone.length >= 10 ? uPhone.slice(-10) : uPhone;
         const isValidUPhone = uPhone.length >= 7 && !/^0+$/.test(uPhone);
 
-        if (uEmail && uEmail === cleanInputLower) return true;
-        if (uUser && uUser === cleanInputLower) return true;
+        if (uEmail && inputAliasSet.has(uEmail)) return true;
+        if (uUser && inputAliasSet.has(uUser)) return true;
         if (isValidPhoneInput && isValidUPhone) {
           if (uPhone === rawDigits) return true;
           if (last10.length >= 7 && (uPhoneLast10 === last10 || uPhone.endsWith(last10))) return true;
@@ -5149,9 +5167,27 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       // CRITICAL: Always check the latest account status from the database rather than using an old/cached status
       try {
         const dbTargetId = authedUserObj?.id || mapToDbUserId(dbUser.id);
-        let freshStatusRecord: any = null;
+        let freshStatusRecord: any = fullDbUsersList.find(u => u.id === dbTargetId || u.id === dbUser.id) || null;
 
-        if (supabaseClient && dbTargetId) {
+        if (!freshStatusRecord && dbTargetId) {
+          try {
+            const idSrvRes = await fetchWithTimeout('/api/db/select', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                table: 'users',
+                matchColumn: 'id',
+                matchValue: dbTargetId
+              })
+            }, 8000);
+            const idSrvData = await idSrvRes.json();
+            if (idSrvData?.success && idSrvData.data?.[0]) {
+              freshStatusRecord = idSrvData.data[0];
+            }
+          } catch (e) {}
+        }
+
+        if (!freshStatusRecord && supabaseClient && dbTargetId) {
           try {
             const { data: directFresh } = await supabaseClient
               .from('users')
@@ -5162,33 +5198,21 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           } catch (e) {}
         }
 
-        if (!freshStatusRecord && dbUser.email && supabaseClient) {
-          try {
-            const { data: directByEmail } = await supabaseClient
-              .from('users')
-              .select('*')
-              .ilike('email', String(dbUser.email).trim())
-              .maybeSingle();
-            if (directByEmail) freshStatusRecord = directByEmail;
-          } catch (e) {}
-        }
-
         if (!freshStatusRecord && dbUser.email) {
-          try {
-            const srvRes = await fetch('/api/db/select', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                table: 'users',
-                matchColumn: 'email',
-                matchValue: String(dbUser.email).trim().toLowerCase()
-              })
-            });
-            const srvData = await srvRes.json();
-            if (srvData.success && srvData.data?.[0]) {
-              freshStatusRecord = srvData.data[0];
-            }
-          } catch (e) {}
+          const lowerTargetEmail = String(dbUser.email).trim().toLowerCase();
+          freshStatusRecord = fullDbUsersList.find(u => String(u.email ?? '').trim().toLowerCase() === lowerTargetEmail) || null;
+          if (!freshStatusRecord && supabaseClient) {
+            try {
+              const { data: directByEmail } = await supabaseClient
+                .from('users')
+                .select('*')
+                .ilike('email', String(dbUser.email).trim())
+                .limit(5);
+              if (Array.isArray(directByEmail) && directByEmail.length > 0) {
+                freshStatusRecord = directByEmail.find((r: any) => r.id === dbTargetId || r.id === dbUser.id) || directByEmail[0];
+              }
+            } catch (e) {}
+          }
         }
 
         if (freshStatusRecord) {
@@ -5197,8 +5221,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           setUsers(prev => prev.map(u => {
             const match = u.id === dbUser.id ||
               mapToDbUserId(u.id) === dbTargetId ||
-              u.id === dbTargetId ||
-              (dbUser.email && u.email && String(u.email).toLowerCase() === String(dbUser.email).toLowerCase());
+              u.id === dbTargetId;
             return match ? { ...u, ...sanitizedFresh } : u;
           }));
         }
@@ -8707,6 +8730,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       }
       const authRes = await fetch('/api/auth/create-user', {
         method: 'POST',
+        credentials: 'include',
         headers: await getAuthRequestHeaders(),
         body: JSON.stringify({
           email: safeEmail,
@@ -8812,6 +8836,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     // 1. Sync with auth server strictly before proceeding
     const authRes = await fetch('/api/auth/update-user', {
       method: 'POST',
+      credentials: 'include',
       headers: await getAuthRequestHeaders(),
       body: JSON.stringify({
         auth_id: dbUserId,
@@ -8945,6 +8970,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     try {
       await fetch('/api/auth/update-user', {
         method: 'POST',
+        credentials: 'include',
         headers: await getAuthRequestHeaders(),
         body: JSON.stringify({
           auth_id: dbUserId,
@@ -9017,6 +9043,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     // Authoritative Supabase Auth update (syncs production_staff.Password for production staff)
     const authRes = await fetch('/api/auth/update-user', {
       method: 'POST',
+      credentials: 'include',
       headers: await getAuthRequestHeaders(),
       body: JSON.stringify({
         auth_id: dbUserId,
@@ -9111,6 +9138,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       try {
         const authRes = await fetch('/api/auth/create-user', {
           method: 'POST',
+          credentials: 'include',
           headers: await getAuthRequestHeaders(),
           body: JSON.stringify({
             staff_id: staffId,
@@ -9189,6 +9217,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       if (cleanPwd || resolvedAuthId || targetEmail) {
         const authRes = await fetch('/api/auth/update-user', {
           method: 'POST',
+          credentials: 'include',
           headers: await getAuthRequestHeaders(),
           body: JSON.stringify({
             auth_id: resolvedAuthId,
@@ -9307,7 +9336,8 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       try {
         await fetch('/api/auth/delete-user', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          headers: await getAuthRequestHeaders(),
           body: JSON.stringify({
             staff_id: staffId,
             auth_id: targetAuthId,
@@ -9381,6 +9411,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       try {
         const authRes = await fetch('/api/auth/create-user', {
           method: 'POST',
+          credentials: 'include',
           headers: await getAuthRequestHeaders(),
           body: JSON.stringify({
             staff_id: staffId,
@@ -9463,6 +9494,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       if (pwd || updatedAuthId || targetEmail || targetMobile) {
         const authRes = await fetch('/api/auth/update-user', {
           method: 'POST',
+          credentials: 'include',
           headers: await getAuthRequestHeaders(),
           body: JSON.stringify({
             auth_id: updatedAuthId,
@@ -9614,7 +9646,8 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       try {
         await fetch('/api/auth/delete-user', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          headers: await getAuthRequestHeaders(),
           body: JSON.stringify({
             staff_id: staffId,
             auth_id: targetAuthId,
