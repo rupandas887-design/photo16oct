@@ -4562,214 +4562,45 @@ const RevenuePaymentSummarySection: React.FC<RevenuePaymentSummarySectionProps> 
   const [showFilters, setShowFilters] = useState(false);
   const [paymentTab, setPaymentTab] = useState<'all' | 'pending' | 'history'>('all');
 
-  // Combined detailed records
+  // Combined detailed records powered by calculateAllPendingRecords (single source of truth for financial & payment calculations)
   const records = useMemo(() => {
-    const coveredOrderIds = new Set<string>();
-    orders.forEach(o => {
-      getAllMatchingOrderIds(o.order_id, o.lead_id, orders, leads).forEach(id => coveredOrderIds.add(id));
-    });
+    const pendingRecs = calculateAllPendingRecords(orders, leads, payments, paymentHistory);
+    return pendingRecs.map(r => {
+      const prod = production.find(p => p.tracking_id === r.leadId || p.order_id === r.leadId || p.tracking_id === r.orderId || p.order_id === r.orderId);
+      const isCompleted = ['Event Completed', 'Client Acceptance', 'Delivered', 'Project Delivered', 'Completed'].includes(r.order?.current_stage || r.lead?.current_status) || prod?.editing_status === 'Client Acceptance';
+      const isClosed = r.order?.current_stage === 'Order Closed' || r.order?.current_stage === 'Closed' || prod?.editing_status === 'Order Closed';
 
-    // Find any leads or payments with payment history that are not yet in orders table
-    const standalonePendingOrders: any[] = [];
-    (paymentHistory || []).forEach(h => {
-      const hid = String(h.order_id || '').trim();
-      if (!hid || coveredOrderIds.has(hid)) return;
-
-      const matchingLead = leads.find(l => {
-        const leadIds = getAllMatchingOrderIds(null, l.lead_id, orders, leads);
-        return leadIds.includes(hid);
-      });
-      const isAlreadyAdded = standalonePendingOrders.some(s => {
-        const sIds = getAllMatchingOrderIds(s.order_id, s.lead_id, orders, leads);
-        return sIds.includes(hid);
-      });
-      if (!isAlreadyAdded) {
-        standalonePendingOrders.push({
-          order_id: (matchingLead as any)?.order_id || hid,
-          lead_id: matchingLead?.lead_id || hid,
-          customer_name: matchingLead?.customer_name || 'Customer',
-          event_type: matchingLead?.event_type || 'Event Photography',
-          event_date: matchingLead?.event_date || (h.payment_date ? h.payment_date.split('T')[0] : ''),
-          quotation_amount: Number(matchingLead?.Final_Quotation_Amount) || Number(matchingLead?.budget) || Number(h.amount) || 0,
-          current_stage: 'Confirmed',
-          order_status: 'Confirmed',
-          created_at: h.created_at || new Date().toISOString()
-        });
-      }
-    });
-
-    // Also check payments table for any pending payments without order records
-    (payments || []).forEach(p => {
-      const pid = String(p.order_id || '').trim();
-      if (!pid || coveredOrderIds.has(pid)) return;
-      const isAlreadyAdded = standalonePendingOrders.some(s => {
-        const sIds = getAllMatchingOrderIds(s.order_id, s.lead_id, orders, leads);
-        return sIds.includes(pid);
-      });
-      if (!isAlreadyAdded) {
-        const matchingLead = leads.find(l => {
-          const leadIds = getAllMatchingOrderIds(null, l.lead_id, orders, leads);
-          return leadIds.includes(pid);
-        });
-        standalonePendingOrders.push({
-          order_id: (matchingLead as any)?.order_id || pid,
-          lead_id: matchingLead?.lead_id || pid,
-          customer_name: matchingLead?.customer_name || 'Customer',
-          event_type: matchingLead?.event_type || 'Event Photography',
-          event_date: matchingLead?.event_date || (p.payment_date ? p.payment_date.split('T')[0] : ''),
-          quotation_amount: Number(matchingLead?.Final_Quotation_Amount) || Number(matchingLead?.budget) || Number(p.quotation_amount) || 0,
-          current_stage: 'Confirmed',
-          order_status: 'Confirmed',
-          created_at: (p as any).created_at || new Date().toISOString()
-        });
-      }
-    });
-
-    const allOrderSource = [...orders, ...standalonePendingOrders];
-
-    return allOrderSource.map(o => {
-      const matchingIdsList = getAllMatchingOrderIds(o.order_id, o.lead_id, orders, leads);
-      const matchingIds = new Set(matchingIdsList);
-
-      const pay = payments.find(p => matchingIds.has(p.order_id) || (p.lead_id && matchingIds.has(p.lead_id)));
-      const prod = production.find(p => p.tracking_id === o.lead_id || p.order_id === o.lead_id || p.tracking_id === o.order_id);
-      const ld = leads.find(l => matchingIds.has(l.lead_id) || (l as any).order_id === o.order_id);
-
-      // Extract all real event records for this order/lead
-      const rawLeadEvents = ld?.events && Array.isArray(ld.events) && ld.events.length > 0
-        ? ld.events
-        : (o?.events && Array.isArray((o as any).events) && (o as any).events.length > 0 ? (o as any).events : []);
-      const deserialized = (!rawLeadEvents || rawLeadEvents.length === 0) && (ld?.notes_special_customizations || o?.notes_special_customizations)
-        ? deserializeLeadEvents(ld?.notes_special_customizations || o?.notes_special_customizations).events
-        : [];
-      const extractedEvents = rawLeadEvents.length > 0 ? rawLeadEvents : (deserialized.length > 0 ? deserialized : []);
-
-      const events = extractedEvents.length > 0
-        ? extractedEvents
-        : [{
-            event_name: o.custom_event_name || o.event_type || ld?.custom_event_name || ld?.event_type || 'Event Photography',
-            event_date: o.event_date || ld?.event_date || (o as any).Reporting_date || (ld as any).Reporting_date || '',
-            event_start_time: (o as any).event_start_time || o.event_time || ld?.event_time || (o as any).reporting_time || ld?.reporting_time || ''
-          }];
-
-      const primaryEventDate = events[0]?.event_date || o.event_date || ld?.event_date || '';
-      const primaryEventName = events[0]?.event_name || events[0]?.event_type || o.custom_event_name || o.event_type || 'Event Photography';
-
-      let rejectedIds = new Set<string>();
-      try {
-        const rejectedSaved = localStorage.getItem('rejected_payment_history_ids');
-        if (rejectedSaved) rejectedIds = new Set(JSON.parse(rejectedSaved));
-      } catch (_) {}
-
-      let approvedIds = new Set<string>();
-      try {
-        const approvedSaved = localStorage.getItem('approved_payment_history_ids');
-        if (approvedSaved) approvedIds = new Set(JSON.parse(approvedSaved));
-      } catch (_) {}
-
-      const approvedHistories = (paymentHistory || []).filter(h => {
-        const hOrderId = String(h.order_id || '').trim();
-        if (!matchingIds.has(hOrderId)) return false;
-        const histId = String(h.id || h.payment_history_id || '');
-        if (rejectedIds.has(histId)) return false;
-        const isExplicitlyRejected = h.approval_status === 'Rejected' || 
-          (typeof h.notes === 'string' && (
-            h.notes.includes('Rejected') || 
-            h.notes.includes('[REJECTED]') || 
-            h.notes.endsWith('- Rejected') || 
-            h.notes.toLowerCase().includes('rejected by business owner')
-          ));
-        if (isExplicitlyRejected) return false;
-
-        return (
-          h.approval_status === 'Approved' ||
-          approvedIds.has(histId) ||
-          (!h.notes || (!h.notes.includes('Waiting for Approval') && !h.notes.includes('Rejected')))
-        );
-      });
-      const historyApprovedSum = approvedHistories.reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
-
-      // Check localStorage pending approvals as well for instantaneous multi-tab sync
-      let localPendingList: any[] = [];
-      try {
-        const localSaved = localStorage.getItem('pending_payment_approvals');
-        if (localSaved) localPendingList = JSON.parse(localSaved) || [];
-      } catch (_) {}
-
-      const hasPendingInHistory = (paymentHistory || []).some(h => {
-        const hOrderId = String(h.order_id || '').trim();
-        if (!matchingIds.has(hOrderId)) return false;
-        const histId = String(h.id || h.payment_history_id || '');
-        if (rejectedIds.has(histId)) return false;
-        const isExplicitlyRejected = h.approval_status === 'Rejected' || 
-          (typeof h.notes === 'string' && (
-            h.notes.includes('Rejected') || 
-            h.notes.includes('[REJECTED]') || 
-            h.notes.endsWith('- Rejected') || 
-            h.notes.toLowerCase().includes('rejected by business owner')
-          ));
-        if (isExplicitlyRejected) return false;
-
-        return (
-          h.approval_status === 'Waiting for Approval' ||
-          (typeof h.notes === 'string' && h.notes.includes('Waiting for Approval'))
-        );
-      });
-
-      const hasPendingInLocal = localPendingList.some((h: any) => {
-        const hOrderId = String(h.order_id || '').trim();
-        if (!matchingIds.has(hOrderId)) return false;
-        const histId = String(h.id || h.payment_history_id || '');
-        if (rejectedIds.has(histId)) return false;
-        return (
-          h.approval_status === 'Waiting for Approval' ||
-          (typeof h.notes === 'string' && h.notes.includes('Waiting for Approval'))
-        );
-      });
-
-      const hasPendingApproval = hasPendingInHistory || hasPendingInLocal || (pay?.payment_status === 'Waiting for Approval');
-
-      const totalRevenue = Number(ld?.Final_Quotation_Amount) || Number((ld as any)?.final_quotation_amount) || Number(o.quotation_amount) || Number(ld?.final_amount) || Number(ld?.budget) || Number(o.advance_received) || 0;
-      const paymentReceived = approvedHistories.length > 0
-        ? historyApprovedSum
-        : (pay && pay.payment_status !== 'Waiting for Approval' ? ((pay.advance_received || 0) + (pay.final_payment_received || 0)) : Number(o.advance_received || 0));
-      const outstanding = Math.max(0, totalRevenue - paymentReceived);
-
-      const isCompleted = ['Event Completed', 'Client Acceptance', 'Delivered', 'Project Delivered', 'Completed'].includes(o.current_stage) || prod?.editing_status === 'Client Acceptance';
-      const isClosed = o.current_stage === 'Order Closed' || o.current_stage === 'Closed' || prod?.editing_status === 'Order Closed';
-
+      const pay = r.payment;
       const paymentDate = pay?.payment_date || '-';
       const paymentType = pay?.payment_type || pay?.Payment_type || (pay?.final_payment_received ? 'Final Payment' : pay?.advance_received ? 'Advance Payment' : 'Event Date Payment');
       const transactionId = pay?.transaction_id || '-';
 
-      const paymentStatus = hasPendingApproval ? 'Waiting for Approval' : (pay ? pay.payment_status : (outstanding <= 0 && totalRevenue > 0 ? 'Fully Paid' : (paymentReceived > 0 ? 'Partially Paid' : 'Pending')));
-
       return {
-        orderId: o.order_id,
-        leadId: o.lead_id,
-        customerName: o.customer_name,
-        eventName: primaryEventName,
-        eventDate: primaryEventDate,
-        events,
+        orderId: r.orderId,
+        leadId: r.leadId,
+        customerName: r.customerName,
+        eventName: r.eventType,
+        eventDate: r.eventDate,
+        events: r.events,
         paymentDate,
         paymentType,
         transactionId,
-        totalRevenue,
-        paymentReceived,
-        outstanding,
-        paymentStatus,
-        hasPendingApproval,
-        currentStage: isClosed ? 'Order Closed' : (prod?.editing_status || o.current_stage || 'Confirmed'),
+        totalRevenue: r.finalPackageAmount,
+        paymentReceived: r.totalPaidAmount,
+        outstanding: r.remainingAmount,
+        paymentStatus: r.paymentStatus,
+        hasPendingApproval: r.hasPendingApproval,
+        currentStage: isClosed ? 'Order Closed' : (prod?.editing_status || r.order?.current_stage || r.lead?.current_status || 'Confirmed'),
         isCompleted,
         isClosed,
-        created_at: o.created_at || ld?.created_at || (pay as any)?.created_at,
-        updated_at: o.updated_at || ld?.updated_at || (pay as any)?.updated_at,
-        order: o,
-        lead: ld,
+        created_at: r.order?.created_at || r.lead?.created_at || (pay as any)?.created_at,
+        updated_at: r.order?.updated_at || r.lead?.updated_at || (pay as any)?.updated_at,
+        order: r.order,
+        lead: r.lead,
         payment: pay
       };
     });
-  }, [orders, payments, production, paymentHistory, leads]);
+  }, [orders, leads, payments, paymentHistory, production]);
 
   // Base filtered by Search & Event Date & Payment Tab (used for KPI card totals)
   const baseFiltered = useMemo(() => {
