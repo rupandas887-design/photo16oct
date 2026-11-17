@@ -91,37 +91,67 @@ export default async function handler(req: any, res: any) {
 
     const candidateAuthIds = new Set<string>();
     const candidateEmails = new Set<string>();
+    const isValidAuthUuid = (idVal: string) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idVal) &&
+      !idVal.startsWith('00000000-0000-0000-0000-') &&
+      !idVal.startsWith('55555555-5555-5555-5555-');
+
+    const isSystemDivisionLookup = [
+      'owner@photocrew.com',
+      'founder@photocrew.com',
+      'owner',
+      'founder',
+      'operation@photocrew.com',
+      'operations@photocrew.com',
+      'operation',
+      'operations',
+      'production@photocrew.com',
+      'production',
+      'sales@photocrew.com',
+      'sale@photocrew.com',
+    ].includes(lowerInput);
+
+    for (const term of aliasSet) {
+      if (term.includes('@')) candidateEmails.add(term);
+    }
+
+    if (isSystemDivisionLookup) {
+      return res.status(200).json({ success: true, emails: Array.from(candidateEmails) });
+    }
 
     for (const ps of prodRes.data || []) {
       if (matchesRow(ps)) {
         const aid = parseNotesAuthId(ps.notes);
-        if (aid) candidateAuthIds.add(aid);
+        if (aid && isValidAuthUuid(aid)) candidateAuthIds.add(aid);
         if (ps.email && String(ps.email).includes('@')) candidateEmails.add(String(ps.email).trim().toLowerCase());
       }
     }
     for (const os of opRes.data || []) {
       if (matchesRow(os)) {
         const aid = parseNotesAuthId(os.notes);
-        if (aid) candidateAuthIds.add(aid);
+        if (aid && isValidAuthUuid(aid)) candidateAuthIds.add(aid);
         if (os.email && String(os.email).includes('@')) candidateEmails.add(String(os.email).trim().toLowerCase());
       }
     }
     for (const u of usersRes.data || []) {
       if (matchesRow(u)) {
-        if (u.id) candidateAuthIds.add(String(u.id).trim());
+        const uid = u.id ? String(u.id).trim() : '';
+        if (uid && isValidAuthUuid(uid)) candidateAuthIds.add(uid);
         if (u.email && String(u.email).includes('@')) candidateEmails.add(String(u.email).trim().toLowerCase());
       }
     }
 
     const resolvedEmails = new Set<string>();
-    if (db.auth && db.auth.admin) {
-      for (const aid of candidateAuthIds) {
-        try {
-          const { data: gu } = await db.auth.admin.getUserById(aid);
-          const authEm = gu?.user?.email ? String(gu.user.email).trim().toLowerCase() : '';
-          if (authEm && authEm.includes('@')) resolvedEmails.add(authEm);
-        } catch (_) {}
-      }
+    if (db.auth && db.auth.admin && candidateAuthIds.size > 0) {
+      await Promise.all(
+        Array.from(candidateAuthIds).map(async (aid) => {
+          try {
+            const { data: gu } = await db.auth.admin.getUserById(aid);
+            const authEm = gu?.user?.email ? String(gu.user.email).trim().toLowerCase() : '';
+            if (authEm && authEm.includes('@')) resolvedEmails.add(authEm);
+          } catch (_) {}
+        })
+      );
     }
     for (const em of candidateEmails) {
       resolvedEmails.add(em);

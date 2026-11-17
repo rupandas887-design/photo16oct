@@ -796,18 +796,18 @@ async function startServer() {
     };
 
     try {
-      // 1. Query operations_staff
-      const { data: opData, error: oErr } = await db.from('operations_staff').select('staff_id, name, mobile, email');
+      const { opData, prodData, usersData, oErr, pErr, uErr } = await getDirectoryTablesCached(db);
       if (oErr) {
         console.error('[checkGlobalUniquenessInDb] operations_staff query error:', oErr.message);
         return { isUnique: false, isMobileDuplicate: false, isEmailDuplicate: false, queryFailed: true, error: `Database error checking operations staff: ${oErr.message}` };
       }
-
-      // 2. Query production_staff
-      const { data: prodData, error: pErr } = await db.from('production_staff').select('staff_id, name, mobile, email');
       if (pErr) {
         console.error('[checkGlobalUniquenessInDb] production_staff query error:', pErr.message);
         return { isUnique: false, isMobileDuplicate: false, isEmailDuplicate: false, queryFailed: true, error: `Database error checking production staff: ${pErr.message}` };
+      }
+      if (uErr) {
+        console.error('[checkGlobalUniquenessInDb] users query error:', uErr.message);
+        return { isUnique: false, isMobileDuplicate: false, isEmailDuplicate: false, queryFailed: true, error: `Database error checking user accounts: ${uErr.message}` };
       }
 
       // Build active staff sets to identify active staff accounts vs orphaned rows
@@ -848,13 +848,6 @@ async function startServer() {
             isEmailDuplicate = true;
           }
         }
-      }
-
-      // 3. Check public.users (excluding orphaned staff accounts that have no active staff record)
-      const { data: usersData, error: uErr } = await db.from('users').select('id, name, mobile, phone, email, role');
-      if (uErr) {
-        console.error('[checkGlobalUniquenessInDb] users query error:', uErr.message);
-        return { isUnique: false, isMobileDuplicate: false, isEmailDuplicate: false, queryFailed: true, error: `Database error checking user accounts: ${uErr.message}` };
       }
 
       if (Array.isArray(usersData)) {
@@ -920,49 +913,82 @@ async function startServer() {
     return { isUnique: true, isMobileDuplicate: false, isEmailDuplicate: false };
   }
 
+  // Short-lived coherent server-side caches (invalidated immediately on any write)
+  const NON_EXISTENT_LOG_TABLES = new Set(['activity_logs', 'login_logs', 'analytics_snapshots', 'staff_task_submissions']);
+  let directoryCache: {
+    timestamp: number;
+    opData: any[];
+    prodData: any[];
+    usersData: any[];
+    oErr: any;
+    pErr: any;
+    uErr: any;
+  } | null = null;
+  let directoryCacheInFlight: Promise<any> | null = null;
+  const DIRECTORY_CACHE_TTL_MS = 10_000;
+
+  let selectAllCache: { timestamp: number; payload: { success: boolean; data: any[]; errors: any[] } } | null = null;
+  let selectAllInFlight: Promise<{ success: boolean; data: any[]; errors: any[] }> | null = null;
+  const SELECT_ALL_CACHE_TTL_MS = 3_000;
+
+  const authUserEmailCache = new Map<string, { email: string; timestamp: number }>();
+  const AUTH_EMAIL_CACHE_TTL_MS = 60_000;
+
+  function invalidateServerCaches(table?: string) {
+    selectAllCache = null;
+    if (!table || ['users', 'operations_staff', 'production_staff', 'staff'].includes(table)) {
+      directoryCache = null;
+    }
+  }
+
+  async function getDirectoryTablesCached(db: any) {
+    if (directoryCache && Date.now() - directoryCache.timestamp < DIRECTORY_CACHE_TTL_MS) {
+      return directoryCache;
+    }
+    if (directoryCacheInFlight) {
+      return directoryCacheInFlight;
+    }
+    directoryCacheInFlight = (async () => {
+      try {
+        const [opRes, prodRes, usersRes] = await Promise.all([
+          db.from('operations_staff').select('*').order('name'),
+          db.from('production_staff').select('*'),
+          db.from('users').select('*')
+        ]);
+        const entry = {
+          timestamp: Date.now(),
+          opData: opRes.data || [],
+          prodData: prodRes.data || [],
+          usersData: usersRes.data || [],
+          oErr: opRes.error || null,
+          pErr: prodRes.error || null,
+          uErr: usersRes.error || null
+        };
+        if (!entry.oErr && !entry.pErr && !entry.uErr) {
+          directoryCache = entry;
+        }
+        return entry;
+      } finally {
+        directoryCacheInFlight = null;
+      }
+    })();
+    return directoryCacheInFlight;
+  }
+
   async function executeWithSelfHealing(table: string, operation: 'insert' | 'update' | 'upsert', payload: any, matchCol?: string, matchVal?: any) {
+    if (NON_EXISTENT_LOG_TABLES.has(table)) {
+      return { success: true, data: Array.isArray(payload) ? payload : [payload] };
+    }
+    invalidateServerCaches(table);
     const db = getServerSupabase();
 
-    // Self-healing: ensure referenced lead exists for lead_events or lead_packages, and package exists for lead_packages
-    if (['lead_events', 'lead_packages'].includes(table)) {
+    // Ensure package_id default for lead_packages (foreign key 23503 is handled on demand in the retry loop below without pre-SELECT overhead)
+    if (table === 'lead_packages') {
       const items = Array.isArray(payload) ? payload : [payload];
       for (const item of items) {
         if (!item || typeof item !== 'object') continue;
-        if (item.lead_id) {
-          try {
-            const { data: leadCheck } = await db.from('leads').select('lead_id').eq('lead_id', item.lead_id).maybeSingle();
-            if (!leadCheck) {
-              await db.from('leads').upsert({
-                lead_id: item.lead_id,
-                customer_name: 'Valued Client',
-                mobile: '0000000000',
-                status: 'New Lead',
-                created_date: new Date().toISOString().split('T')[0],
-                created_at: new Date().toISOString()
-              }, { onConflict: 'lead_id' });
-            }
-          } catch (e) {
-            console.warn('[SelfHealing] ensure lead exists error:', e);
-          }
-        }
-        if (table === 'lead_packages') {
-          const pkgId = (item.package_id && String(item.package_id).trim()) ? String(item.package_id).trim() : 'PKG-DEFAULT';
-          item.package_id = pkgId;
-          try {
-            const { data: pkgCheck } = await db.from('packages').select('package_id').eq('package_id', pkgId).maybeSingle();
-            if (!pkgCheck) {
-              await db.from('packages').upsert({
-                package_id: pkgId,
-                package_name: item.package_name || pkgId,
-                category: 'Custom',
-                price: item.package_cost || item.final_amount || 0,
-                created_at: new Date().toISOString()
-              }, { onConflict: 'package_id' });
-            }
-          } catch (e) {
-            console.warn('[SelfHealing] ensure package exists error:', e);
-          }
-        }
+        const pkgId = (item.package_id && String(item.package_id).trim()) ? String(item.package_id).trim() : 'PKG-DEFAULT';
+        item.package_id = pkgId;
       }
     }
 
@@ -1028,16 +1054,14 @@ async function startServer() {
       const items = Array.isArray(payload) ? payload : [payload];
       const insertedRows: any[] = [];
       
-      const { data: allEvs } = await db.from('lead_events').select('id');
+      const { data: maxEvRow } = await db.from('lead_events').select('id').order('id', { ascending: false }).limit(1);
       let currentMaxId = 0;
       const existingIdSet = new Set<number>();
-      if (Array.isArray(allEvs)) {
-        for (const row of allEvs) {
-          const num = typeof row.id === 'number' ? row.id : parseInt(String(row.id), 10);
-          if (!isNaN(num)) {
-            existingIdSet.add(num);
-            if (num > currentMaxId) currentMaxId = num;
-          }
+      if (Array.isArray(maxEvRow) && maxEvRow.length > 0) {
+        const num = typeof maxEvRow[0].id === 'number' ? maxEvRow[0].id : parseInt(String(maxEvRow[0].id), 10);
+        if (!isNaN(num)) {
+          existingIdSet.add(num);
+          currentMaxId = num;
         }
       }
 
@@ -1693,16 +1717,14 @@ async function startServer() {
         }
       }
 
-      // Enforce CRM Lock Backend
-      if (table === 'leads' && matchColumn === 'lead_id') {
-        const db = getServerSupabase();
-        const { data: existingLead } = await db.from('leads').select('quotation_locked').eq('lead_id', matchValue).maybeSingle();
-        
-        if (existingLead && existingLead.quotation_locked === true) {
-          const keys = Object.keys(updates);
-          // Only allow update if it explicitly modifies quotation_locked or if it's updating status/lifecycle/assignee (not CRM quotation pricing)
-          const isAllowedAction = keys.includes('quotation_locked') || keys.includes('status') || keys.includes('current_status') || keys.includes('updated_by') || keys.includes('updated_at');
-          if (!isAllowedAction) {
+      // Enforce CRM Lock Backend (only query DB when the update is not already an allowed action)
+      if (table === 'leads' && matchColumn === 'lead_id' && updates) {
+        const keys = Object.keys(updates);
+        const isAllowedAction = keys.includes('quotation_locked') || keys.includes('status') || keys.includes('current_status') || keys.includes('updated_by') || keys.includes('updated_at');
+        if (!isAllowedAction) {
+          const db = getServerSupabase();
+          const { data: existingLead } = await db.from('leads').select('quotation_locked').eq('lead_id', matchValue).maybeSingle();
+          if (existingLead && existingLead.quotation_locked === true) {
             console.warn(`[Server DB Update] Blocked update to locked lead ${matchValue}`);
             return res.status(403).json({ success: false, error: 'Lead CRM is locked. Cannot be updated.' });
           }
@@ -1762,7 +1784,16 @@ async function startServer() {
   app.post('/api/db/select', async (req, res) => {
     const { table, select = '*', orderColumn, ascending = false, matchColumn, matchValue } = req.body;
     try {
+      if (NON_EXISTENT_LOG_TABLES.has(table)) {
+        return res.json({ success: true, data: [] });
+      }
       const db = getServerSupabase();
+      if (select === '*' && !matchColumn && !orderColumn && ['users', 'operations_staff', 'production_staff'].includes(table)) {
+        const dir = await getDirectoryTablesCached(db);
+        if (table === 'users' && !dir.uErr) return res.json({ success: true, data: dir.usersData });
+        if (table === 'operations_staff' && !dir.oErr) return res.json({ success: true, data: dir.opData });
+        if (table === 'production_staff' && !dir.pErr) return res.json({ success: true, data: dir.prodData });
+      }
       if (table === 'equipment_handovers') {
         const { data: histData } = await db.from('lead_equipment_history').select('*');
         const mapped = (histData || []).map((deh: any) => ({
@@ -1807,43 +1838,71 @@ async function startServer() {
 
   app.post('/api/db/select-all', async (req, res) => {
     try {
-      const db = getServerSupabase();
-      const queries = [
-        db.from('users').select('*'),
-        db.from('leads').select('*').order('lead_id', { ascending: false }),
-        db.from('orders').select('*').order('created_at', { ascending: false }),
-        db.from('operations').select('*'),
-        db.from('raw_footage').select('*'),
-        db.from('production').select('*'),
-        db.from('payments').select('*'),
-        db.from('activity_logs').select('*').order('timestamp', { ascending: false }),
-        db.from('operations_staff').select('*').order('name'),
-        db.from('notifications').select('*').order('created_at', { ascending: false }),
-        db.from('equipment').select('*'),
-        db.from('lead_packages').select('*'),
-        db.from('packages').select('*').order('created_at', { ascending: false }),
-        db.from('staff_assignments').select('*'),
-        db.from('quotations').select('*'),
-        db.from('lead_status_history').select('*').order('created_at', { ascending: true }),
-        db.from('lead_staff_assignment_history').select('*').order('assigned_at', { ascending: false }),
-        db.from('lead_equipment_history').select('*').order('returned_at', { ascending: false }),
-        db.from('lead_events').select('*').order('created_at', { ascending: true }),
-        db.from('v_task_assignment_details').select('*'),
-        db.from('production_specialties').select('*'),
-        db.from('editor_assignments').select('*'),
-        db.from('production_staff').select('*'),
-        db.from('calendar_memos').select('*').order('created_at', { ascending: false }),
-        db.from('payment_history').select('*')
-      ];
+      if (selectAllCache && Date.now() - selectAllCache.timestamp < SELECT_ALL_CACHE_TTL_MS) {
+        return res.json(selectAllCache.payload);
+      }
+      if (!selectAllInFlight) {
+        selectAllInFlight = (async () => {
+          try {
+            const db = getServerSupabase();
+            const queries = [
+              db.from('users').select('*'),
+              db.from('leads').select('*').order('lead_id', { ascending: false }),
+              db.from('orders').select('*').order('created_at', { ascending: false }),
+              db.from('operations').select('*'),
+              db.from('raw_footage').select('*'),
+              db.from('production').select('*'),
+              db.from('payments').select('*'),
+              Promise.resolve({ data: [], error: null }), // activity_logs is local-only
+              db.from('operations_staff').select('*').order('name'),
+              db.from('notifications').select('*').order('created_at', { ascending: false }),
+              db.from('equipment').select('*'),
+              db.from('lead_packages').select('*'),
+              db.from('packages').select('*').order('created_at', { ascending: false }),
+              db.from('staff_assignments').select('*'),
+              db.from('quotations').select('*'),
+              db.from('lead_status_history').select('*').order('created_at', { ascending: true }),
+              db.from('lead_staff_assignment_history').select('*').order('assigned_at', { ascending: false }),
+              db.from('lead_equipment_history').select('*').order('returned_at', { ascending: false }),
+              db.from('lead_events').select('*').order('created_at', { ascending: true }),
+              db.from('v_task_assignment_details').select('*'),
+              db.from('production_specialties').select('*'),
+              db.from('editor_assignments').select('*'),
+              db.from('production_staff').select('*'),
+              db.from('calendar_memos').select('*').order('created_at', { ascending: false }),
+              db.from('payment_history').select('*')
+            ];
 
-      const results = await Promise.all(
-        queries.map(q => Promise.resolve(q).catch(err => ({ data: [], error: { message: err?.message || String(err) } })))
-      );
+            const results = await Promise.all(
+              queries.map(q => Promise.resolve(q).catch(err => ({ data: [], error: { message: err?.message || String(err) } })))
+            );
 
-      const data = results.map(r => r?.data || []);
-      const errors = results.map(r => r?.error ? r.error.message : null);
+            const data = results.map(r => r?.data || []);
+            const errors = results.map(r => r?.error ? r.error.message : null);
 
-      res.json({ success: true, data, errors });
+            // Warm directory cache from select-all results
+            if (!errors[0] && !errors[8] && !errors[22]) {
+              directoryCache = {
+                timestamp: Date.now(),
+                usersData: data[0],
+                opData: data[8],
+                prodData: data[22],
+                uErr: null,
+                oErr: null,
+                pErr: null
+              };
+            }
+
+            const payload = { success: true, data, errors };
+            selectAllCache = { timestamp: Date.now(), payload };
+            return payload;
+          } finally {
+            selectAllInFlight = null;
+          }
+        })();
+      }
+      const responsePayload = await selectAllInFlight;
+      res.json(responsePayload);
     } catch (err: any) {
       console.error('[Server DB Select All Exception]', err);
       res.status(500).json({ success: false, error: err.message || String(err) });
@@ -1856,6 +1915,10 @@ async function startServer() {
       if (!table || !matchColumn || matchValue === undefined || matchValue === null) {
         return res.status(400).json({ success: false, error: 'Missing required parameters for deletion' });
       }
+      if (NON_EXISTENT_LOG_TABLES.has(table)) {
+        return res.json({ success: true, data: [] });
+      }
+      invalidateServerCaches(table);
       const db = getServerSupabase();
       console.log(`[Server DB Delete] Deleting from ${table} where ${matchColumn}=${matchValue}`);
       let { data, error } = await db.from(table).delete().eq(matchColumn, matchValue).select();
@@ -1905,7 +1968,11 @@ async function startServer() {
     }
   };
 
+  let caListCache: { data: any[]; ts: number } | null = null;
+  let caSupabaseTableMissing = false;
+
   const writeCaVerificationsToFile = (records: any[]) => {
+    caListCache = { data: records, ts: Date.now() };
     try {
       if (!fs.existsSync(caDataDir)) {
         fs.mkdirSync(caDataDir, { recursive: true });
@@ -2183,33 +2250,41 @@ async function startServer() {
     }
   });
 
-  app.get('/api/client-acceptance/list', async (req, res) => {
+  app.get('/api/client-acceptance/list', async (_req, res) => {
     try {
+      if (caListCache && Date.now() - caListCache.ts < 15000) {
+        return res.json({ success: true, data: caListCache.data });
+      }
       let records = readCaVerificationsFromFile();
 
-      // Check if Supabase table has records
-      try {
-        const db = getServerSupabase();
-        const { data: dbRecords, error } = await db.from('client_acceptance_verifications').select('*');
-        if (!error && Array.isArray(dbRecords) && dbRecords.length > 0) {
-          // Merge dbRecords with file records
-          const map = new Map<string, any>();
-          records.forEach((r: any) => map.set(`${String(r.order_id).trim().toLowerCase()}__${String(r.event_id || 'default').trim().toLowerCase()}`, r));
-          dbRecords.forEach((r: any) => {
-            const key = `${String(r.order_id).trim().toLowerCase()}__${String(r.event_id || 'default').trim().toLowerCase()}`;
-            const existing = map.get(key) || {};
-            map.set(key, {
-              ...existing,
-              ...r,
-              final_image_url: r.final_image_url || existing.final_image_url || '',
-              final_image_name: r.final_image_name || existing.final_image_name || ''
+      // Check if Supabase table has records (skip if already known to be absent in schema)
+      if (!caSupabaseTableMissing) {
+        try {
+          const db = getServerSupabase();
+          const { data: dbRecords, error } = await db.from('client_acceptance_verifications').select('*');
+          if (error && (error.message?.includes('Could not find the table') || error.message?.includes('does not exist'))) {
+            caSupabaseTableMissing = true;
+          } else if (!error && Array.isArray(dbRecords) && dbRecords.length > 0) {
+            // Merge dbRecords with file records
+            const map = new Map<string, any>();
+            records.forEach((r: any) => map.set(`${String(r.order_id).trim().toLowerCase()}__${String(r.event_id || 'default').trim().toLowerCase()}`, r));
+            dbRecords.forEach((r: any) => {
+              const key = `${String(r.order_id).trim().toLowerCase()}__${String(r.event_id || 'default').trim().toLowerCase()}`;
+              const existing = map.get(key) || {};
+              map.set(key, {
+                ...existing,
+                ...r,
+                final_image_url: r.final_image_url || existing.final_image_url || '',
+                final_image_name: r.final_image_name || existing.final_image_name || ''
+              });
             });
-          });
-          records = Array.from(map.values());
-          writeCaVerificationsToFile(records);
-        }
-      } catch (_) {}
+            records = Array.from(map.values());
+            writeCaVerificationsToFile(records);
+          }
+        } catch (_) {}
+      }
 
+      caListCache = { data: records, ts: Date.now() };
       res.json({ success: true, data: records });
     } catch (err: any) {
       console.error('[Server CA Storage List Exception]', err);
@@ -2743,15 +2818,15 @@ async function startServer() {
     const callerMobile = cleanPhone(caller.mobile);
     const callerMob10 = callerMobile.length >= 10 ? callerMobile.slice(-10) : callerMobile;
 
+    const { opData, prodData, usersData } = await getDirectoryTablesCached(db);
     let dbUserRow: any = null;
-    if (callerId) {
-      const { data } = await db.from('users').select('id, email, mobile, role, active').eq('id', callerId).maybeSingle();
-      if (data) dbUserRow = data;
+    if (callerId && Array.isArray(usersData)) {
+      dbUserRow = usersData.find((r: any) => String(r.id || '').trim() === callerId) || null;
     }
-    if (!dbUserRow && callerEmail) {
-      const { data } = await db.from('users').select('id, email, mobile, role, active').ilike('email', callerEmail).limit(10);
-      if (Array.isArray(data) && data.length > 0) {
-        dbUserRow = data.find((r: any) => r.active !== false && String(r.active) !== 'false') || data[0];
+    if (!dbUserRow && callerEmail && Array.isArray(usersData)) {
+      const emailMatches = usersData.filter((r: any) => cleanEmail(r.email) === callerEmail);
+      if (emailMatches.length > 0) {
+        dbUserRow = emailMatches.find((r: any) => r.active !== false && String(r.active) !== 'false') || emailMatches[0];
       }
     }
 
@@ -2763,12 +2838,6 @@ async function startServer() {
     if (sysRole) {
       return { role: sysRole, active: isActive };
     }
-
-    // Disambiguate non-system accounts against staff tables BEFORE reading public.users.role
-    const [opRes, prodRes] = await Promise.all([
-      db.from('operations_staff').select('staff_id, email, mobile, notes, status'),
-      db.from('production_staff').select('staff_id, email, mobile, notes, status')
-    ]);
 
     const matchesStaffRow = (row: any) => {
       if (!row) return false;
@@ -2783,14 +2852,14 @@ async function startServer() {
       return false;
     };
 
-    const inOp = (opRes.data || []).some(matchesStaffRow);
-    const inProd = (prodRes.data || []).some(matchesStaffRow);
+    const inOp = (opData || []).some(matchesStaffRow);
+    const inProd = (prodData || []).some(matchesStaffRow);
 
     if (inOp && !inProd) return { role: 'Operation Staff', active: isActive };
     if (inProd && !inOp) return { role: 'Production Staff', active: isActive };
     if (inOp && inProd) {
-      const opAuth = callerId && (opRes.data || []).some((r: any) => extractNotesAuthUserIdServer(r.notes) === callerId || r.staff_id === callerId);
-      const prodAuth = callerId && (prodRes.data || []).some((r: any) => extractNotesAuthUserIdServer(r.notes) === callerId || r.staff_id === callerId);
+      const opAuth = callerId && (opData || []).some((r: any) => extractNotesAuthUserIdServer(r.notes) === callerId || r.staff_id === callerId);
+      const prodAuth = callerId && (prodData || []).some((r: any) => extractNotesAuthUserIdServer(r.notes) === callerId || r.staff_id === callerId);
       if (opAuth && !prodAuth) return { role: 'Operation Staff', active: isActive };
       if (prodAuth && !opAuth) return { role: 'Production Staff', active: isActive };
       return { role: 'Operation Staff', active: isActive };
@@ -3458,45 +3527,80 @@ async function startServer() {
         return false;
       };
 
-      const [prodRes, opRes, usersRes] = await Promise.all([
-        db.from('production_staff').select('staff_id, email, mobile, whatsapp_number, notes'),
-        db.from('operations_staff').select('staff_id, email, mobile, whatsapp_number, notes'),
-        db.from('users').select('id, email, username, mobile')
-      ]);
+      const { prodData, opData, usersData } = await getDirectoryTablesCached(db);
 
       const candidateAuthIds = new Set<string>();
       const candidateEmails = new Set<string>();
+      const isValidAuthUuid = (idVal: string) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idVal) &&
+        !idVal.startsWith('00000000-0000-0000-0000-') &&
+        !idVal.startsWith('55555555-5555-5555-5555-');
 
-      for (const ps of (prodRes.data || [])) {
-        if (matchesRow(ps)) {
-          const aid = parseNotesAuthId(ps.notes);
-          if (aid) candidateAuthIds.add(aid);
-          if (ps.email && String(ps.email).includes('@')) candidateEmails.add(String(ps.email).trim().toLowerCase());
+      const systemDivisionInputs = new Set([
+        'owner@photocrew.com',
+        'founder@photocrew.com',
+        'owner',
+        'founder',
+        'operation@photocrew.com',
+        'operations@photocrew.com',
+        'operation',
+        'operations',
+        'production@photocrew.com',
+        'production',
+        'sales@photocrew.com',
+        'sale@photocrew.com'
+      ]);
+      const isSystemDivisionLookup = systemDivisionInputs.has(lowerInput);
+
+      for (const term of aliasSet) {
+        if (term.includes('@')) candidateEmails.add(term);
+      }
+
+      if (!isSystemDivisionLookup) {
+        for (const ps of (prodData || [])) {
+          if (matchesRow(ps)) {
+            const aid = parseNotesAuthId(ps.notes);
+            if (aid && isValidAuthUuid(aid)) candidateAuthIds.add(aid);
+            if (ps.email && String(ps.email).includes('@')) candidateEmails.add(String(ps.email).trim().toLowerCase());
+          }
+        }
+        for (const os of (opData || [])) {
+          if (matchesRow(os)) {
+            const aid = parseNotesAuthId(os.notes);
+            if (aid && isValidAuthUuid(aid)) candidateAuthIds.add(aid);
+            if (os.email && String(os.email).includes('@')) candidateEmails.add(String(os.email).trim().toLowerCase());
+          }
         }
       }
-      for (const os of (opRes.data || [])) {
-        if (matchesRow(os)) {
-          const aid = parseNotesAuthId(os.notes);
-          if (aid) candidateAuthIds.add(aid);
-          if (os.email && String(os.email).includes('@')) candidateEmails.add(String(os.email).trim().toLowerCase());
-        }
-      }
-      for (const u of (usersRes.data || [])) {
+      for (const u of (usersData || [])) {
         if (matchesRow(u)) {
-          if (u.id) candidateAuthIds.add(String(u.id).trim());
-          if (u.email && String(u.email).includes('@')) candidateEmails.add(String(u.email).trim().toLowerCase());
+          const uid = u.id ? String(u.id).trim() : '';
+          const uEm = u.email ? String(u.email).trim().toLowerCase() : '';
+          if (!isSystemDivisionLookup && !systemDivisionInputs.has(uEm) && uid && isValidAuthUuid(uid)) {
+            candidateAuthIds.add(uid);
+          }
+          if (uEm && uEm.includes('@')) candidateEmails.add(uEm);
         }
       }
 
       const resolvedEmails = new Set<string>();
-      if (db.auth && db.auth.admin) {
-        for (const aid of candidateAuthIds) {
-          try {
-            const { data: gu } = await db.auth.admin.getUserById(aid);
-            const authEm = gu?.user?.email ? String(gu.user.email).trim().toLowerCase() : '';
-            if (authEm && authEm.includes('@')) resolvedEmails.add(authEm);
-          } catch (_) {}
-        }
+      if (db.auth && db.auth.admin && candidateAuthIds.size > 0) {
+        const now = Date.now();
+        await Promise.all(
+          Array.from(candidateAuthIds).map(async (aid) => {
+            const cached = authUserEmailCache.get(aid);
+            if (cached && now - cached.timestamp < AUTH_EMAIL_CACHE_TTL_MS) {
+              if (cached.email) resolvedEmails.add(cached.email);
+              return;
+            }
+            try {
+              const { data: gu } = await db.auth.admin.getUserById(aid);
+              const authEm = gu?.user?.email ? String(gu.user.email).trim().toLowerCase() : '';
+              authUserEmailCache.set(aid, { email: authEm, timestamp: now });
+              if (authEm && authEm.includes('@')) resolvedEmails.add(authEm);
+            } catch (_) {}
+          })
+        );
       }
       for (const em of candidateEmails) {
         resolvedEmails.add(em);
@@ -3511,6 +3615,7 @@ async function startServer() {
   app.post('/api/auth/create-user', async (req, res) => {
     const { email, password, name, role, mobile, active = true, staff_id, staff_type } = req.body;
     try {
+      invalidateServerCaches('users');
       const db = getServerSupabase();
       if (!db.auth.admin) {
         return res.status(400).json({ success: false, error: 'Service Role Key not configured on server' });
@@ -3615,6 +3720,7 @@ async function startServer() {
         }
       }
 
+      invalidateServerCaches('users');
       res.json({
         success: true,
         auth_user_id: authUser.id,
@@ -3632,6 +3738,7 @@ async function startServer() {
   app.post('/api/auth/delete-user', async (req, res) => {
     const { staff_id, mobile, email, auth_id } = req.body;
     try {
+      invalidateServerCaches('users');
       const db = getServerSupabase();
       const cleanEmailStr = cleanEmail(email);
       const cleanMobileStr = cleanPhone(mobile);
@@ -3659,6 +3766,7 @@ async function startServer() {
         }
       }
 
+      invalidateServerCaches('users');
       res.json({ success: true, message: 'User deleted from auth and directory' });
     } catch (err: any) {
       console.warn('[Server Auth Delete Error]', err);
@@ -3669,6 +3777,7 @@ async function startServer() {
   app.post('/api/auth/update-user', async (req, res) => {
     const { auth_id, staff_id, email, password, name, role, mobile, active, staff_type } = req.body;
     try {
+      invalidateServerCaches('users');
       const db = getServerSupabase();
       if (!db.auth.admin) {
         return res.status(400).json({ success: false, error: 'Service Role Key not configured' });
@@ -3978,6 +4087,7 @@ async function startServer() {
         }
       }
 
+      invalidateServerCaches('users');
       res.json({
         success: true,
         auth_user_id: targetAuthId,
@@ -4086,9 +4196,7 @@ async function startServer() {
         });
       }
 
-      const { data: allUsers, error: uErr } = await db
-        .from('users')
-        .select('id, email, username, mobile, role, active, password');
+      const { usersData: allUsers, uErr } = await getDirectoryTablesCached(db);
       if (uErr || !Array.isArray(allUsers)) {
         console.error('[Server Auth Manager Session] Database users lookup failed:', uErr?.message || uErr);
         return res.status(500).json({

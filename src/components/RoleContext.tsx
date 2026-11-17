@@ -1353,43 +1353,78 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
     console.log("[CACHE SYNC EVENT] Stored current role and username");
   }, [currentRole, currentUserName]);
 
+  // Pre-indexed O(1) lookup map for the latest status history record per order_id / lead_id
+  const latestHistoryMap = useMemo(() => {
+    const map = new Map<string, { newStatus: string; oldStatus: string; createdAt: string; _t: number; _id: string }>();
+    if (!statusHistory || !Array.isArray(statusHistory) || statusHistory.length === 0) return map;
+
+    const isLater = (
+      candT: number,
+      candId: string,
+      existing: { _t: number; _id: string } | undefined
+    ) => {
+      if (!existing) return true;
+      if (candT !== existing._t) return candT > existing._t;
+      return candId.localeCompare(existing._id) >= 0;
+    };
+
+    for (let i = 0; i < statusHistory.length; i++) {
+      const h = statusHistory[i];
+      if (!h || !h.new_status || h.old_status === 'NOTE') continue;
+      const hNew = String(h.new_status).trim();
+      if (!hNew) continue;
+
+      const hOrd = h.order_id ? String(h.order_id).trim() : '';
+      const hLead = h.lead_id ? String(h.lead_id).trim() : '';
+      if (!hOrd && !hLead) continue;
+
+      const t = h.created_at ? new Date(h.created_at).getTime() : 0;
+      const idStr = String(h.id || '');
+      const entry = {
+        newStatus: hNew,
+        oldStatus: String(h.old_status || '').trim(),
+        createdAt: h.created_at || '',
+        _t: isNaN(t) ? 0 : t,
+        _id: idStr
+      };
+
+      if (hOrd && isLater(entry._t, entry._id, map.get(hOrd))) {
+        map.set(hOrd, entry);
+      }
+      if (hLead && isLater(entry._t, entry._id, map.get(hLead))) {
+        map.set(hLead, entry);
+      }
+    }
+    return map;
+  }, [statusHistory]);
+
   // Helper to extract the latest status history record for a specific project
   const getLatestHistoryStatus = (orderId?: string | null, leadId?: string | null, trackingId?: string | null): { newStatus: string; oldStatus: string; createdAt: string } | null => {
-    if (!statusHistory || !Array.isArray(statusHistory) || statusHistory.length === 0) return null;
+    if (latestHistoryMap.size === 0) return null;
 
     const ordStr = orderId ? String(orderId).trim() : '';
     const leadStr = leadId ? String(leadId).trim() : '';
     const trkStr = trackingId ? String(trackingId).trim() : '';
 
-    const matching = statusHistory.filter(h => {
-      if (!h || !h.new_status || h.old_status === 'NOTE') return false;
-      const hNew = String(h.new_status).trim();
-      if (!hNew) return false;
+    let best: { newStatus: string; oldStatus: string; createdAt: string; _t: number; _id: string } | null = null;
+    const consider = (key: string) => {
+      if (!key) return;
+      const cand = latestHistoryMap.get(key);
+      if (!cand) return;
+      if (!best || (cand._t !== best._t ? cand._t > best._t : cand._id.localeCompare(best._id) >= 0)) {
+        best = cand;
+      }
+    };
 
-      const hOrd = h.order_id ? String(h.order_id).trim() : '';
-      const hLead = h.lead_id ? String(h.lead_id).trim() : '';
+    consider(ordStr);
+    consider(leadStr);
+    consider(trkStr);
 
-      if (ordStr && hOrd && hOrd === ordStr) return true;
-      if (leadStr && hLead && hLead === leadStr) return true;
-      if (trkStr && ((hOrd && hOrd === trkStr) || (hLead && hLead === trkStr))) return true;
-
-      return false;
-    });
-
-    if (matching.length === 0) return null;
-
-    matching.sort((a, b) => {
-      const tA = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const tB = b.created_at ? new Date(b.created_at).getTime() : 0;
-      if (tA !== tB) return tA - tB;
-      return String(a.id || '').localeCompare(String(b.id || ''));
-    });
-
-    const latest = matching[matching.length - 1];
+    if (!best) return null;
     return {
-      newStatus: String(latest.new_status).trim(),
-      oldStatus: String(latest.old_status || '').trim(),
-      createdAt: latest.created_at || ''
+      newStatus: (best as any).newStatus,
+      oldStatus: (best as any).oldStatus,
+      createdAt: (best as any).createdAt
     };
   };
 
@@ -2642,8 +2677,10 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
   }
 };
 
+  const NON_EXISTENT_LOG_TABLES = new Set(['activity_logs', 'login_logs', 'analytics_snapshots', 'staff_task_submissions']);
+
   const pushInsert = async (table: string, record: any): Promise<{ success: boolean; error?: string; localFallback?: boolean }> => {
-    if (!supabaseClient) return { success: true };
+    if (!supabaseClient || NON_EXISTENT_LOG_TABLES.has(table)) return { success: true, localFallback: true };
     try {
       let sanitized: any;
       if (Array.isArray(record)) {
@@ -2846,7 +2883,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
   };
 
   const pushUpdate = async (table: string, matchColumn: string, matchValue: any, updates: any): Promise<{ success: boolean; error?: string; localFallback?: boolean }> => {
-    if (!supabaseClient) return { success: true };
+    if (!supabaseClient || NON_EXISTENT_LOG_TABLES.has(table)) return { success: true, localFallback: true };
     try {
       const sanitized = sanitizeTimeFieldsForDb(stripClientOnlyFields(table, updates), table);
       let finalMatchValue = matchValue;
@@ -3232,7 +3269,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
   };
 
   const pushDelete = async (table: string, matchColumn: string, matchValue: any): Promise<{ success: boolean; error?: string }> => {
-    if (!supabaseClient) return { success: true };
+    if (!supabaseClient || NON_EXISTENT_LOG_TABLES.has(table)) return { success: true };
     try {
       let finalMatchValue = matchValue;
       if (table === 'operations_staff' && matchColumn === 'staff_id' && matchValue) {
@@ -3303,7 +3340,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
   };
 
   const pushUpsert = async (table: string, record: any) => {
-    if (!supabaseClient) return { success: true };
+    if (!supabaseClient || NON_EXISTENT_LOG_TABLES.has(table)) return { success: true };
     try {
       const sanitized = stripClientOnlyFields(table, record);
       
@@ -3416,6 +3453,10 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           fetchPendingRef.current = false;
 
           let results: any[];
+          let usedServerSelectAll = false;
+          const caPromise = fetch('/api/client-acceptance/list')
+            .then(safeParseResponse)
+            .catch(() => null);
           try {
             const proxyRes = await fetch('/api/db/select-all', {
               method: 'POST',
@@ -3423,6 +3464,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             });
             const parsed = await safeParseResponse(proxyRes);
             if (parsed.ok && parsed.isJson && parsed.data && parsed.data.success) {
+              usedServerSelectAll = true;
               const serverDataList = parsed.data.data;
               const serverErrorsList = parsed.data.errors;
               results = serverDataList.map((data: any, idx: number) => ({
@@ -3525,21 +3567,30 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         }
 
         if (dbLeads) {
+          const leadEventsByLeadId = new Map<string, any[]>();
+          if (Array.isArray(dbLeadEvents)) {
+            for (let i = 0; i < dbLeadEvents.length; i++) {
+              const e = dbLeadEvents[i];
+              if (!e || !e.lead_id) continue;
+              const list = leadEventsByLeadId.get(e.lead_id);
+              if (list) list.push(e);
+              else leadEventsByLeadId.set(e.lead_id, [e]);
+            }
+          }
           const parsedLeads = dbLeads.map((l: any) => {
             let evts = [];
-            if (dbLeadEvents) {
-              evts = dbLeadEvents
-                .filter((e: any) => e.lead_id === l.lead_id)
-                .map((e: any) => ({
-                  ...e,
-                  event_start_date: e.event_start_date || e.event_date || '',
-                  event_end_date: e.event_end_date || e.Event_End_Date || l.Event_End_Date || '',
-                  event_start_time: e.event_start_time || '',
-                  event_end_time: e.event_end_time || '',
-                  reporting_date: e.reporting_date || e.Reporting_date || '',
-                  Reporting_date: e.Reporting_date || e.reporting_date || '',
-                  reporting_time: e.reporting_time || ''
-                }));
+            const matchedLeadEvents = leadEventsByLeadId.get(l.lead_id);
+            if (matchedLeadEvents && matchedLeadEvents.length > 0) {
+              evts = matchedLeadEvents.map((e: any) => ({
+                ...e,
+                event_start_date: e.event_start_date || e.event_date || '',
+                event_end_date: e.event_end_date || e.Event_End_Date || l.Event_End_Date || '',
+                event_start_time: e.event_start_time || '',
+                event_end_time: e.event_end_time || '',
+                reporting_date: e.reporting_date || e.Reporting_date || '',
+                Reporting_date: e.Reporting_date || e.reporting_date || '',
+                reporting_time: e.reporting_time || ''
+              }));
             }
             if (evts.length === 0 && l.events && Array.isArray(l.events) && l.events.length > 0) {
               evts = l.events;
@@ -3833,7 +3884,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         if (dbLeadPackages) setLeadPackages(dbLeadPackages);
         
         let finalPackagesData = dbPackages || [];
-        if (!finalPackagesData || finalPackagesData.length < 10) {
+        if (!usedServerSelectAll && (!finalPackagesData || finalPackagesData.length < 10)) {
           try {
             const proxyRes = await fetch('/api/db/select', {
               method: 'POST',
@@ -3994,11 +4045,10 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         if (dbLeadStaffAssignmentHistory) setLeadStaffAssignmentHistory(dbLeadStaffAssignmentHistory);
         if (dbLeadEquipmentHistory) setLeadEquipmentHistory(dbLeadEquipmentHistory);
 
-        // Fetch unified Client Acceptance Verifications
+        // Resolve parallel Client Acceptance Verifications fetch
         try {
-          const caRes = await fetch('/api/client-acceptance/list');
-          const parsedCa = await safeParseResponse(caRes);
-          if (parsedCa.ok && parsedCa.isJson && parsedCa.data?.success && Array.isArray(parsedCa.data?.data)) {
+          const parsedCa = await caPromise;
+          if (parsedCa && parsedCa.ok && parsedCa.isJson && parsedCa.data?.success && Array.isArray(parsedCa.data?.data)) {
             setClientAcceptanceVerifications(parsedCa.data.data);
           }
         } catch (caErr) {
@@ -4358,7 +4408,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
 
     if (!supabaseClient) return;
 
-    const channels = [
+    const tableSpecs = [
       { table: 'users', key: 'id', setter: setUsers },
       { table: 'leads', key: 'lead_id', setter: setLeads },
       { table: 'orders', key: 'order_id', setter: setOrders },
@@ -4368,7 +4418,6 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       { table: 'payments', key: 'payment_id', setter: setPayments },
       { table: 'operations_staff', key: 'staff_id', setter: setStaff },
       { table: 'production_staff', key: 'staff_id', setter: setProductionStaff },
-      { table: 'activity_logs', key: 'log_id', setter: setLogs },
       { table: 'notifications', key: 'notification_id', setter: setNotifications },
       { table: 'equipment', key: 'equipment_id', setter: setEquipment },
       { table: 'production_specialties', key: 'speciality_id', setter: setSpecialities },
@@ -4382,170 +4431,164 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       { table: 'packages', key: 'package_id', setter: setPackages },
       { table: 'calendar_memos', key: 'id', setter: setCalendarMemos },
       { table: 'payment_history', key: 'id', setter: setPaymentHistory }
-    ].map(({ table, key, setter }) => {
-      return supabaseClient
-        .channel(`rt-${table}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table },
-          (payload) => {
-            updateDiagnosticMetric('realtime', 'ok');
-            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-              setter((prev: any[]) => {
-                const item = payload.new;
-                let mappedItem = table === 'users' ? { ...item, id: mapFromDbUserId(item.id) } : item;
-                if (table === 'notifications') mappedItem = mapNotificationFromDb(item);
-                if (table === 'leads') {
-                  const existingLead = prev.find((l: any) => l.lead_id === mappedItem.lead_id);
-                  let finalEvents = mappedItem.events && Array.isArray(mappedItem.events) && mappedItem.events.length > 0 
-                    ? mappedItem.events 
-                    : (existingLead?.events || []);
-                  if (finalEvents.length === 0) {
-                    finalEvents = deserializeLeadEvents(mappedItem.notes_special_customizations).events || [];
+    ];
+
+    const unifiedChannel = supabaseClient.channel('erp-realtime-all');
+    tableSpecs.forEach(({ table, key, setter }) => {
+      unifiedChannel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table },
+        (payload) => {
+          updateDiagnosticMetric('realtime', 'ok');
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            setter((prev: any[]) => {
+              const item = payload.new;
+              let mappedItem = table === 'users' ? { ...item, id: mapFromDbUserId(item.id) } : item;
+              if (table === 'notifications') mappedItem = mapNotificationFromDb(item);
+              if (table === 'leads') {
+                const existingLead = prev.find((l: any) => l.lead_id === mappedItem.lead_id);
+                let finalEvents = mappedItem.events && Array.isArray(mappedItem.events) && mappedItem.events.length > 0 
+                  ? mappedItem.events 
+                  : (existingLead?.events || []);
+                if (finalEvents.length === 0) {
+                  finalEvents = deserializeLeadEvents(mappedItem.notes_special_customizations).events || [];
+                }
+
+                finalEvents = finalEvents.map((e: any, idx: number) => {
+                  const eId = e.id || e.event_id || `EVT-0${idx + 1}`;
+                  const eName = e.event_name || e.custom_event_name || e.event_type || `Event ${idx + 1}`;
+
+                  let eventDeliverables = e.deliverables;
+                  if ((!eventDeliverables || (Array.isArray(eventDeliverables) && eventDeliverables.length === 0)) && (mappedItem.deliverables_description || existingLead?.deliverables_description)) {
+                    const delText = mappedItem.deliverables_description || existingLead?.deliverables_description;
+                    const parsed = parseDeliverablesWithQty(delText, eName, eId, idx);
+                    if (parsed.length > 0) {
+                      eventDeliverables = parsed;
+                    }
                   }
 
-                  finalEvents = finalEvents.map((e: any, idx: number) => {
-                    const eId = e.id || e.event_id || `EVT-0${idx + 1}`;
-                    const eName = e.event_name || e.custom_event_name || e.event_type || `Event ${idx + 1}`;
-
-                    let eventDeliverables = e.deliverables;
-                    if ((!eventDeliverables || (Array.isArray(eventDeliverables) && eventDeliverables.length === 0)) && (mappedItem.deliverables_description || existingLead?.deliverables_description)) {
-                      const delText = mappedItem.deliverables_description || existingLead?.deliverables_description;
-                      const parsed = parseDeliverablesWithQty(delText, eName, eId, idx);
-                      if (parsed.length > 0) {
-                        eventDeliverables = parsed;
-                      }
+                  let eventTeamMembers = e.team_members || e.Team_Members;
+                  if ((!eventTeamMembers || (Array.isArray(eventTeamMembers) && eventTeamMembers.length === 0)) && (mappedItem.team_members || mappedItem.Team_member || mappedItem.Team_Members || existingLead?.team_members)) {
+                    const rawTm = mappedItem.team_members || mappedItem.Team_member || mappedItem.Team_Members || existingLead?.team_members;
+                    const parsedTm = parseTeamMembers(rawTm, eName, eId, idx);
+                    if (parsedTm.length > 0) {
+                      eventTeamMembers = parsedTm;
                     }
-
-                    let eventTeamMembers = e.team_members || e.Team_Members;
-                    if ((!eventTeamMembers || (Array.isArray(eventTeamMembers) && eventTeamMembers.length === 0)) && (mappedItem.team_members || mappedItem.Team_member || mappedItem.Team_Members || existingLead?.team_members)) {
-                      const rawTm = mappedItem.team_members || mappedItem.Team_member || mappedItem.Team_Members || existingLead?.team_members;
-                      const parsedTm = parseTeamMembers(rawTm, eName, eId, idx);
-                      if (parsedTm.length > 0) {
-                        eventTeamMembers = parsedTm;
-                      }
-                    }
-
-                    return {
-                      ...e,
-                      id: eId,
-                      event_id: eId,
-                      event_name: eName,
-                      deliverables: eventDeliverables || [],
-                      team_members: eventTeamMembers || []
-                    };
-                  });
-
-                  mappedItem = { 
-                    ...mappedItem, 
-                    status: mappedItem.current_status || mappedItem.status || 'New Lead', 
-                    current_status: mappedItem.current_status || mappedItem.status || 'New Lead',
-                    events: finalEvents
-                  };
-                }
-                if (table === 'orders') mappedItem = { ...mappedItem, current_stage: mappedItem.current_stage || mappedItem.order_status };
-                if (table === 'payment_history') {
-                  let rejectedIds = new Set<string>();
-                  try {
-                    const rejectedSaved = localStorage.getItem('rejected_payment_history_ids');
-                    if (rejectedSaved) rejectedIds = new Set(JSON.parse(rejectedSaved));
-                  } catch (_) {}
-
-                  const histId = String(mappedItem.id || mappedItem.payment_history_id || '');
-                  const isExplicitlyRejected = mappedItem.approval_status === 'Rejected' || 
-                    rejectedIds.has(histId) ||
-                    (typeof mappedItem.notes === 'string' && (
-                      mappedItem.notes.includes('Rejected') || 
-                      mappedItem.notes.includes('[REJECTED]') || 
-                      mappedItem.notes.endsWith('- Rejected') || 
-                      mappedItem.notes.toLowerCase().includes('rejected by business owner')
-                    ));
-
-                  const isPending = !isExplicitlyRejected && (
-                    mappedItem.approval_status === 'Waiting for Approval' || 
-                    (typeof mappedItem.notes === 'string' && mappedItem.notes.includes('Waiting for Approval'))
-                  );
-
-                  mappedItem = {
-                    ...mappedItem,
-                    approval_status: isExplicitlyRejected ? 'Rejected' : (isPending ? 'Waiting for Approval' : 'Approved')
-                  };
-                }
-                if (table === 'users') mappedItem = mapUserFieldsFromDb(item);
-                if (table === 'operations_staff') {
-                  let extra: any = {};
-                  if (item.notes && typeof item.notes === 'string' && item.notes.trim().startsWith('{') && item.notes.trim().endsWith('}')) {
-                    try { extra = JSON.parse(item.notes); } catch (e) {}
                   }
-                  const { current_password: _cp, password: _p, Password: _P, ...cleanExtra } = extra;
-                  const rawMob = item.mobile ?? item.mobile_number ?? '';
-                  const rawWa = item.whatsapp_number ?? extra.whatsapp_number ?? rawMob;
-                  mappedItem = {
-                    ...item,
-                    ...cleanExtra,
-                    staff_id: mapFromDbStaffId(item.staff_id),
-                    mobile: rawMob !== null && rawMob !== undefined ? String(rawMob).trim() : '',
-                    whatsapp_number: rawWa !== null && rawWa !== undefined ? String(rawWa).trim() : '',
-                    email: item.email !== null && item.email !== undefined ? String(item.email).trim() : '',
-                    auth_user_id: extra.auth_user_id || item.auth_user_id || undefined,
-                    notes: (item.notes && typeof item.notes === 'string' && item.notes.trim().startsWith('{') && item.notes.trim().endsWith('}')) ? (extra.notes || '') : item.notes
+
+                  return {
+                    ...e,
+                    id: eId,
+                    event_id: eId,
+                    event_name: eName,
+                    deliverables: eventDeliverables || [],
+                    team_members: eventTeamMembers || []
                   };
-                  delete mappedItem.password;
-                  delete mappedItem.Password;
-                  delete mappedItem.current_password;
+                });
+
+                mappedItem = { 
+                  ...mappedItem, 
+                  status: mappedItem.current_status || mappedItem.status || 'New Lead', 
+                  current_status: mappedItem.current_status || mappedItem.status || 'New Lead',
+                  events: finalEvents
+                };
+              }
+              if (table === 'orders') mappedItem = { ...mappedItem, current_stage: mappedItem.current_stage || mappedItem.order_status };
+              if (table === 'payment_history') {
+                let rejectedIds = new Set<string>();
+                try {
+                  const rejectedSaved = localStorage.getItem('rejected_payment_history_ids');
+                  if (rejectedSaved) rejectedIds = new Set(JSON.parse(rejectedSaved));
+                } catch (_) {}
+
+                const histId = String(mappedItem.id || mappedItem.payment_history_id || '');
+                const isExplicitlyRejected = mappedItem.approval_status === 'Rejected' || 
+                  rejectedIds.has(histId) ||
+                  (typeof mappedItem.notes === 'string' && (
+                    mappedItem.notes.includes('Rejected') || 
+                    mappedItem.notes.includes('[REJECTED]') || 
+                    mappedItem.notes.endsWith('- Rejected') || 
+                    mappedItem.notes.toLowerCase().includes('rejected by business owner')
+                  ));
+
+                const isPending = !isExplicitlyRejected && (
+                  mappedItem.approval_status === 'Waiting for Approval' || 
+                  (typeof mappedItem.notes === 'string' && mappedItem.notes.includes('Waiting for Approval'))
+                );
+
+                mappedItem = {
+                  ...mappedItem,
+                  approval_status: isExplicitlyRejected ? 'Rejected' : (isPending ? 'Waiting for Approval' : 'Approved')
+                };
+              }
+              if (table === 'users') mappedItem = mapUserFieldsFromDb(item);
+              if (table === 'operations_staff') {
+                let extra: any = {};
+                if (item.notes && typeof item.notes === 'string' && item.notes.trim().startsWith('{') && item.notes.trim().endsWith('}')) {
+                  try { extra = JSON.parse(item.notes); } catch (e) {}
                 }
-                if (table === 'production_staff') {
-                  mappedItem = mapProductionStaffFromDb(item);
-                }
-                if (table === 'packages') mappedItem = mapDbRecordToPackage(item);
-                if (table === 'equipment') mappedItem = { ...item, equipment_id: mapFromDbEquipmentId(item.equipment_id) };
-                
-                const exists = prev.some((x: any) => x[key] === mappedItem[key]);
-                if (exists) {
-                  return prev.map((x: any) => (x[key] === mappedItem[key] ? mappedItem : x));
+                const { current_password: _cp, password: _p, Password: _P, ...cleanExtra } = extra;
+                const rawMob = item.mobile ?? item.mobile_number ?? '';
+                const rawWa = item.whatsapp_number ?? extra.whatsapp_number ?? rawMob;
+                mappedItem = {
+                  ...item,
+                  ...cleanExtra,
+                  staff_id: mapFromDbStaffId(item.staff_id),
+                  mobile: rawMob !== null && rawMob !== undefined ? String(rawMob).trim() : '',
+                  whatsapp_number: rawWa !== null && rawWa !== undefined ? String(rawWa).trim() : '',
+                  email: item.email !== null && item.email !== undefined ? String(item.email).trim() : '',
+                  auth_user_id: extra.auth_user_id || item.auth_user_id || undefined,
+                  notes: (item.notes && typeof item.notes === 'string' && item.notes.trim().startsWith('{') && item.notes.trim().endsWith('}')) ? (extra.notes || '') : item.notes
+                };
+                delete mappedItem.password;
+                delete mappedItem.Password;
+                delete mappedItem.current_password;
+              }
+              if (table === 'production_staff') {
+                mappedItem = mapProductionStaffFromDb(item);
+              }
+              if (table === 'packages') mappedItem = mapDbRecordToPackage(item);
+              if (table === 'equipment') mappedItem = { ...item, equipment_id: mapFromDbEquipmentId(item.equipment_id) };
+              
+              const exists = prev.some((x: any) => x[key] === mappedItem[key]);
+              if (exists) {
+                return prev.map((x: any) => (x[key] === mappedItem[key] ? mappedItem : x));
+              } else {
+                if (['leads', 'orders', 'activity_logs', 'notifications'].includes(table)) {
+                  return [mappedItem, ...prev];
                 } else {
-                  if (['leads', 'orders', 'activity_logs', 'notifications'].includes(table)) {
-                    return [mappedItem, ...prev];
-                  } else {
-                    return [...prev, mappedItem];
-                  }
+                  return [...prev, mappedItem];
                 }
-              });
-            } else if (payload.eventType === 'DELETE') {
-              setter((prev: any[]) => {
-                const oldItem = payload.old;
-                const matchVal = table === 'users' ? mapFromDbUserId(oldItem.id) : oldItem[key];
-                return prev.filter(x => x[key] !== matchVal);
-              });
-            }
+              }
+            });
+          } else if (payload.eventType === 'DELETE') {
+            setter((prev: any[]) => {
+              const oldItem = payload.old;
+              const matchVal = table === 'users' ? mapFromDbUserId(oldItem.id) : oldItem[key];
+              return prev.filter(x => x[key] !== matchVal);
+            });
           }
-        )
-        .subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            updateDiagnosticMetric('realtime', 'ok');
-          } else {
-            updateDiagnosticMetric('realtime', 'fail');
-          }
-        });
+        }
+      );
     });
 
-    const leadEventsChannel = supabaseClient.channel('rt-lead_events')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_events' }, (payload) => {
+    unifiedChannel.on('postgres_changes', { event: '*', schema: 'public', table: 'lead_events' }, () => {
+      updateDiagnosticMetric('realtime', 'ok');
+      broadcastSyncPing();
+    });
+
+    unifiedChannel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
         updateDiagnosticMetric('realtime', 'ok');
-        fetchFromDb(false).catch(e => console.warn('fetchFromDb failed:', e?.message || e));
-      })
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          updateDiagnosticMetric('realtime', 'ok');
-        } else {
-          updateDiagnosticMetric('realtime', 'fail');
-        }
-      });
+      } else {
+        updateDiagnosticMetric('realtime', 'fail');
+      }
+    });
 
     // Handle window focus and document visibility to fetch fresh data when user returns to app
     const handleFocusOrVisible = () => {
       const now = Date.now();
-      if (now - lastFetchTimeRef.current < 2000) {
+      if (now - lastFetchTimeRef.current < 10000) {
         return;
       }
       console.log("[SYNC] App focused/visible, pulling fresh database records...");
@@ -4575,16 +4618,22 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
 
     // Realtime subscriptions handle granular updates. No global sync needed.
     return () => {
-      channels.forEach(ch => supabaseClient.removeChannel(ch));
-      supabaseClient.removeChannel(leadEventsChannel);
+      supabaseClient.removeChannel(unifiedChannel);
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(pollingInterval);
     };
   }, []);
 
+  const syncPingTimerRef = useRef<any>(null);
   const broadcastSyncPing = async () => {
-    fetchFromDb(false).catch(e => console.warn('fetchFromDb failed:', e?.message || e));
+    if (syncPingTimerRef.current) {
+      clearTimeout(syncPingTimerRef.current);
+    }
+    syncPingTimerRef.current = setTimeout(() => {
+      syncPingTimerRef.current = null;
+      fetchFromDb(false).catch(e => console.warn('fetchFromDb failed:', e?.message || e));
+    }, 10000);
   };
 
 
@@ -4792,19 +4841,8 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         return { success: false, error: 'Password is required.' };
       }
 
-      const logAttempt = (status: string, reason: string, userId?: string) => {
+      const logAttempt = (status: string, reason: string, _userId?: string) => {
         console.log(`[LOGIN ${status}] ${cleanInput} - ${reason}`);
-        if (supabaseClient) {
-          supabaseClient.from('login_logs').insert({
-            username_or_email: cleanInput,
-            user_id: userId || null,
-            login_status: status,
-            failure_reason: reason,
-            user_agent: navigator.userAgent
-          }).then(({ error }) => {
-            if (error) console.warn('Failed to write to login_logs:', error);
-          });
-        }
       };
 
       if (!supabaseClient) {
@@ -4880,42 +4918,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         }
       };
 
-      try {
-        // Query live server proxy first for fresh, non-cached users list
-        try {
-          const srvRes = await fetchWithTimeout('/api/db/select', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ table: 'users' })
-          });
-          const srvData = await srvRes.json();
-          if (srvData.success && Array.isArray(srvData.data) && srvData.data.length > 0) {
-            fullDbUsersList = srvData.data;
-          }
-        } catch (srvErr) {
-          console.warn('[LOGIN] Server select proxy fallback:', srvErr);
-        }
-
-        if (fullDbUsersList.length === 0 && supabaseClient) {
-          const { data: allUsers } = await supabaseClient.from('users').select('*');
-          if (allUsers && allUsers.length > 0) {
-            fullDbUsersList = allUsers;
-          }
-        }
-
-        if (fullDbUsersList.length > 0) {
-          candidateUsers = fullDbUsersList.filter(matchesUserInput);
-        }
-      } catch (err: any) {
-        console.warn('[LOGIN] Error querying users table:', err?.message || err);
-      }
-
-      // Check in-memory users list fallback if no candidates from DB query
-      if (candidateUsers.length === 0 && users.length > 0) {
-        candidateUsers = users.filter(matchesUserInput);
-      }
-
-      // Load fresh staff records so login never misses newly onboarded/updated staff or uses stale in-memory state
+      // Load fresh users, staff records, and resolved login emails in a single parallel batch
       let liveProdList = productionStaff;
       let liveOpList = staff;
       const mapOpStaffRaw = (item: any) => {
@@ -4933,7 +4936,12 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
 
       let resolvedServerEmails: string[] = [];
       try {
-        const [prodSrvRes, opSrvRes, resolveEmailRes] = await Promise.all([
+        const [usersSrvRes, prodSrvRes, opSrvRes, resolveEmailRes] = await Promise.all([
+          fetchWithTimeout('/api/db/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ table: 'users' })
+          }).then(r => r.json()).catch(() => null),
           fetchWithTimeout('/api/db/select', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -4950,6 +4958,19 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             body: JSON.stringify({ identifier: cleanInput })
           }, 8000).then(r => r.json()).catch(() => null)
         ]);
+
+        if (usersSrvRes?.success && Array.isArray(usersSrvRes.data) && usersSrvRes.data.length > 0) {
+          fullDbUsersList = usersSrvRes.data;
+        } else if (supabaseClient) {
+          const { data: allUsers } = await supabaseClient.from('users').select('*');
+          if (allUsers && allUsers.length > 0) {
+            fullDbUsersList = allUsers;
+          }
+        }
+        if (fullDbUsersList.length > 0) {
+          candidateUsers = fullDbUsersList.filter(matchesUserInput);
+        }
+
         if (resolveEmailRes?.success && Array.isArray(resolveEmailRes.emails)) {
           resolvedServerEmails = resolveEmailRes.emails;
         }
@@ -4967,7 +4988,14 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             liveOpList = oData.map(mapOpStaffRaw);
           }
         }
-      } catch (_) {}
+      } catch (err: any) {
+        console.warn('[LOGIN] Error querying directory tables:', err?.message || err);
+      }
+
+      // Check in-memory users list fallback if no candidates from DB query
+      if (candidateUsers.length === 0 && users.length > 0) {
+        candidateUsers = users.filter(matchesUserInput);
+      }
 
       const matchesStaffInput = (s: any) => {
         if (!s) return false;
@@ -5411,9 +5439,10 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       setLogs((prev) => [newLog, ...prev]);
       pushInsert('activity_logs', newLog);
 
-      // Always fetch fresh data from Supabase when user logs in
+      // Refresh data from Supabase in the background (only show blocking loader if initial fetch hasn't completed yet)
       try {
-        fetchFromDb(true).catch(e => console.warn("[LOGIN] fetchFromDb threw:", e?.message || e));
+        const needsBlockingLoader = lastFetchTimeRef.current === 0;
+        fetchFromDb(needsBlockingLoader).catch(e => console.warn("[LOGIN] fetchFromDb threw:", e?.message || e));
       } catch (e: any) {
         console.warn("[LOGIN] fetchFromDb threw:", e?.message || e);
       }
@@ -11515,6 +11544,11 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     }
   };
 
+  const notificationsRef = useRef(notifications);
+  useEffect(() => {
+    notificationsRef.current = notifications;
+  }, [notifications]);
+
   // Automatic Reminder Notifications for Event Dates & Target Delivery Dates
   useEffect(() => {
     if (isDataLoading) return;
@@ -11523,8 +11557,9 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     const checkAndGenerateReminders = async () => {
       isCheckingRemindersRef.current = true;
       try {
+        const currentNotifications = notificationsRef.current;
+        const existingNotifIds = new Set(currentNotifications.map(n => n.notification_id));
         const todayStr = new Date().toISOString().split('T')[0];
-        const nowMs = Date.now();
         
         const getDaysDiff = (targetDateStr: string, todayDateStr: string) => {
           const d1 = new Date(targetDateStr);
@@ -11536,11 +11571,12 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
         };
 
         // Load deleted notification IDs to avoid recreation
-        let deletedIds: string[] = [];
+        let deletedIds = new Set<string>();
         try {
           const deletedStr = localStorage.getItem('erp_deleted_notifications');
           if (deletedStr) {
-            deletedIds = JSON.parse(deletedStr);
+            const parsed = JSON.parse(deletedStr);
+            if (Array.isArray(parsed)) deletedIds = new Set(parsed);
           }
         } catch (e) {
           console.warn("Error parsing deleted notifications:", e);
@@ -11578,7 +11614,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
               for (const role of roles) {
                 const prefix = role.replace(/\s+/g, '');
                 const notifId = `NTF-rem-event-${orderIdValue}-${prefix}-${t.days}`;
-                const exists = notifications.some(n => n.notification_id === notifId) || deletedIds.includes(notifId) || newlyAddedIds.has(notifId);
+                const exists = existingNotifIds.has(notifId) || deletedIds.has(notifId) || newlyAddedIds.has(notifId);
                 
                 if (!exists) {
                   newlyAddedIds.add(notifId);
@@ -11637,7 +11673,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           for (const t of deliveryThresholds) {
             if (daysDiff === t.days) {
               const notifId = `NTF-rem-prod-${p.production_id}-${t.days}`;
-              const exists = notifications.some(n => n.notification_id === notifId) || deletedIds.includes(notifId) || newlyAddedIds.has(notifId);
+              const exists = existingNotifIds.has(notifId) || deletedIds.has(notifId) || newlyAddedIds.has(notifId);
               
               if (!exists) {
                 newlyAddedIds.add(notifId);
@@ -11658,7 +11694,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           // Overdue Delivery
           if (daysDiff < 0) {
             const notifId = `NTF-rem-prod-${p.production_id}-overdue`;
-            const exists = notifications.some(n => n.notification_id === notifId) || deletedIds.includes(notifId) || newlyAddedIds.has(notifId);
+            const exists = existingNotifIds.has(notifId) || deletedIds.has(notifId) || newlyAddedIds.has(notifId);
             
             if (!exists) {
               newlyAddedIds.add(notifId);
@@ -11747,7 +11783,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       console.warn("checkAndGenerateReminders error:", e);
       isCheckingRemindersRef.current = false;
     });
-  }, [isDataLoading, augmentedProduction, notifications, augmentedOrders, leads]);
+  }, [isDataLoading, augmentedProduction, augmentedOrders, leads]);
 
   const isTerminalStatusValue = (s?: string) => {
     const val = String(s || '').trim().toLowerCase();
