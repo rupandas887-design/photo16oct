@@ -889,7 +889,7 @@ export const ProductionStaffDirectoryModule: React.FC = () => {
                       }`}
                       required
                     />
-                    {formError && formError.toLowerCase().includes('mobile') && (
+                    {!editingStaff && formError && formError.toLowerCase().includes('mobile') && (
                       <p className="text-[11px] text-rose-400 font-sans mt-1">
                         This mobile number is already registered.
                       </p>
@@ -937,7 +937,7 @@ export const ProductionStaffDirectoryModule: React.FC = () => {
                       }`}
                       required
                     />
-                    {formError && formError.toLowerCase().includes('email') && (
+                    {!editingStaff && formError && formError.toLowerCase().includes('email') && (
                       <p className="text-[11px] text-rose-400 font-sans mt-1">
                         This email address is already registered.
                       </p>

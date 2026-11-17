@@ -8135,7 +8135,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                           editingStaffId ? 'opacity-60 cursor-not-allowed bg-zinc-900/60 border-zinc-800' : addStaffError && addStaffError.toLowerCase().includes('mobile') ? 'border-rose-500/70' : 'border-zinc-850'
                         }`}
                       />
-                      {addStaffError && addStaffError.toLowerCase().includes('mobile') && (
+                      {!editingStaffId && addStaffError && addStaffError.toLowerCase().includes('mobile') && (
                         <p className="text-[11px] text-rose-400 font-sans mt-1">
                           This mobile number is already registered.
                         </p>
@@ -8181,7 +8181,7 @@ _Please access the PhotoCrew ERP Dashboard to synchronize progress._`;
                           editingStaffId ? 'opacity-60 cursor-not-allowed bg-zinc-900/60 border-zinc-800' : addStaffError && addStaffError.toLowerCase().includes('email') ? 'border-rose-500/70' : 'border-zinc-850'
                         }`}
                       />
-                      {addStaffError && addStaffError.toLowerCase().includes('email') && (
+                      {!editingStaffId && addStaffError && addStaffError.toLowerCase().includes('email') && (
                         <p className="text-[11px] text-rose-400 font-sans mt-1">
                           This email address is already registered.
                         </p>

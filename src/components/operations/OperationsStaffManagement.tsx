@@ -365,7 +365,7 @@ export const OperationsStaffManagement: React.FC = () => {
       console.error("Error submitting staff:", err);
       const errMsg = formatStaffErrorMessage(err);
       const lower = errMsg.toLowerCase();
-      if (lower.includes("already registered") || lower.includes("duplicate")) {
+      if (!editingId && (lower.includes("already registered") || lower.includes("duplicate"))) {
         const hasMob = lower.includes("mobile") || lower.includes("phone");
         const hasEm = lower.includes("email");
         if (hasMob && hasEm) {

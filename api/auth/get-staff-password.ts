@@ -331,30 +331,84 @@ export default async function handler(req: any, res: any) {
         : null;
 
     let resolvedPassword: string | null = staffRowPlain;
-    const resolvedStaffAuthId =
+    let resolvedStaffAuthId =
       targetStaffRecord?.auth_user_id ||
       extractNotesAuthUserIdServer(targetStaffRecord?.notes) ||
       auth_id ||
       null;
 
-    if (!resolvedPassword && resolvedStaffAuthId && db.auth?.admin) {
+    const lookupEmail = cleanEmail(targetStaffRecord?.email || cleanEmailStr);
+    const lookupMobile = cleanPhone(targetStaffRecord?.mobile || cleanMobileStr);
+
+    if (!resolvedStaffAuthId && lookupEmail) {
+      try {
+        const { data: uRow } = await db.from('users').select('id').ilike('email', lookupEmail).maybeSingle();
+        if (uRow?.id) resolvedStaffAuthId = String(uRow.id).trim();
+      } catch (_) {}
+    }
+
+    let foundAuthUserObj: any = null;
+    if (resolvedStaffAuthId && db.auth?.admin) {
       try {
         const { data: uData } = await db.auth.admin.getUserById(resolvedStaffAuthId);
-        const encPwd = uData?.user?.app_metadata?.enc_pwd;
-        if (encPwd) {
-          const dec = decryptStaffPassword(encPwd);
-          if (dec && !isHashedOrEncrypted(dec)) {
-            resolvedPassword = dec;
-          }
-        }
-        if (!resolvedPassword) {
-          const metaPwd =
-            uData?.user?.user_metadata?.current_password || uData?.user?.user_metadata?.password;
-          if (metaPwd && !isHashedOrEncrypted(String(metaPwd))) {
-            resolvedPassword = String(metaPwd);
-          }
-        }
+        if (uData?.user) foundAuthUserObj = uData.user;
       } catch (_) {}
+    }
+
+    if (!foundAuthUserObj && db.auth?.admin && (lookupEmail || (lookupMobile && lookupMobile.length >= 7))) {
+      let page = 1;
+      const perPage = 10;
+      let consecutiveErrors = 0;
+      while (page <= 80) {
+        try {
+          const { data: listData, error: listErr } = await db.auth.admin.listUsers({ page, perPage });
+          if (listErr) {
+            consecutiveErrors++;
+            if (consecutiveErrors >= 5) break;
+            page++;
+            continue;
+          }
+          consecutiveErrors = 0;
+          const usersList = listData?.users || [];
+          if (usersList.length === 0) break;
+          const match = usersList.find((u: any) => {
+            const uEm = cleanEmail(u.email);
+            const uOrig = cleanEmail(u.user_metadata?.original_email);
+            const uMob = cleanPhone(u.user_metadata?.mobile || u.phone);
+            if (lookupEmail && (uEm === lookupEmail || uOrig === lookupEmail)) return true;
+            if (!lookupEmail && lookupMobile && uMob === lookupMobile) return true;
+            return false;
+          });
+          if (match) {
+            foundAuthUserObj = match;
+            resolvedStaffAuthId = match.id;
+            break;
+          }
+          if (usersList.length < perPage) break;
+          page++;
+        } catch (_) {
+          consecutiveErrors++;
+          if (consecutiveErrors >= 5) break;
+          page++;
+        }
+      }
+    }
+
+    if (!resolvedPassword && foundAuthUserObj) {
+      const encPwd = foundAuthUserObj?.app_metadata?.enc_pwd;
+      if (encPwd) {
+        const dec = decryptStaffPassword(encPwd);
+        if (dec && !isHashedOrEncrypted(dec)) {
+          resolvedPassword = dec;
+        }
+      }
+      if (!resolvedPassword) {
+        const metaPwd =
+          foundAuthUserObj?.user_metadata?.current_password || foundAuthUserObj?.user_metadata?.password;
+        if (metaPwd && !isHashedOrEncrypted(String(metaPwd))) {
+          resolvedPassword = String(metaPwd);
+        }
+      }
     }
 
     if (!resolvedPassword && typeof staffRowRawPwd === 'string' && /^[0-9a-f]{64}$/i.test(staffRowRawPwd.trim())) {
@@ -373,9 +427,34 @@ export default async function handler(req: any, res: any) {
     if (resolvedPassword && resolvedStaffAuthId && db.auth?.admin) {
       db.auth.admin
         .updateUserById(resolvedStaffAuthId, {
-          app_metadata: { enc_pwd: encryptStaffPassword(resolvedPassword) },
+          app_metadata: {
+            ...(foundAuthUserObj?.app_metadata || {}),
+            enc_pwd: encryptStaffPassword(resolvedPassword),
+          },
         })
         .catch(() => {});
+    }
+
+    if (resolvedStaffAuthId && targetStaffRecord?.staff_id && targetDept) {
+      const existingNotesId = extractNotesAuthUserIdServer(targetStaffRecord.notes);
+      if (existingNotesId !== resolvedStaffAuthId) {
+        const table = targetDept === 'production' ? 'production_staff' : 'operations_staff';
+        let notesObj: any = {};
+        try {
+          if (targetStaffRecord.notes) {
+            notesObj =
+              typeof targetStaffRecord.notes === 'string'
+                ? JSON.parse(targetStaffRecord.notes)
+                : targetStaffRecord.notes;
+          }
+        } catch (_) {}
+        notesObj.auth_user_id = resolvedStaffAuthId;
+        db.from(table)
+          .update({ notes: JSON.stringify(notesObj) })
+          .eq('staff_id', targetStaffRecord.staff_id)
+          .then(() => {})
+          .catch(() => {});
+      }
     }
 
     return res.status(200).json({
