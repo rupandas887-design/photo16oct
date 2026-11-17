@@ -61,6 +61,68 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
     }>;
   } | null>(null);
 
+  // Helper to resolve Final Package Amount after discount for a lead/order
+  const resolveConvertedPackageAmount = (lead?: any, order?: any): number => {
+    const parsePositive = (val: any): number => {
+      if (val === null || val === undefined || val === '') return 0;
+      const num = typeof val === 'number' ? val : Number(String(val).replace(/[^0-9.-]+/g, ''));
+      return Number.isFinite(num) && num > 0 ? num : 0;
+    };
+
+    const orderFinalPkg =
+      parsePositive(order?.Final_Package_Amount) ||
+      parsePositive(order?.final_package_amount) ||
+      parsePositive(order?.Final_Quotation_Amount) ||
+      parsePositive(order?.final_quotation_amount);
+    if (orderFinalPkg > 0) return orderFinalPkg;
+
+    const leadFinalPkgLower = parsePositive(lead?.final_package_amount);
+    const leadFinalPkgUpper = parsePositive(lead?.Final_Package_Amount);
+    const leadFinalQuot =
+      parsePositive(lead?.Final_Quotation_Amount) ||
+      parsePositive(lead?.final_quotation_amount);
+    const orderQuotAmt =
+      parsePositive(order?.quotation_amount) ||
+      parsePositive(order?.final_amount) ||
+      parsePositive(order?.grand_total);
+
+    // If lead.final_package_amount matches the confirmed order's quotation_amount, prefer it
+    if (leadFinalPkgLower > 0 && orderQuotAmt > 0 && leadFinalPkgLower === orderQuotAmt) {
+      return leadFinalPkgLower;
+    }
+
+    if (leadFinalPkgUpper > 0) return leadFinalPkgUpper;
+    if (leadFinalPkgLower > 0) return leadFinalPkgLower;
+    if (leadFinalQuot > 0) return leadFinalQuot;
+    if (orderQuotAmt > 0) return orderQuotAmt;
+
+    const leadFallbackAmt =
+      parsePositive(lead?.final_amount) ||
+      parsePositive(lead?.quotation_amount) ||
+      parsePositive(lead?.grand_total) ||
+      parsePositive(lead?.final_total);
+    if (leadFallbackAmt > 0) return leadFallbackAmt;
+
+    // Fallback formula: Package Price + Additional Services - Discount
+    const pkgPrice = parsePositive(lead?.package_price) || parsePositive(order?.package_price);
+    const addServices =
+      parsePositive(lead?.Additional_Services_Cost) ||
+      parsePositive(lead?.additional_services_amount) ||
+      parsePositive(order?.additional_services_cost) ||
+      parsePositive(order?.additional_services_amount);
+    const discount =
+      parsePositive(lead?.Quotation_Discount) ||
+      parsePositive(lead?.discount_amount) ||
+      parsePositive(order?.Quotation_Discount) ||
+      parsePositive(order?.discount_amount);
+
+    if (pkgPrice > 0 || addServices > 0) {
+      return Math.max(0, pkgPrice + addServices - discount);
+    }
+
+    return 0;
+  };
+
   // Unified Pipeline calculation matching BusinessOwnerDashboard
   const unifiedPipeline = useMemo(() => {
     const itemMap = new Map<string, any>();
@@ -77,8 +139,8 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
         event_name: lead.events?.[0]?.event_name || lead.event_type || 'Event',
         event_date: lead.event_date || lead.events?.[0]?.event_date || null,
         created_at: lead.created_at || lead.created_date || null,
-        quotation_amount: lead.quotation_amount || lead.grand_total || 0,
-        sales_person: lead.sales_person || lead.created_by || 'Unassigned',
+        quotation_amount: resolveConvertedPackageAmount(lead, null),
+        sales_person: lead.sales_person || (lead.created_by ? String(lead.created_by).split('|')[0].trim() : '') || 'Unassigned',
         sales_status: status,
         ops_status: null,
         prod_status: null,
@@ -102,7 +164,7 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
         event_name: order.custom_event_name || order.event_type || 'Event',
         event_date: order.event_date || null,
         created_at: order.created_at || null,
-        quotation_amount: order.quotation_amount || order.grand_total || 0,
+        quotation_amount: resolveConvertedPackageAmount(null, order),
         sales_person: order.sales_person || 'Unassigned',
         sales_status: 'Order Confirmed',
         ops_status: null,
@@ -116,7 +178,7 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
 
       existing.order_id = order.order_id || existing.order_id;
       existing.customer_name = order.customer_name || existing.customer_name;
-      existing.quotation_amount = order.quotation_amount || order.grand_total || existing.quotation_amount;
+      existing.quotation_amount = resolveConvertedPackageAmount(existing.rawLead, order) || existing.quotation_amount;
       if (order.current_stage === 'Order Closed' || order.current_stage === 'Closed') {
         existing.isClosed = true;
       }
@@ -321,14 +383,89 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
     // Filter leads by date range
     const filteredLeads = (leads || []).filter(l => isWithinDateRange(l.created_date || l.created_at || (l as any).updated_at));
 
-    const staffRows = salesUsers.map(user => {
-      const nameLower = user.name.toLowerCase();
-      const fullNameLower = (user.full_name || '').toLowerCase();
+    // Index orders by lead_id and order_id for fast, reliable lookup
+    const orderByLeadId = new Map<string, any>();
+    const orderByOrderId = new Map<string, any>();
+    (orders || []).forEach((o: any) => {
+      if (o?.lead_id) orderByLeadId.set(String(o.lead_id).trim(), o);
+      if (o?.order_id) orderByOrderId.set(String(o.order_id).trim(), o);
+    });
 
+    const normalizeStaffName = (raw?: string | null): string => {
+      if (!raw) return '';
+      return String(raw).split('|')[0].trim().toLowerCase();
+    };
+
+    const isConfirmedCustomerStage = (statusLower: string): boolean => {
+      if (!statusLower) return false;
+      return (
+        statusLower.includes('confirm') ||
+        statusLower.includes('assigned crew') ||
+        statusLower.includes('event started') ||
+        statusLower.includes('verified footage') ||
+        statusLower.includes('footage handover') ||
+        statusLower.includes('assigned editor') ||
+        statusLower.includes('editing started') ||
+        statusLower.includes('customer review') ||
+        statusLower.includes('editing completed') ||
+        statusLower.includes('client acceptance') ||
+        statusLower.includes('order closed') ||
+        statusLower === 'closed' ||
+        statusLower.includes('delivered')
+      );
+    };
+
+    const isCancelledOrLost = (leadStatusLower: string, order?: any): boolean => {
+      if (leadStatusLower.includes('cancel') || leadStatusLower.includes('lost')) return true;
+      if (order) {
+        const ordStage = String(order.current_stage || '').toLowerCase();
+        const ordStatus = String(order.status || order.order_status || '').toLowerCase();
+        const ordEventStatus = String(order.event_status || '').toLowerCase();
+        if (
+          ordStage.includes('cancel') ||
+          ordStatus.includes('cancel') ||
+          ordEventStatus.includes('cancel') ||
+          ordStage.includes('lost') ||
+          ordStatus.includes('lost')
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const staffRows = salesUsers.map(user => {
+      const nameLower = normalizeStaffName(user.name);
+      const fullNameLower = normalizeStaffName(user.full_name);
+      const userIdStr = user.id ? String(user.id).trim() : '';
+
+      const matchesStaffMember = (spRaw?: string | null, cbRaw?: string | null, staffIdRaw?: any): boolean => {
+        if (userIdStr && staffIdRaw && String(staffIdRaw).trim() === userIdStr) return true;
+        const sp = normalizeStaffName(spRaw);
+        const cb = normalizeStaffName(cbRaw);
+        if (nameLower && (sp === nameLower || cb === nameLower)) return true;
+        if (fullNameLower && (sp === fullNameLower || cb === fullNameLower)) return true;
+        return false;
+      };
+
+      const seenLeadKeys = new Set<string>();
       const staffLeads = filteredLeads.filter(l => {
-        const sp = (l.sales_person || '').toLowerCase();
-        const cb = (l.created_by || '').toLowerCase();
-        return sp === nameLower || sp === fullNameLower || cb === nameLower || cb === fullNameLower;
+        const leadKey = String(l.lead_id || l.id || '').trim();
+        const linkedOrder =
+          (leadKey && (orderByLeadId.get(leadKey) || orderByOrderId.get(leadKey))) ||
+          (l.order_id && orderByOrderId.get(String(l.order_id).trim())) ||
+          null;
+
+        const isMatch =
+          matchesStaffMember(l.sales_person, l.created_by, (l as any).sales_staff_id) ||
+          (linkedOrder ? matchesStaffMember(linkedOrder.sales_person, linkedOrder.created_by, linkedOrder.sales_staff_id) : false);
+
+        if (!isMatch) return false;
+        if (leadKey) {
+          if (seenLeadKeys.has(leadKey)) return false;
+          seenLeadKeys.add(leadKey);
+        }
+        return true;
       });
 
       let newLeadsCount = 0;
@@ -339,35 +476,49 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
       let totalQuotationValue = 0;
       let totalRevenue = 0;
 
+      const seenConvertedCustomerKeys = new Set<string>();
       const tasksForModal: Array<any> = [];
 
       staffLeads.forEach(lead => {
         const status = (lead.current_status || lead.status || '').trim();
         const sLower = status.toLowerCase();
+        const leadKey = String(lead.lead_id || lead.id || '').trim();
 
-        // Amount calculations
-        const qVal = Number(lead.quotation_amount || lead.grand_total || lead.final_total || 0);
-        
         // Find matching confirmed order if present
-        const matchingOrder = (orders || []).find(o => o.lead_id === lead.lead_id || o.order_id === lead.lead_id);
-        const orderRev = matchingOrder ? Number(matchingOrder.grand_total || matchingOrder.final_amount || qVal) : qVal;
+        const matchingOrder =
+          (leadKey && (orderByLeadId.get(leadKey) || orderByOrderId.get(leadKey))) ||
+          (lead.order_id && orderByOrderId.get(String(lead.order_id).trim())) ||
+          undefined;
+
+        // Resolve Final Package Amount after discount
+        const finalPackageAmount = resolveConvertedPackageAmount(lead, matchingOrder);
+        const cancelledOrLost = isCancelledOrLost(sLower, matchingOrder);
+        const isConverted =
+          !cancelledOrLost &&
+          (Boolean(matchingOrder) || Boolean(lead.order_id) || isConfirmedCustomerStage(sLower));
 
         if (sLower.includes('new lead') || sLower.includes('contacted') || sLower.includes('created quotation')) {
           newLeadsCount++;
         }
-        
+
         if (sLower.includes('follow') || sLower.includes('negotiation') || lead.next_follow_up_date) {
           followUpsCount++;
         }
 
-        if (sLower.includes('quote') || sLower.includes('quotation') || qVal > 0) {
+        if (sLower.includes('quote') || sLower.includes('quotation') || finalPackageAmount > 0) {
           quotationsCount++;
-          totalQuotationValue += qVal;
+          totalQuotationValue += finalPackageAmount;
         }
 
-        if (sLower.includes('confirm') || sLower.includes('order confirmed') || matchingOrder) {
-          confirmedOrdersCount++;
-          totalRevenue += orderRev;
+        if (isConverted) {
+          const dedupKey = String(matchingOrder?.order_id || lead.order_id || leadKey || lead.customer_phone || lead.customer_name || '').trim();
+          if (!dedupKey || !seenConvertedCustomerKeys.has(dedupKey)) {
+            if (dedupKey) seenConvertedCustomerKeys.add(dedupKey);
+            if (leadKey) seenConvertedCustomerKeys.add(leadKey);
+            if (matchingOrder?.order_id) seenConvertedCustomerKeys.add(String(matchingOrder.order_id).trim());
+            confirmedOrdersCount++;
+            totalRevenue += finalPackageAmount;
+          }
         } else if (sLower.includes('lost')) {
           lostLeadsCount++;
         }
@@ -390,7 +541,37 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
         });
       });
 
-      const totalLeads = staffLeads.length;
+      // Also check any confirmed orders directly assigned to this sales staff member that had no matching record in filteredLeads
+      (orders || []).forEach((order: any) => {
+        const orderKey = String(order.order_id || order.id || '').trim();
+        const leadKey = String(order.lead_id || '').trim();
+        if ((orderKey && seenConvertedCustomerKeys.has(orderKey)) || (leadKey && seenConvertedCustomerKeys.has(leadKey))) {
+          return;
+        }
+        if (leadKey && seenLeadKeys.has(leadKey)) {
+          return;
+        }
+        if (!matchesStaffMember(order.sales_person, order.created_by, order.sales_staff_id)) {
+          return;
+        }
+        if (!isWithinDateRange(order.order_date || order.created_at || order.updated_at)) {
+          return;
+        }
+        if (isCancelledOrLost('', order)) {
+          return;
+        }
+        const finalPackageAmount = resolveConvertedPackageAmount(null, order);
+        if (orderKey) seenConvertedCustomerKeys.add(orderKey);
+        if (leadKey) seenConvertedCustomerKeys.add(leadKey);
+        confirmedOrdersCount++;
+        totalRevenue += finalPackageAmount;
+        if (finalPackageAmount > 0) {
+          quotationsCount++;
+          totalQuotationValue += finalPackageAmount;
+        }
+      });
+
+      const totalLeads = Math.max(staffLeads.length, confirmedOrdersCount);
       const conversionRate = totalLeads > 0 ? Math.round((confirmedOrdersCount / totalLeads) * 100) : 0;
 
       return {
@@ -424,11 +605,11 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
     const grandRevenue = staffRows.reduce((acc, r) => acc + r.revenue, 0);
     const overallConversionRate = totalLeads > 0 ? Math.round((totalOrdersConfirmed / totalLeads) * 100) : 0;
 
-    // Rankings (Top 3)
+    // Rankings (Top 3) — Ranked by total converted package amount (highest first)
     const rankedSales = [...staffRows].sort((a, b) => {
-      if (b.conversionRate !== a.conversionRate) return b.conversionRate - a.conversionRate;
+      if (b.revenue !== a.revenue) return b.revenue - a.revenue;
       if (b.ordersConfirmed !== a.ordersConfirmed) return b.ordersConfirmed - a.ordersConfirmed;
-      return b.revenue - a.revenue;
+      return b.conversionRate - a.conversionRate;
     });
 
     return {
