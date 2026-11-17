@@ -69,39 +69,26 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
       return Number.isFinite(num) && num > 0 ? num : 0;
     };
 
-    const orderFinalPkg =
+    const amt =
       parsePositive(order?.Final_Package_Amount) ||
       parsePositive(order?.final_package_amount) ||
       parsePositive(order?.Final_Quotation_Amount) ||
-      parsePositive(order?.final_quotation_amount);
-    if (orderFinalPkg > 0) return orderFinalPkg;
-
-    const leadFinalPkgLower = parsePositive(lead?.final_package_amount);
-    const leadFinalPkgUpper = parsePositive(lead?.Final_Package_Amount);
-    const leadFinalQuot =
-      parsePositive(lead?.Final_Quotation_Amount) ||
-      parsePositive(lead?.final_quotation_amount);
-    const orderQuotAmt =
+      parsePositive(order?.final_quotation_amount) ||
       parsePositive(order?.quotation_amount) ||
+      parsePositive(order?.total_amount) ||
       parsePositive(order?.final_amount) ||
-      parsePositive(order?.grand_total);
-
-    // If lead.final_package_amount matches the confirmed order's quotation_amount, prefer it
-    if (leadFinalPkgLower > 0 && orderQuotAmt > 0 && leadFinalPkgLower === orderQuotAmt) {
-      return leadFinalPkgLower;
-    }
-
-    if (leadFinalPkgUpper > 0) return leadFinalPkgUpper;
-    if (leadFinalPkgLower > 0) return leadFinalPkgLower;
-    if (leadFinalQuot > 0) return leadFinalQuot;
-    if (orderQuotAmt > 0) return orderQuotAmt;
-
-    const leadFallbackAmt =
-      parsePositive(lead?.final_amount) ||
+      parsePositive(order?.grand_total) ||
+      parsePositive(lead?.Final_Package_Amount) ||
+      parsePositive(lead?.final_package_amount) ||
+      parsePositive(lead?.Final_Quotation_Amount) ||
+      parsePositive(lead?.final_quotation_amount) ||
       parsePositive(lead?.quotation_amount) ||
+      parsePositive(lead?.final_amount) ||
+      parsePositive(lead?.budget) ||
       parsePositive(lead?.grand_total) ||
       parsePositive(lead?.final_total);
-    if (leadFallbackAmt > 0) return leadFallbackAmt;
+
+    if (amt > 0) return amt;
 
     // Fallback formula: Package Price + Additional Services - Discount
     const pkgPrice = parsePositive(lead?.package_price) || parsePositive(order?.package_price);
@@ -378,7 +365,34 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
   // DATA CALCULATION: SALES PERFORMANCE
   // ----------------------------------------------------
   const salesData = useMemo(() => {
-    const salesUsers = (users || []).filter(u => u.role === 'Sales Team');
+    const rawSalesUsers = (users || []).filter(u => u.role === 'Sales Team' || u.role === 'Sales' || u.department === 'Sales');
+    const uniqueSalesNames = new Set<string>();
+    rawSalesUsers.forEach(u => { if (u.name) uniqueSalesNames.add(u.name.trim()); });
+    (leads || []).forEach(l => {
+      const sp = l.sales_person || l.sales_staff_name;
+      if (sp && !['Sales Team', 'Sales', 'Admin', 'System'].includes(String(sp).trim())) {
+        uniqueSalesNames.add(String(sp).split('|')[0].trim());
+      }
+    });
+    (orders || []).forEach(o => {
+      const sp = o.sales_person || o.sales_staff_name;
+      if (sp && !['Sales Team', 'Sales', 'Admin', 'System'].includes(String(sp).trim())) {
+        uniqueSalesNames.add(String(sp).split('|')[0].trim());
+      }
+    });
+
+    const salesUsers = Array.from(uniqueSalesNames).map((name, idx) => {
+      const existingUser = rawSalesUsers.find(u => u.name && u.name.toLowerCase() === name.toLowerCase());
+      return existingUser || {
+        id: `sales-staff-${idx}-${name.toLowerCase().replace(/\s+/g, '-')}`,
+        name: name,
+        full_name: name,
+        role: 'Sales Team',
+        email: `${name.toLowerCase().replace(/\s+/g, '')}@photocrew.com`,
+        mobile: '9999999999',
+        status: 'Active'
+      };
+    });
 
     // Filter leads by date range
     const filteredLeads = (leads || []).filter(l => isWithinDateRange(l.created_date || l.created_at || (l as any).updated_at));
@@ -443,8 +457,8 @@ export const OwnerStaffPerformanceDetailed: React.FC = () => {
         if (userIdStr && staffIdRaw && String(staffIdRaw).trim() === userIdStr) return true;
         const sp = normalizeStaffName(spRaw);
         const cb = normalizeStaffName(cbRaw);
-        if (nameLower && (sp === nameLower || cb === nameLower)) return true;
-        if (fullNameLower && (sp === fullNameLower || cb === fullNameLower)) return true;
+        if (nameLower && (sp === nameLower || cb === nameLower || sp.includes(nameLower) || nameLower.includes(sp))) return true;
+        if (fullNameLower && (sp === fullNameLower || cb === fullNameLower || sp.includes(fullNameLower) || fullNameLower.includes(sp))) return true;
         return false;
       };
 

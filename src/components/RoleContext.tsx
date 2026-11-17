@@ -9298,9 +9298,13 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     delete dbPayload.mobile_number;
     delete dbPayload.email;
     delete dbPayload.password;
-    delete dbPayload.Password;
     delete dbPayload.current_password;
     delete dbPayload.auth_user_id;
+    if (cleanPwd) {
+      dbPayload.Password = cleanPwd;
+    } else {
+      delete dbPayload.Password;
+    }
 
     if (dbPayload.notes !== undefined || updatedAuthUserId) {
       const plainNotes = dbPayload.notes !== undefined
@@ -9322,8 +9326,12 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       updated_by: currentUserName,
       updated_at: timestamp
     };
+    if (cleanPwd) {
+      updatedWithMetadata.Password = cleanPwd;
+    } else {
+      delete updatedWithMetadata.Password;
+    }
     delete updatedWithMetadata.password;
-    delete updatedWithMetadata.Password;
     delete updatedWithMetadata.current_password;
 
     setStaff((prev) => prev.map((s) => s.staff_id === staffId ? { ...s, ...updatedWithMetadata } : s));

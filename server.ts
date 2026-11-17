@@ -1705,6 +1705,16 @@ async function startServer() {
       if (table === 'payment_history' && matchColumn === 'payment_history_id') {
         matchColumn = 'id';
       }
+      if (table === 'operations_staff') {
+        if (matchColumn === 'staff_id' && matchValue && typeof matchValue === 'string' && matchValue.startsWith('STF-')) {
+          const num = matchValue.substring(4).padStart(12, '0');
+          matchValue = `55555555-5555-5555-5555-${num}`;
+        }
+        if (updates && updates.staff_id && typeof updates.staff_id === 'string' && updates.staff_id.startsWith('STF-')) {
+          const num = updates.staff_id.substring(4).padStart(12, '0');
+          updates.staff_id = `55555555-5555-5555-5555-${num}`;
+        }
+      }
       console.log(`[Server DB Update] Updating ${table} where ${matchColumn}=${matchValue}`, updates);
 
       // Enforce Staff Mobile and Email Lock Backend (Operations & Production Staff)
@@ -2638,22 +2648,21 @@ async function startServer() {
   };
 
   const decryptStaffPassword = (storedValue: any): string | null => {
-    if (typeof storedValue !== 'string' || !storedValue.startsWith('enc:v1:')) return null;
+    if (typeof storedValue !== 'string' || !storedValue.startsWith('enc:v1:')) return storedValue || null;
     const parts = storedValue.split(':');
-    if (parts.length !== 5) return null;
+    if (parts.length !== 5) return storedValue || null;
     try {
       const iv = Buffer.from(parts[2], 'base64');
       const authTag = Buffer.from(parts[3], 'base64');
       const encrypted = Buffer.from(parts[4], 'base64');
-      if (iv.length !== 12 || authTag.length !== 16) return null;
+      if (iv.length !== 12 || authTag.length !== 16) return storedValue || null;
       const key = getStaffPasswordEncryptionKey();
       const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
       decipher.setAuthTag(authTag);
       const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
       return decrypted.toString('utf8');
     } catch (e) {
-      console.warn('[Server Auth] Failed to decrypt staff password:', (e as any)?.message || e);
-      return null;
+      return storedValue;
     }
   };
 
