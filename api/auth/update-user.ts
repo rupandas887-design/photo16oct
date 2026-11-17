@@ -185,9 +185,8 @@ export default async function handler(req: any, res: any) {
             try { if (row.notes) notesObj = JSON.parse(row.notes); } catch (e) {}
             if (targetAuthId) notesObj.auth_user_id = targetAuthId;
             const psUpdates: any = { notes: JSON.stringify(notesObj) };
-            if (password) {
-              const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-              psUpdates.Password = passwordHash;
+            if (password && typeof password === 'string' && password.trim() !== '') {
+              psUpdates.Password = password;
             }
             const { error: psUpdErr } = await supabaseAdmin.from('production_staff').update(psUpdates).eq('staff_id', row.staff_id);
             if (psUpdErr) {
