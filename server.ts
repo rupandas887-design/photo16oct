@@ -3363,30 +3363,14 @@ async function startServer() {
   ): Promise<{ success: boolean; error?: string }> => {
     const payload: Record<string, any> = { ...(params.extraUpdates || {}) };
 
-    if (params.table === 'production_staff') {
-      if (typeof params.password === 'string' && params.password.trim() !== '') {
-        payload.Password = params.password;
-      }
-      if (Object.keys(payload).length === 0) return { success: true };
-      const { error } = await db.from('production_staff').update(payload).eq('staff_id', params.staffId);
-      if (error) {
-        console.error('[Server Auth] Failed updating production_staff row:', error.message);
-        return { success: false, error: error.message };
-      }
-      return { success: true };
-    }
-
     const cleanPwd = typeof params.password === 'string' && params.password.trim() !== '' ? params.password.trim() : null;
     if (cleanPwd !== null) {
-      const opsCols = await getOperationsPasswordColumns(db);
-      for (const col of opsCols) {
-        payload[col] = cleanPwd;
-      }
+      payload.Password = cleanPwd;
     }
     if (Object.keys(payload).length === 0) return { success: true };
-    const { error } = await db.from('operations_staff').update(payload).eq('staff_id', params.staffId);
+    const { error } = await db.from(params.table).update(payload).eq('staff_id', params.staffId);
     if (error) {
-      console.error('[Server Auth] Failed updating operations_staff row:', error.message);
+      console.error(`[Server Auth] Failed updating ${params.table} row:`, error.message);
       return { success: false, error: error.message };
     }
     return { success: true };
