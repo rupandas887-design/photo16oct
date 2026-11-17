@@ -22,6 +22,9 @@ export default defineConfig(() => {
       'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || ''),
       'process.env.GOOGLE_MAPS_PLATFORM_KEY': JSON.stringify(process.env.GOOGLE_MAPS_PLATFORM_KEY || ''),
     },
+    build: {
+      chunkSizeWarningLimit: 10000,
+    },
     optimizeDeps: {
       entries: ['src/main.tsx'],
       holdUntilCrawlEnd: false,
