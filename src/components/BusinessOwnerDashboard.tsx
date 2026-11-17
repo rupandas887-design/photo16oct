@@ -1467,6 +1467,16 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       return null;
     };
 
+    // Date range filtering helper
+    const isWithinDate = (dateStr?: string | null) => {
+      if (datePreset === 'all' || (!startDate && !endDate)) return true;
+      if (!dateStr) return true;
+      const cleanDate = dateStr.split('T')[0];
+      if (startDate && cleanDate < startDate) return false;
+      if (endDate && cleanDate > endDate) return false;
+      return true;
+    };
+
     const opsEventEndList: any[] = [];
     const processedOrderIds = new Set<string>();
 
@@ -1483,6 +1493,9 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
 
       let eventDate = ord.event_date || op?.event_date || ld?.event_date || null;
       let eventEndDate = ld?.Event_End_Date || ld?.event_end_date || ord?.Event_End_Date || ord?.event_end_date || eventDate;
+
+      // Filter by active Business Overview date range filter
+      if (!isWithinDate(eventDate || eventEndDate || ord.created_at)) return;
 
       if (ld?.events) {
         try {
@@ -1652,7 +1665,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
       prodClientAcceptance: prodCompleted,
       prodAll: prodTotal
     };
-  }, [unifiedPipeline, productionProjects, orders, leads, operations, production, staffAssignments, rawFootage]);
+  }, [unifiedPipeline, productionProjects, orders, leads, operations, production, staffAssignments, rawFootage, startDate, endDate, datePreset]);
 
   // Unified pending payment records matching Sales Dashboard Payment Pending exactly
   const allPendingRecords = useMemo(() => {

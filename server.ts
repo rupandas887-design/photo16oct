@@ -2025,8 +2025,9 @@ async function startServer() {
 
       const cleanOrderId = String(order_id).trim();
       const cleanEventId = String(event_id || 'default').trim();
+      caListCache = null;
       const now = new Date().toISOString();
-      const resolvedServerLink = (delivery_method === 'server_link' ? (server_link || final_edited_footage_link || upload_link_path) : '') || '';
+      const resolvedServerLink = delivery_method === 'server_link' ? (server_link !== undefined ? server_link : (final_edited_footage_link || upload_link_path || '')) : '';
       const resolvedLink = resolvedServerLink || (delivery_method === 'physical_drive' ? '' : (final_edited_footage_link !== undefined ? final_edited_footage_link : upload_link_path)) || '';
 
       const cleanTaskId = String(payload.task_id || payload.assignment_id || '').trim();
@@ -2060,8 +2061,8 @@ async function startServer() {
           proof_storage_path: proof_storage_path !== undefined ? proof_storage_path : existingRecords[index].proof_storage_path,
           consent_proof_verified: consent_proof_verified !== undefined ? Boolean(consent_proof_verified) : existingRecords[index].consent_proof_verified,
           edited_folder_uploaded_to_server: edited_folder_uploaded_to_server !== undefined ? Boolean(edited_folder_uploaded_to_server) : existingRecords[index].edited_folder_uploaded_to_server,
-          delivery_method: delivery_method || existingRecords[index].delivery_method,
-          server_link: delivery_method === 'server_link' ? (resolvedServerLink || existingRecords[index].server_link) : (delivery_method === 'physical_drive' ? undefined : existingRecords[index].server_link),
+          delivery_method: delivery_method !== undefined ? delivery_method : existingRecords[index].delivery_method,
+          server_link: delivery_method === 'server_link' ? (server_link !== undefined ? server_link : (resolvedServerLink !== undefined ? resolvedServerLink : existingRecords[index].server_link)) : (delivery_method === 'physical_drive' ? undefined : existingRecords[index].server_link),
           physical_drive_details: delivery_method === 'physical_drive' ? (physical_drive_details || existingRecords[index].physical_drive_details) : (delivery_method === 'server_link' ? undefined : existingRecords[index].physical_drive_details),
           final_image_url: final_image_url !== undefined ? final_image_url : existingRecords[index].final_image_url,
           final_image_name: final_image_name !== undefined ? final_image_name : existingRecords[index].final_image_name,
