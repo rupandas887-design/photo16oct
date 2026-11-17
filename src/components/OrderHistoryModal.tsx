@@ -140,6 +140,12 @@ const isLinkUrl = (url?: string): boolean => {
   return false;
 };
 
+const isOrderClosedStage = (statusStr?: string): boolean => {
+  if (!statusStr) return false;
+  const s = String(statusStr).toLowerCase().trim();
+  return s.includes('order closed') || s === 'closed' || s === 'order close';
+};
+
 export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
   isOpen,
   onClose,
@@ -1322,7 +1328,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                           {hasProofs || hasChecklist ? (
                             <div className="flex flex-wrap items-center gap-2">
                               {/* View Proof Button: displays uploaded images and links for this stage */}
-                              {hasProofs && (
+                              {hasProofs && !isOrderClosedStage(item.new_status) && !isOrderClosedStage(proofData.stageName) && (
                                 <button
                                   type="button"
                                   onClick={() => setSelectedGallery({ 
@@ -1798,72 +1804,7 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                 </div>
               </div>
 
-              {/* SECTION 3: CUSTOMER ACCEPTANCE / CONSENT PROOF IMAGE */}
-              <div className="pt-4 border-t border-zinc-850">
-                <h5 className="text-xs font-mono uppercase tracking-wider text-zinc-400 font-bold mb-3 flex items-center justify-between">
-                  <span>Customer Communication & Consent Proof</span>
-                  {selectedChecklist.consentProofUrl && (
-                    <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1 font-semibold">
-                      <Check className="w-3 h-3" /> Proof Document Uploaded
-                    </span>
-                  )}
-                </h5>
 
-                {selectedChecklist.consentProofUrl ? (
-                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-3 flex flex-col sm:flex-row items-center gap-4">
-                    <div 
-                      onClick={() => {
-                        setSelectedGallery({
-                          stageName: 'Client Acceptance Consent',
-                          images: [{
-                            id: 'ca_consent_proof',
-                            type: 'image',
-                            url: selectedChecklist.consentProofUrl!,
-                            rawUrl: selectedChecklist.consentProofUrl!,
-                            proofName: 'Customer Consent & Final Approval Proof',
-                            uploadedBy: 'Client Acceptance',
-                            stageName: 'Client Acceptance'
-                          }],
-                          links: []
-                        });
-                        setLightboxImageIndex(0);
-                      }}
-                      className="w-full sm:w-44 h-28 bg-zinc-950 rounded-lg overflow-hidden border border-zinc-750 cursor-pointer relative group shrink-0"
-                    >
-                      <SafeProofImage
-                        url={selectedChecklist.consentProofUrl}
-                        alt="Customer Consent Proof"
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                        containerClassName="w-full h-full relative"
-                        showExternalLink={false}
-                      />
-                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium gap-1">
-                        <Maximize2 className="w-3.5 h-3.5 text-purple-400" />
-                        <span>Enlarge</span>
-                      </div>
-                    </div>
-
-                    <div className="flex-1 min-w-0 space-y-1.5 text-xs">
-                      <div className="font-semibold text-zinc-200">
-                        {selectedChecklist.consentProofFileName || 'Customer_Approval_Consent.jpg'}
-                      </div>
-                      <p className="text-[11px] text-zinc-400 leading-relaxed font-sans">
-                        Official customer written communication or digital signature confirming final project delivery acceptance.
-                      </p>
-                      <div className="flex items-center gap-3 pt-1 text-[11px] font-mono text-zinc-500">
-                        <span>Status: <strong className="text-emerald-400">Verified</strong></span>
-                        {selectedChecklist.verifiedAt && (
-                          <span>Date: {parseDateTime(selectedChecklist.verifiedAt).date}</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-zinc-900/40 border border-dashed border-zinc-800 rounded-xl p-4 text-center text-xs font-mono text-zinc-500">
-                    No customer consent document or screenshot attached for this order.
-                  </div>
-                )}
-              </div>
 
               {/* SECTION 4: FINAL IMAGE (VISUAL PROOF OF FINAL DELIVERY) */}
               <div className="pt-4 border-t border-zinc-850">

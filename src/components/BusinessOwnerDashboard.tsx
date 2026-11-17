@@ -1900,40 +1900,7 @@ export const BusinessOwnerDashboard: React.FC<BusinessOwnerDashboardProps> = ({
         <a href={item.proof_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-400 hover:underline font-mono">
           View Proof
         </a>
-      ) : <span className="text-zinc-500 text-xs">No Proof</span> },
-      { key: 'final_image_url', label: 'Final Image', render: (item: any) => {
-        const meta = resolveFinalImageForProject(item, item.rawProd, item.rawLead);
-        if (!meta.url) {
-          return (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-400 font-mono text-[10px]">
-              Not Uploaded
-            </span>
-          );
-        }
-        return (
-          <button
-            type="button"
-            onClick={() => setFinalImageLightbox({
-              url: meta.url!,
-              customerName: meta.customerName,
-              projectId: meta.projectId,
-              eventName: meta.eventName,
-              fileName: meta.fileName,
-              uploadedAt: meta.uploadedAt
-            })}
-            className="inline-flex items-center gap-2 group cursor-pointer bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-lg p-1 pr-2.5 transition-colors"
-            title="View Final Image"
-          >
-            <img
-              src={meta.url}
-              alt="Final"
-              referrerPolicy="no-referrer"
-              className="w-8 h-6 rounded object-cover border border-zinc-800 shrink-0"
-            />
-            <span className="text-[10px] font-mono font-bold text-emerald-300">View</span>
-          </button>
-        );
-      }}
+      ) : <span className="text-zinc-500 text-xs">No Proof</span> }
     ];
 
     const finalImageOrderCol = {
