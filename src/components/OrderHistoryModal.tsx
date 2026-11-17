@@ -699,18 +699,33 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
   }, [inMemEditorAssignments, dbEditorAssignments, allMatchingIds]);
 
   const activeProductionRecord = useMemo(() => {
-    return dbProductionRecords[0] || matchedProd || null;
-  }, [dbProductionRecords, matchedProd]);
+    const prodId = String(rawProdId || '').trim().toLowerCase();
+    const ordId = String(primaryOrderId || '').trim().toLowerCase();
+    const ldId = String(primaryLeadId || '').trim().toLowerCase();
+    return (
+      (dbProductionRecords || []).find((p: any) => {
+        const pId = String(p.production_id || '').trim().toLowerCase();
+        const pOrd = String(p.order_id || '').trim().toLowerCase();
+        const pLd = String(p.lead_id || '').trim().toLowerCase();
+        const pTrk = String(p.tracking_id || '').trim().toLowerCase();
+        return (prodId && pId === prodId) || (ordId && (pOrd === ordId || pTrk === ordId)) || (ldId && (pLd === ldId || pTrk === ldId));
+      }) || matchedProd || null
+    );
+  }, [dbProductionRecords, matchedProd, rawProdId, primaryOrderId, primaryLeadId]);
 
   const activeClientAcceptanceVerif = useMemo(() => {
-    const prodId = String(activeProductionRecord?.production_id || '').trim().toLowerCase();
+    const prodId = String(activeProductionRecord?.production_id || rawProdId || '').trim().toLowerCase();
+    const orderId = String(primaryOrderId || '').trim().toLowerCase();
+    const leadId = String(primaryLeadId || '').trim().toLowerCase();
     return (
-      dbClientAcceptanceVerifs.find((v: any) => v.final_image_url && prodId && String(v.final_image_production_id || '').trim().toLowerCase() === prodId) ||
-      dbClientAcceptanceVerifs.find((v: any) => Boolean(v.final_image_url)) ||
-      dbClientAcceptanceVerifs[0] ||
-      null
+      (dbClientAcceptanceVerifs || []).find((v: any) => {
+        const vProd = String(v.final_image_production_id || v.production_id || '').trim().toLowerCase();
+        const vOrd = String(v.order_id || '').trim().toLowerCase();
+        const vLead = String(v.lead_id || '').trim().toLowerCase();
+        return (prodId && vProd === prodId) || (orderId && vOrd === orderId) || (leadId && vLead === leadId);
+      }) || null
     );
-  }, [dbClientAcceptanceVerifs, activeProductionRecord]);
+  }, [dbClientAcceptanceVerifs, activeProductionRecord, rawProdId, primaryOrderId, primaryLeadId]);
 
   /**
    * Stage-Wise Proof Matcher (Sales, Operations, Editing, Customer Review, Production)
@@ -1726,54 +1741,60 @@ export const OrderHistoryModal: React.FC<OrderHistoryModalProps> = ({
                     </span>
                   </div>
 
-                  {selectedChecklist.serverLink ? (
-                    <div className="space-y-1.5">
-                      <div className="text-[11px] text-zinc-400 font-mono">Master Delivery Link:</div>
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-sky-400 font-mono truncate select-all">
-                          {selectedChecklist.serverLink}
+                    {selectedChecklist.deliveryMethod === 'physical_drive' ? (
+                      selectedChecklist.physicalDriveDetails ? (
+                        <div className="space-y-1">
+                          <div className="text-[11px] text-zinc-400 font-mono">DELIVERY METHOD</div>
+                          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-xs font-mono text-zinc-300">
+                            {selectedChecklist.physicalDriveDetails}
+                          </div>
                         </div>
-                        
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (selectedChecklist.serverLink) {
-                              navigator.clipboard.writeText(selectedChecklist.serverLink);
-                              setCopiedLink(true);
-                              setTimeout(() => setCopiedLink(false), 2000);
-                            }
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium flex items-center gap-1 transition-colors cursor-pointer border border-zinc-700 shrink-0"
-                          title="Copy Link"
-                        >
-                          {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                          <span>{copiedLink ? 'Copied' : 'Copy'}</span>
-                        </button>
+                      ) : (
+                        <div className="text-xs text-zinc-500 font-mono italic">
+                          Physical Drive Delivery selected (No tracking details specified).
+                        </div>
+                      )
+                    ) : selectedChecklist.serverLink ? (
+                      <div className="space-y-1.5">
+                        <div className="text-[11px] text-zinc-400 font-mono">DELIVERY METHOD</div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-sky-400 font-mono truncate select-all">
+                            {selectedChecklist.serverLink}
+                          </div>
+                          
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (selectedChecklist.serverLink) {
+                                navigator.clipboard.writeText(selectedChecklist.serverLink);
+                                setCopiedLink(true);
+                                setTimeout(() => setCopiedLink(false), 2000);
+                              }
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium flex items-center gap-1 transition-colors cursor-pointer border border-zinc-700 shrink-0"
+                            title="Copy Link"
+                          >
+                            {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                            <span>{copiedLink ? 'Copied' : 'Copy'}</span>
+                          </button>
 
-                        <a
-                          href={selectedChecklist.serverLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium flex items-center gap-1 transition-colors shrink-0"
-                          title="Open Link"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                          <span>Open</span>
-                        </a>
+                          <a
+                            href={selectedChecklist.serverLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium flex items-center gap-1 transition-colors shrink-0"
+                            title="Open Link"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Open</span>
+                          </a>
+                        </div>
                       </div>
-                    </div>
-                  ) : selectedChecklist.physicalDriveDetails ? (
-                    <div className="space-y-1">
-                      <div className="text-[11px] text-zinc-400 font-mono">Drive / Tracking Details:</div>
-                      <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-xs font-mono text-zinc-300">
-                        {selectedChecklist.physicalDriveDetails}
+                    ) : (
+                      <div className="text-xs text-zinc-500 font-mono italic">
+                        No delivery link or tracking specified for this delivery.
                       </div>
-                    </div>
-                  ) : (
-                    <div className="text-xs text-zinc-500 font-mono italic">
-                      No explicit link or tracking specified for this delivery.
-                    </div>
-                  )}
+                    )}
                 </div>
               </div>
 
