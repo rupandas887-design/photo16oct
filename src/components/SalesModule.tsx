@@ -2759,7 +2759,7 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
     custom_event_name: '',
     custom_event_type: '',
     event_date: '',
-    event_time: '12:00',
+    event_time: '',
     event_location: '',
     package_name: '',
     quotation_amount: 0,
@@ -9206,8 +9206,8 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
           reference_source: createForm.reference_source,
           booking_status: createForm.booking_status || 'Pending',
           event_type: createForm.event_type || 'Other',
-          event_date: createForm.event_date || new Date().toISOString().split('T')[0],
-          event_time: createForm.event_time || '12:00',
+          event_date: createForm.event_date || '',
+          event_time: createForm.event_time || '',
           event_location: createForm.event_location || 'TBD',
           budget: Number(createForm.budget) || 0,
           remarks: getRemarksPayload(createForm.remarks, internalNotes, followUpDate, createForm.whatsapp_number, createForm.address, createForm.city, createForm.client_residence_address),
@@ -9852,7 +9852,7 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
         package_name: packages?.find((p) => String(p.package_id) === String(updatedLead.Select_Package_Option))?.package_name || updatedLead.Select_Package_Option || prev.package_name || '',
         quotation_amount: Number(updatedLead.Final_Package_Amount) || Number((updatedLead as any).final_package_amount) || Number(updatedLead.Final_Quotation_Amount) || Number((updatedLead as any).final_amount) || Number(updatedLead.budget) || (updatedLead.lead_id === selectedLead?.lead_id ? Number(wizardLeadData.final_amount) : 0) || prev.quotation_amount || 0,
         advance_received: typeof calcAdvance === 'number' && !isNaN(calcAdvance) ? calcAdvance : ((prev.advance_received !== '' && prev.advance_received !== undefined && prev.advance_received !== null && !isNaN(Number(prev.advance_received))) ? Number(prev.advance_received) : 0),
-        event_date: updatedLead.event_date || prev.event_date || today,
+        event_date: updatedLead.event_date || prev.event_date || '',
         event_time: updatedLead.event_time || prev.event_time || ''
       }));
       setShowConfirmModal(true);
@@ -10101,7 +10101,7 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
       package_name: activePkgName,
       quotation_amount: finalTotal || Number(leadForConfirmation.Final_Quotation_Amount) || Number(leadForConfirmation.budget) || 0,
       advance_received: calcAdvance,
-      event_date: (activeEventsList[0]?.event_date) || leadForConfirmation.event_date || today,
+      event_date: (activeEventsList[0]?.event_date) || leadForConfirmation.event_date || '',
       event_time: (activeEventsList[0]?.event_time) || leadForConfirmation.event_time || ''
     });
     setShowConfirmModal(true);
@@ -10476,7 +10476,7 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
                       package_name: packages?.find((p) => String(p.package_id) === String(selectedLead.Select_Package_Option))?.package_name || selectedLead.Select_Package_Option || '',
                       quotation_amount: Number(selectedLead.Final_Package_Amount) || Number((selectedLead as any).final_package_amount) || Number(selectedLead.Final_Quotation_Amount) || Number((selectedLead as any).final_amount) || Number(wizardLeadData.final_amount) || 0,
                       advance_received: calcAdvance,
-                      event_date: selectedLead.event_date || today,
+                      event_date: selectedLead.event_date || '',
                       event_time: selectedLead.event_time || ''
                     });
                     initEventsReporting(selectedLead);
@@ -12917,7 +12917,7 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
                                               package_name: packages?.find((p) => String(p.package_id) === String(lead.Select_Package_Option))?.package_name || lead.Select_Package_Option || '',
                                               quotation_amount: Number(lead.Final_Package_Amount) || Number((lead as any).final_package_amount) || Number(lead.Final_Quotation_Amount) || Number((lead as any).final_quotation_amount) || Number((lead as any).final_amount) || (lead.lead_id === selectedLead?.lead_id ? Number(wizardLeadData.final_amount) : 0) || 0,
                                               advance_received: calcAdvance,
-                                              event_date: lead.event_date || today,
+                                              event_date: lead.event_date || '',
                                               event_time: lead.event_time || ''
                                             });
                                             initEventsReporting(lead);
@@ -15126,7 +15126,7 @@ export const SalesModule: React.FC<SalesModuleProps> = ({ activeSubTab: external
                               package_name: packages?.find((p) => String(p.package_id) === String(wizardLeadData.selected_package_id || selectedLead.Select_Package_Option))?.package_name || wizardLeadData.selected_package_id || selectedLead.Select_Package_Option || '',
                               quotation_amount: Number(selectedLead.Final_Package_Amount) || Number((selectedLead as any).final_package_amount) || Number(wizardLeadData.final_amount) || Number(selectedLead.Final_Quotation_Amount) || Number((selectedLead as any).final_amount) || 0,
                               advance_received: calcAdvance,
-                              event_date: selectedLead.event_date || today,
+                              event_date: selectedLead.event_date || '',
                               event_time: selectedLead.event_time || ''
                             });
                             setShowConfirmModal(true);

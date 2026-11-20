@@ -4347,10 +4347,10 @@ const LeadsReportSection: React.FC<LeadsReportSectionProps> = ({ leads, onOpenNo
                         </span>
                       </td>
                       <td className="py-3 px-4">
-                        <span className="text-zinc-200 font-medium">{l.event_type || 'General'}</span>
+                        <span className="text-zinc-200 font-medium">{l.event_type || '—'}</span>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="text-zinc-200 font-mono">{l.event_date ? formatDateDDMMYY(l.event_date) : 'TBD'}</div>
+                        <div className="text-zinc-200 font-mono">{l.event_date ? formatDateDDMMYY(l.event_date) : '—'}</div>
                       </td>
                       <td className="py-3 px-4">
                         <div className="text-zinc-200">{l.sales_person || l.sales_staff_name || 'Unassigned'}</div>

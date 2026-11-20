@@ -2286,7 +2286,7 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
       users: ['id', 'email', 'role', 'name', 'full_name', 'mobile', 'phone', 'active', 'created_at', 'password', 'username', 'status'],
       leads: [
         'lead_id', 'created_date', 'lead_source', 'customer_name', 'mobile', 'alternate_mobile', 
-        'email', 'event_type', 'custom_event_type', 'custom_event_name', 'shoot_type', 'event_date', 'event_time', 'event_location', 'budget', 
+        'email', 'event_type', 'custom_event_type', 'custom_event_name', 'shoot_type', 'event_shoot_type', 'event_date', 'Event_End_Date', 'event_time', 'event_start_time', 'event_end_time', 'event_location', 'google_maps_link', 'guest_pax', 'staff_pax', 'budget', 
         'sales_person', 'status', 'remarks', 'created_by', 'updated_by', 'updated_at', 
         'assigned_editor', 'assigned_editors', 'production_role', 'delivery_target_date', 'current_status',
         'whatsapp_number', 'address', 'client_residence_address', 'city', 'state', 'pincode', 'desired_event_shoot_type', 'Select_Package_Option',
@@ -2294,7 +2294,7 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
         'lead_value', 'lead_score', 'booking_status', 'reporting_time', 'Reporting_date', 'package_price', 'deliverables_description', 
         'Team_member', 'Team_Members', 'team_members', 'Team_members', 'team_member',
         'notes_special_customizations', 'quotation_discount', 'additional_services_cost', 'Quotation_Discount', 'Additional_Services_Cost', 'Specify_Custom_Lead_Source_Name', 'Final_Quotation_Amount', 'Final_Package_Amount', 'final_package_amount', 'advance_collected', 'booking_date', 'booking_time', 'payment_mode', 'transaction_id', 'contract_notes', 'quotation_locked', 'package_name', 'sales_staff_name', 'sales_staff_mobile',
-        'Lost_Reason', 'Lost_Notes'
+        'Next_Follow_up_Date', 'Follow-up Notes', 'Lost_Reason', 'Lost_Notes'
       ],
       orders: [
         'order_id', 'lead_id', 'customer_name', 'mobile', 'event_type', 'custom_event_type', 'custom_event_name', 'shoot_type', 'event_date', 
@@ -2429,13 +2429,24 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
         'event_end_date', 'event_start_time', 'event_end_time', 'event_location', 
         'google_maps_link', 'guest_pax', 'staff_pax', 'assigned_staff_names', 
         'assigned_staff_mobiles', 'assigned_equipment', 'reporting_date', 'reporting_time',
+        'proof_type', 'team_members', 'deliverables',
         'created_at', 'updated_at'
       ]
     };
 
     if (table === 'lead_events' && cloned) {
+      if (cloned.event_event_shoot_type !== undefined && cloned.event_shoot_type === undefined) {
+        cloned.event_shoot_type = cloned.event_event_shoot_type;
+      }
+      if (cloned.Event_End_Date !== undefined && cloned.event_end_date === undefined) {
+        cloned.event_end_date = cloned.Event_End_Date;
+      }
       if (cloned.Reporting_date && !cloned.reporting_date) {
         cloned.reporting_date = cloned.Reporting_date;
+      }
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if ('id' in cloned && (!cloned.id || !uuidPattern.test(String(cloned.id)))) {
+        delete cloned.id;
       }
       delete cloned.Reporting_date;
       delete cloned.Event_End_Date;
@@ -2552,23 +2563,15 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const clone = { ...record };
     
     // Fallbacks for leads table not-null constraints
-    if (table === 'leads') {
-      if (clone.event_date === null || clone.event_date === '' || clone.event_date === undefined) {
-         clone.event_date = new Date().toISOString().split('T')[0];
-      }
-      if (clone.event_time === null || clone.event_time === '' || clone.event_time === undefined) {
-         clone.event_time = '12:00:00';
-      }
-    }
 
-    const timeFields = ['event_time', 'reporting_time', 'confirmed_event_time'];
+    const timeFields = ['event_time', 'event_start_time', 'event_end_time', 'reporting_time', 'confirmed_event_time', 'booking_time'];
     const dateFields = [
-      'event_date', 'booking_date', 'event_start_date', 'event_end_date', 'delivery_target_date',
+      'event_date', 'booking_date', 'event_start_date', 'event_end_date', 'Event_End_Date', 'delivery_target_date',
       'editing_start_date', 'target_delivery_date', 'expected_delivery_date', 'actual_delivery_date', 
       'delivery_date', 'event_completed_date', 'uploaded_date', 'return_date', 'payment_date', 
-      'follow_up_date', 'next_follow_up_date', 'client_approval_date', 'assigned_date', 
+      'follow_up_date', 'next_follow_up_date', 'Next_Follow_up_Date', 'client_approval_date', 'assigned_date', 
       'assignment_date', 'created_date', 'generated_date', 'p_generated_date', 'purchase_date', 
-      'reporting_date', 'target_finish_date', 'server_upload_event_date', 
+      'reporting_date', 'Reporting_date', 'target_finish_date', 'server_upload_event_date', 
       'server_upload_confirmed_at', 'server_upload_validated_at'
     ];
 
@@ -2629,15 +2632,16 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
             clone[field] = null;
           } else {
             try {
-              const ampmMatch = str.replace(/\s+/g, ' ').toUpperCase().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/);
-              const hhmmMatch = str.replace(/\s+/g, ' ').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+              const ampmMatch = str.replace(/\s+/g, ' ').toUpperCase().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/);
+              const hhmmMatch = str.replace(/\s+/g, ' ').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[+-]\d{2}(?::?\d{2})?|Z)?$/i);
               if (ampmMatch) {
                 let hours = parseInt(ampmMatch[1], 10);
                 const minutes = ampmMatch[2];
-                const period = ampmMatch[3];
+                const seconds = ampmMatch[3] || '00';
+                const period = ampmMatch[4];
                 if (period === 'PM' && hours < 12) hours += 12;
                 else if (period === 'AM' && hours === 12) hours = 0;
-                clone[field] = `${String(hours).padStart(2, '0')}:${minutes}:00`;
+                clone[field] = `${String(hours).padStart(2, '0')}:${minutes}:${seconds}`;
               } else if (hhmmMatch) {
                 const hours = parseInt(hhmmMatch[1], 10);
                 const minutes = hhmmMatch[2];
@@ -2655,10 +2659,6 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // Double check NOT NULL for leads just in case it got nulled
-    if (table === 'leads') {
-      if (clone.event_date === null) clone.event_date = new Date().toISOString().split('T')[0];
-      if (clone.event_time === null) clone.event_time = '12:00:00';
-    }
 
     return clone;
   };
@@ -2679,7 +2679,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
 
   const NON_EXISTENT_LOG_TABLES = new Set(['activity_logs', 'login_logs', 'analytics_snapshots', 'staff_task_submissions']);
 
-  const pushInsert = async (table: string, record: any): Promise<{ success: boolean; error?: string; localFallback?: boolean }> => {
+  const pushInsert = async (table: string, record: any): Promise<{ success: boolean; data?: any; error?: string; localFallback?: boolean }> => {
     if (!supabaseClient || NON_EXISTENT_LOG_TABLES.has(table)) return { success: true, localFallback: true };
     try {
       let sanitized: any;
@@ -2801,7 +2801,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             }
 
             broadcastSyncPing();
-            return { success: true };
+            return { success: true, data: resJson.data };
           } else {
             console.warn(`[pushInsert Proxy WARN] server returned success=false for ${table}`, resJson?.error);
             return { success: false, error: resJson?.error || "Server validation failed" };
@@ -2814,27 +2814,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       }
 
       try {
-        let { data: fallbackInsData, error } = await supabaseClient.from(table).insert(sanitized).select();
-        if (error && table === 'lead_events' && (error.code === '23505' || error.message?.includes('duplicate key') || error.message?.includes('lead_events_pkey'))) {
-          try {
-            const { data: allEvs } = await supabaseClient.from('lead_events').select('id');
-            let maxId = 0;
-            if (Array.isArray(allEvs)) {
-              for (const row of allEvs) {
-                const num = typeof row.id === 'number' ? row.id : parseInt(String(row.id), 10);
-                if (!isNaN(num) && num > maxId) maxId = num;
-              }
-            }
-            const retryPayload = { ...sanitized, id: maxId + 1 };
-            const retryRes = await supabaseClient.from('lead_events').insert(retryPayload).select();
-            if (!retryRes.error) {
-              fallbackInsData = retryRes.data;
-              error = null;
-            }
-          } catch (retryE) {
-            console.warn("[lead_events fallback retry exception]:", retryE);
-          }
-        }
+        const { data: fallbackInsData, error } = await supabaseClient.from(table).insert(sanitized).select();
         if (error) {
           if (['activity_logs', 'notifications', 'analytics_snapshots'].includes(table)) {
             return { success: true };
@@ -2869,11 +2849,12 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           // Realtime subscription will handle syncing new records
           broadcastSyncPing();
 
-          return { success: true };
+          return { success: true, data: Array.isArray(record) ? fallbackInsData : (fallbackInsData?.[0] || fallbackInsData) };
         }
       } catch (sbErr: any) {
-        console.warn(`Supabase insert exception in ${table} (handled gracefully):`, sbErr?.message || String(sbErr));
-        return { success: true, localFallback: true };
+        console.error(`Supabase insert exception in ${table}:`, sbErr?.message || String(sbErr));
+        updateDiagnosticMetric('insert', 'fail', sbErr?.message || String(sbErr));
+        return { success: false, error: sbErr?.message || String(sbErr) };
       }
     } catch (err: any) {
       console.warn(`Supabase Insert exception in ${table}:`, err?.message || String(err));
@@ -3258,8 +3239,9 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           return { success: true };
         }
       } catch (sbErr: any) {
-        console.warn(`Supabase update exception in ${table} (handled gracefully):`, sbErr?.message || String(sbErr));
-        return { success: true, localFallback: true };
+        console.error(`Supabase update exception in ${table}:`, sbErr?.message || String(sbErr));
+        updateDiagnosticMetric('update', 'fail', sbErr?.message || String(sbErr));
+        return { success: false, error: sbErr?.message || String(sbErr) };
       }
     } catch (err: any) {
       console.warn(`[pushUpdate EXCEPTION] in ${table}:`, err?.message || String(err));
@@ -3584,7 +3566,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
               evts = matchedLeadEvents.map((e: any) => ({
                 ...e,
                 event_start_date: e.event_start_date || e.event_date || '',
-                event_end_date: e.event_end_date || e.Event_End_Date || l.Event_End_Date || '',
+                event_end_date: e.event_end_date || e.Event_End_Date || '',
                 event_start_time: e.event_start_time || '',
                 event_end_time: e.event_end_time || '',
                 reporting_date: e.reporting_date || e.Reporting_date || '',
@@ -5775,28 +5757,41 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       throw new Error(res?.error || "Failed to save lead in database.");
     }
 
+    const persistedNewEvents: LeadEvent[] = [];
     if (leadDetails.events && leadDetails.events.length > 0) {
       for (const ev of leadDetails.events) {
-        const { id, ...eventWithoutId } = ev;
         const newEventRecord = {
           lead_id: leadId,
           event_type: ev.event_type || '',
           event_name: ev.event_name || '',
-          event_shoot_type: ev.event_shoot_type || '',
+          event_shoot_type: ev.event_shoot_type || (ev as any).event_event_shoot_type || '',
           event_date: ev.event_date || '',
-          event_start_time: ev.event_start_time || '',
-          event_end_time: ev.event_end_time || '',
+          event_end_date: ev.event_end_date || (ev as any).Event_End_Date || null,
+          event_start_time: ev.event_start_time || null,
+          event_end_time: ev.event_end_time || null,
           event_location: ev.event_location || '',
-          google_maps_link: ev.google_maps_link || '',
-          guest_pax: String(ev.guest_pax) !== '' && ev.guest_pax != null ? Number(ev.guest_pax) : null,
-          staff_pax: String(ev.staff_pax) !== '' && ev.staff_pax != null ? Number(ev.staff_pax) : null,
+          google_maps_link: ev.google_maps_link || null,
+          guest_pax: ev.guest_pax !== '' && ev.guest_pax != null && !isNaN(Number(ev.guest_pax)) ? Number(ev.guest_pax) : null,
+          staff_pax: ev.staff_pax !== '' && ev.staff_pax != null && !isNaN(Number(ev.staff_pax)) ? Number(ev.staff_pax) : null,
           assigned_staff_names: ev.assigned_staff_names || '',
-          assigned_staff_mobiles: ev.assigned_staff_mobiles || ''
+          assigned_staff_mobiles: ev.assigned_staff_mobiles || '',
+          reporting_date: ev.reporting_date || (ev as any).Reporting_date || null,
+          reporting_time: ev.reporting_time || null
         };
         const evRes = await pushInsert('lead_events', newEventRecord);
         if (!evRes?.success) {
           throw new Error(`Failed to save event to lead_events table: ${evRes?.error || "Unknown error"}`);
         }
+        const insertedRow = Array.isArray(evRes.data) ? evRes.data[0] : evRes.data;
+        if (insertedRow && insertedRow.id) {
+          persistedNewEvents.push({
+            ...insertedRow,
+            event_start_date: insertedRow.event_date || ''
+          });
+        }
+      }
+      if (persistedNewEvents.length > 0) {
+        (newLead as any).events = persistedNewEvents;
       }
     }
 
@@ -10991,73 +10986,84 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       throw new Error(res?.error || "Failed to update lead in database.");
     }
 
+    let persistedEvents: LeadEvent[] | undefined = undefined;
     if (updatedEvents) {
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       // 1. Load existing events from DB
       let existingEvents: any[] = [];
-      try {
-        if (supabaseClient) {
-          const { data: dbEvents, error: fetchErr } = await supabaseClient.from('lead_events').select('id').eq('lead_id', leadId);
-          if (!fetchErr && dbEvents) {
-            existingEvents = dbEvents;
-          }
+      if (supabaseClient) {
+        const { data: dbEvents, error: fetchErr } = await supabaseClient.from('lead_events').select('id').eq('lead_id', leadId);
+        if (fetchErr) {
+          throw new Error(`Failed to fetch existing lead events: ${fetchErr.message}`);
         }
-      } catch (e) {
-        console.warn("[updateLead] Error fetching lead_events:", e);
+        existingEvents = dbEvents || [];
       }
-      
-      const existingIds = existingEvents?.map(e => String(e.id)) || [];
-      const incomingIds = updatedEvents.map(e => String(e.id)).filter(id => id && !id.startsWith('EV-'));
+
+      const existingIds = existingEvents.map(e => String(e.id));
+      const incomingIds = updatedEvents
+        .map(e => String(e.id || ''))
+        .filter(id => id && uuidPattern.test(id));
 
       // 2. Delete removed events
       const idsToDelete = existingIds.filter(id => !incomingIds.includes(id));
-      if (idsToDelete.length > 0) {
-        await Promise.all(idsToDelete.map(async (idToDelete) => {
-          const delRes = await pushDelete('lead_events', 'id', idToDelete);
-          if (!delRes?.success) {
-            console.warn(`[updateLead] Failed to delete removed event ${idToDelete}:`, delRes?.error);
-          }
-        }));
+      for (const idToDelete of idsToDelete) {
+        const delRes = await pushDelete('lead_events', 'id', idToDelete);
+        if (!delRes?.success) {
+          throw new Error(`Failed to delete removed event (${idToDelete}): ${delRes?.error || 'Unknown error'}`);
+        }
       }
 
-      // 3. Upsert (Insert new, Update existing)
-      await Promise.all(updatedEvents.map(async (ev) => {
-        const isNew = !ev.id || ev.id.startsWith('EV-') || !existingIds.includes(String(ev.id));
-        
+      // 3. Upsert (Insert new, Update existing) sequentially to guarantee accuracy and real UUID return
+      const savedRows: LeadEvent[] = [];
+      for (const ev of updatedEvents) {
+        const evIdStr = ev.id ? String(ev.id) : '';
+        const hasValidExistingUuid = Boolean(evIdStr && uuidPattern.test(evIdStr) && existingIds.includes(evIdStr));
+
         const eventPayload: any = {
           lead_id: leadId,
           event_type: ev.event_type || '',
           event_name: ev.event_name || '',
-          event_shoot_type: ev.event_shoot_type || '',
+          event_shoot_type: ev.event_shoot_type || (ev as any).event_event_shoot_type || '',
           event_date: ev.event_date || '',
-          event_start_time: ev.event_start_time || '',
-          event_end_time: ev.event_end_time || '',
+          event_start_time: ev.event_start_time || null,
+          event_end_time: ev.event_end_time || null,
           event_end_date: ev.event_end_date || (ev as any).Event_End_Date || null,
           event_location: ev.event_location || '',
-          google_maps_link: ev.google_maps_link || '',
-          guest_pax: String(ev.guest_pax) !== '' && ev.guest_pax != null ? Number(ev.guest_pax) : null,
-          staff_pax: String(ev.staff_pax) !== '' && ev.staff_pax != null ? Number(ev.staff_pax) : null,
+          google_maps_link: ev.google_maps_link || null,
+          guest_pax: ev.guest_pax !== '' && ev.guest_pax != null && !isNaN(Number(ev.guest_pax)) ? Number(ev.guest_pax) : null,
+          staff_pax: ev.staff_pax !== '' && ev.staff_pax != null && !isNaN(Number(ev.staff_pax)) ? Number(ev.staff_pax) : null,
           assigned_staff_names: ev.assigned_staff_names || '',
           assigned_staff_mobiles: ev.assigned_staff_mobiles || '',
           reporting_date: ev.reporting_date || (ev as any).Reporting_date || null,
           reporting_time: ev.reporting_time || null
         };
-        
-        if (ev.id && !ev.id.startsWith('EV-') && isNew) {
-           eventPayload.id = ev.id;
-        }
 
-        if (isNew) {
+        if (!hasValidExistingUuid) {
           const insRes = await pushInsert('lead_events', eventPayload);
           if (!insRes?.success) {
-            console.warn(`[updateLead] Failed to insert new event:`, insRes?.error);
+            throw new Error(`Failed to save event to lead_events: ${insRes?.error || 'Unknown error'}`);
           }
+          const insertedRow = Array.isArray(insRes.data) ? insRes.data[0] : insRes.data;
+          savedRows.push({
+            ...ev,
+            ...(insertedRow || {}),
+            id: insertedRow?.id || ev.id,
+            event_start_date: insertedRow?.event_date || ev.event_date || ''
+          });
         } else {
-          const updRes = await pushUpdate('lead_events', 'id', ev.id, eventPayload);
+          const updRes = await pushUpdate('lead_events', 'id', evIdStr, eventPayload);
           if (!updRes?.success) {
-            console.warn(`[updateLead] Failed to update existing event:`, updRes?.error);
+            throw new Error(`Failed to update event in lead_events: ${updRes?.error || 'Unknown error'}`);
           }
+          savedRows.push({
+            ...ev,
+            ...eventPayload,
+            id: evIdStr,
+            event_start_date: eventPayload.event_date || ''
+          });
         }
-      }));
+      }
+      persistedEvents = savedRows;
     }
     
     setLeads((prev) =>
@@ -11082,8 +11088,12 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             team_members: teamVal,
             updated_at: timestamp
           };
-          const parsed = deserializeLeadEvents(updated.notes_special_customizations);
-          updated.events = (updatedEvents && updatedEvents.length > 0) ? updatedEvents : (parsed.events || ld.events || []);
+          if (persistedEvents !== undefined) {
+            updated.events = persistedEvents;
+          } else {
+            const parsed = deserializeLeadEvents(updated.notes_special_customizations);
+            updated.events = (parsed.events && parsed.events.length > 0) ? parsed.events : (ld.events || []);
+          }
           return updated;
         }
         return ld;

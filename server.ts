@@ -658,20 +658,121 @@ async function startServer() {
       }
     }
 
+    const normalizeTimeForPostgres = (val: any): string | null => {
+      if (val === undefined || val === null) return null;
+      const str = String(val).trim();
+      if (!str || str === 'null' || str === 'undefined' || str === 'Invalid Date') return null;
+      const ampmMatch = str.replace(/\s+/g, ' ').toUpperCase().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/);
+      if (ampmMatch) {
+        let hours = parseInt(ampmMatch[1], 10);
+        const minutes = ampmMatch[2];
+        const seconds = ampmMatch[3] || '00';
+        const period = ampmMatch[4];
+        if (period === 'PM' && hours < 12) hours += 12;
+        else if (period === 'AM' && hours === 12) hours = 0;
+        return `${String(hours).padStart(2, '0')}:${minutes}:${seconds}`;
+      }
+      const hhmmMatch = str.replace(/\s+/g, ' ').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[+-]\d{2}(?::?\d{2})?|Z)?$/i);
+      if (hhmmMatch) {
+        const hours = parseInt(hhmmMatch[1], 10);
+        if (hours >= 0 && hours <= 23) {
+          return `${String(hours).padStart(2, '0')}:${hhmmMatch[2]}:${hhmmMatch[3] || '00'}`;
+        }
+      }
+      return null;
+    };
+
+    const uuidRegexGlobal = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
     if (table === 'lead_events') {
       const validCols = new Set([
         'id', 'lead_id', 'event_type', 'event_name', 'event_shoot_type', 'event_date',
         'event_end_date', 'event_start_time', 'event_end_time', 'event_location',
         'google_maps_link', 'guest_pax', 'staff_pax', 'assigned_staff_names',
-        'assigned_staff_mobiles', 'assigned_equipment', 'reporting_date', 'reporting_time',
+        'assigned_staff_mobiles', 'assigned_equipment', 'reporting_date', 'Reporting_date',
+        'reporting_time', 'proof_type', 'team_members', 'deliverables',
         'created_at', 'updated_at'
       ]);
+      if (clone.event_event_shoot_type !== undefined && clone.event_shoot_type === undefined) {
+        clone.event_shoot_type = clone.event_event_shoot_type;
+      }
+      if (clone.Event_End_Date !== undefined && clone.event_end_date === undefined) {
+        clone.event_end_date = clone.Event_End_Date;
+      }
       if (clone.Reporting_date && !clone.reporting_date) {
         clone.reporting_date = clone.Reporting_date;
+      }
+      if ('id' in clone && (!clone.id || !uuidRegexGlobal.test(String(clone.id)))) {
+        delete clone.id;
       }
       for (const k of Object.keys(clone)) {
         if (!validCols.has(k)) {
           delete clone[k];
+        }
+      }
+
+      // NOT NULL text/varchar columns in lead_events must never be null
+      const nonNullTextCols = ['event_type', 'event_name', 'event_shoot_type', 'event_location'];
+      for (const field of nonNullTextCols) {
+        if (field in clone) {
+          const val = clone[field];
+          if (val === undefined || val === null) {
+            clone[field] = '';
+          } else {
+            const trimmed = String(val).trim();
+            clone[field] = (trimmed === 'null' || trimmed === 'undefined') ? '' : trimmed;
+          }
+        }
+      }
+
+      // Nullable date / optional text columns in lead_events
+      const nullableLeadEventCols = ['event_date', 'event_end_date', 'google_maps_link', 'reporting_date', 'Reporting_date'];
+      for (const field of nullableLeadEventCols) {
+        if (field in clone) {
+          const val = clone[field];
+          if (val === undefined || val === null) {
+            clone[field] = null;
+          } else {
+            const trimmed = String(val).trim();
+            if (trimmed === '' || trimmed === 'null' || trimmed === 'undefined') {
+              clone[field] = null;
+            }
+          }
+        }
+      }
+
+      // Nullable time columns in lead_events
+      for (const field of ['event_start_time', 'event_end_time', 'reporting_time']) {
+        if (field in clone) {
+          clone[field] = normalizeTimeForPostgres(clone[field]);
+        }
+      }
+    }
+
+    if (table === 'leads') {
+      const nullableEventFields = [
+        'event_type', 'custom_event_type', 'custom_event_name', 'event_name',
+        'event_shoot_type', 'event_date', 'event_end_date', 'Event_End_Date',
+        'event_time', 'event_start_time', 'event_end_time', 'event_location',
+        'google_maps_link', 'reporting_date', 'Reporting_date', 'reporting_time',
+        'confirmed_event_time'
+      ];
+      for (const field of nullableEventFields) {
+        if (field in clone) {
+          const val = clone[field];
+          if (val === undefined || val === null) {
+            clone[field] = null;
+          } else {
+            const trimmed = String(val).trim();
+            if (trimmed === '' || trimmed === 'null' || trimmed === 'undefined') {
+              clone[field] = null;
+            }
+          }
+        }
+      }
+      for (const field of ['event_time', 'event_start_time', 'event_end_time', 'reporting_time', 'booking_time']) {
+        if (field in clone) {
+          clone[field] = normalizeTimeForPostgres(clone[field]);
         }
       }
     }
@@ -1049,52 +1150,29 @@ async function startServer() {
       }
     }
 
-    // Self-healing insert handler for lead_events to prevent primary key sequence collisions
+
+    // UUID-safe insert handler for lead_events (lead_events.id is uuid with default gen_random_uuid())
     if (table === 'lead_events' && operation === 'insert') {
       const items = Array.isArray(payload) ? payload : [payload];
       const insertedRows: any[] = [];
-      
-      const { data: maxEvRow } = await db.from('lead_events').select('id').order('id', { ascending: false }).limit(1);
-      let currentMaxId = 0;
-      const existingIdSet = new Set<number>();
-      if (Array.isArray(maxEvRow) && maxEvRow.length > 0) {
-        const num = typeof maxEvRow[0].id === 'number' ? maxEvRow[0].id : parseInt(String(maxEvRow[0].id), 10);
-        if (!isNaN(num)) {
-          existingIdSet.add(num);
-          currentMaxId = num;
-        }
-      }
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
       for (const rawItem of items) {
         if (!rawItem) continue;
         const cleanItem = sanitizeRecordForDbServer(rawItem, 'lead_events');
-        
-        let targetId = cleanItem.id ? Number(cleanItem.id) : null;
-        if (!targetId || isNaN(targetId) || existingIdSet.has(targetId)) {
-          currentMaxId++;
-          while (existingIdSet.has(currentMaxId)) {
-            currentMaxId++;
-          }
-          targetId = currentMaxId;
-          existingIdSet.add(targetId);
-          cleanItem.id = targetId;
+
+        // Ensure valid UUID or omit id so PostgreSQL gen_random_uuid() generates it
+        if (!cleanItem.id || !uuidRegex.test(String(cleanItem.id))) {
+          delete cleanItem.id;
         }
 
-        let { data: insData, error: insErr } = await db.from('lead_events').insert(cleanItem).select();
-        
-        let retryCount = 0;
-        while (insErr && (insErr.code === '23505' || insErr.message?.includes('duplicate key') || insErr.message?.includes('lead_events_pkey')) && retryCount < 20) {
-          retryCount++;
-          currentMaxId++;
-          while (existingIdSet.has(currentMaxId)) {
-            currentMaxId++;
-          }
-          cleanItem.id = currentMaxId;
-          existingIdSet.add(currentMaxId);
-          const retryRes = await db.from('lead_events').insert(cleanItem).select();
-          insData = retryRes.data;
-          insErr = retryRes.error;
-        }
+        // Ensure NOT NULL string columns on lead_events are non-null strings
+        if (cleanItem.event_type === undefined || cleanItem.event_type === null) cleanItem.event_type = '';
+        if (cleanItem.event_name === undefined || cleanItem.event_name === null) cleanItem.event_name = '';
+        if (cleanItem.event_shoot_type === undefined || cleanItem.event_shoot_type === null) cleanItem.event_shoot_type = '';
+        if (cleanItem.event_location === undefined || cleanItem.event_location === null) cleanItem.event_location = '';
+
+        const { data: insData, error: insErr } = await db.from('lead_events').insert(cleanItem).select();
 
         if (!insErr && insData && insData.length > 0) {
           insertedRows.push(insData[0]);
@@ -1443,6 +1521,17 @@ async function startServer() {
         return { success: true, data: returnData };
       }
 
+      if (table === 'leads' && res.error?.code === '23502') {
+        const colMatch = (res.error.message || '').match(/null value in column "([^"]+)"/i);
+        const colName = colMatch ? colMatch[1] : 'unknown';
+        const isEventNotNullCol = ['event_type', 'event_time', 'event_location', 'event_date'].includes(colName);
+        const errorMsg = isEventNotNullCol
+          ? `Database schema constraint: column "${colName}" in Supabase "leads" table is NOT NULL and rejected an empty/NULL value. Run in Supabase SQL Editor: ALTER TABLE public.leads ALTER COLUMN event_type DROP NOT NULL, ALTER COLUMN event_time DROP NOT NULL, ALTER COLUMN event_location DROP NOT NULL;`
+          : (res.error.message || String(res.error));
+        console.error(`[Server DB 23502 Error] leads.${colName}:`, res.error.message);
+        return { success: false, error: errorMsg };
+      }
+
       if (res.error?.code === '23503') {
         console.warn(`[Server DB] Handled foreign key violation (23503) on table ${table}:`, res.error.message);
         const item = Array.isArray(currentPayload) ? currentPayload[0] : currentPayload;
@@ -1455,17 +1544,6 @@ async function startServer() {
               price: item.package_cost || item.final_amount || 0,
               created_at: new Date().toISOString()
             }, { onConflict: 'package_id' });
-          } catch (e) {}
-        } else if (['lead_events', 'lead_packages'].includes(table) && item?.lead_id) {
-          try {
-            await db.from('leads').upsert({
-              lead_id: item.lead_id,
-              customer_name: 'Valued Client',
-              mobile: '0000000000',
-              status: 'New Lead',
-              created_date: new Date().toISOString().split('T')[0],
-              created_at: new Date().toISOString()
-            }, { onConflict: 'lead_id' });
           } catch (e) {}
         }
       }

@@ -488,9 +488,16 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   const [crmHighestStep, setCrmHighestStep] = useState<number>(1);
   const [saveErrorPopup, setSaveErrorPopup] = useState<{ title: string; message: string } | null>(null);
 
+  const pendingStep1AdvanceRef = useRef<boolean>(true);
+
   const appendCompletedStep = (existingRemarks: string | undefined, step: number) => {
+    const existingMatches = Array.from((existingRemarks || '').matchAll(/\[CRM_COMPLETED_STEP:\s*(\d+)\]/g));
+    const existingMax = existingMatches.length > 0
+      ? Math.max(...existingMatches.map(m => parseInt(m[1], 10) || 0))
+      : 0;
+    const effectiveStep = Math.max(step, existingMax);
     const cleanRemarks = (existingRemarks || '').replace(/\[CRM_COMPLETED_STEP:\s*\d+\]/g, '').trim();
-    return `${cleanRemarks}\n[CRM_COMPLETED_STEP: ${step}]`.trim();
+    return `${cleanRemarks}\n[CRM_COMPLETED_STEP: ${effectiveStep}]`.trim();
   };
 
   const [wizardLeadData, setWizardLeadData] = useState({
@@ -509,7 +516,6 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     event_type: '',
     custom_event_name: '',
     event_name: '',
-    event_event_shoot_type: '',
     event_date: '',
     event_start_date: '',
     event_end_date: '',
@@ -890,7 +896,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     custom_event_name: '',
     custom_event_type: '',
     event_date: '',
-    event_time: '12:00',
+    event_time: '',
     event_location: '',
     package_name: '',
     quotation_amount: 0,
@@ -929,7 +935,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     event_type: string;
     custom_event_name: string;
     event_name: string;
-    event_event_shoot_type: string;
+    event_shoot_type: string;
     event_date: string;
     event_start_date: string;
     event_end_date: string;
@@ -961,7 +967,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     event_type: '',
     custom_event_name: '',
     event_name: '',
-    event_event_shoot_type: '',
+    event_shoot_type: '',
     event_date: '',
     event_start_date: '',
     event_end_date: '',
@@ -992,7 +998,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   const [eventForm, setEventForm] = useState<Omit<LeadEvent, 'id'>>({
     event_type: '',
     event_name: '',
-    event_event_shoot_type: '',
+    event_shoot_type: '',
     event_date: '',
     event_start_time: '',
     event_end_time: '',
@@ -1044,7 +1050,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       event_type: '',
       custom_event_name: '',
       event_name: '',
-      event_event_shoot_type: '',
+      event_shoot_type: '',
       event_date: '',
       event_start_date: '',
       event_end_date: '',
@@ -1085,7 +1091,6 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       event_type: '',
       custom_event_name: '',
       event_name: '',
-      event_event_shoot_type: '',
       event_date: '',
       event_start_date: '',
       event_end_date: '',
@@ -1159,7 +1164,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     setEventForm({
       event_type: '',
       event_name: '',
-      event_event_shoot_type: '',
+      event_shoot_type: '',
       event_date: '',
       event_start_time: '',
       event_end_time: '',
@@ -2226,7 +2231,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   // Explicit saves are now handled directly in the onChange handlers for immediate persistence
   // to avoid closure stale state overwrites in debounced effects.
 
-  // Step 1 Automatic Data Prefill & Hydration from Supabase leads table
+  // Step 1 Automatic Data Prefill & Hydration from Supabase leads table (consolidated single query)
   React.useEffect(() => {
     if (!selectedLead?.lead_id || !supabaseClient || selectedLead.lead_id === 'DRAFT-LEAD') return;
 
@@ -2244,22 +2249,22 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
 
         setWizardLeadData(prev => ({
           ...prev,
-          customer_name: dbLead.customer_name || prev.customer_name || '',
-          mobile: dbLead.mobile ? String(dbLead.mobile) : (prev.mobile ? String(prev.mobile) : ''),
-          whatsapp_number: dbLead.whatsapp_number ? String(dbLead.whatsapp_number) : (dbLead.mobile ? String(dbLead.mobile) : (prev.whatsapp_number ? String(prev.whatsapp_number) : '')),
-          email: dbLead.email ?? prev.email ?? '',
-          lead_source: dbLead.lead_source || prev.lead_source || '',
-          Specify_Custom_Lead_Source_Name: dbLead.Specify_Custom_Lead_Source_Name || prev.Specify_Custom_Lead_Source_Name || '',
-          address: dbLead.address || prev.address || '',
-          city: dbLead.city || prev.city || '',
-          state: dbLead.state || prev.state || '',
-          pincode: dbLead.pincode || prev.pincode || '',
-          client_residence_address: dbLead.client_residence_address || prev.client_residence_address || '',
-          desired_event_shoot_type: dbLead.desired_event_shoot_type || prev.desired_event_shoot_type || '',
-          status: dbLead.status || dbLead.current_status || prev.status,
-          budget: dbLead.budget ?? prev.budget ?? 0,
-          package_price: dbLead.package_price ?? prev.package_price ?? 0,
-          selected_package_id: prev.selected_package_id || dbLead.Select_Package_Option || '',
+          customer_name: dbLead.customer_name || '',
+          mobile: dbLead.mobile ? String(dbLead.mobile) : '',
+          whatsapp_number: dbLead.whatsapp_number ? String(dbLead.whatsapp_number) : '',
+          email: dbLead.email ?? '',
+          lead_source: dbLead.lead_source || '',
+          Specify_Custom_Lead_Source_Name: dbLead.Specify_Custom_Lead_Source_Name || '',
+          address: dbLead.address || '',
+          city: dbLead.city || '',
+          state: dbLead.state || '',
+          pincode: dbLead.pincode || '',
+          client_residence_address: dbLead.client_residence_address || '',
+          desired_event_shoot_type: dbLead.desired_event_shoot_type || '',
+          status: dbLead.status || dbLead.current_status || '',
+          budget: dbLead.budget ?? 0,
+          package_price: dbLead.package_price ?? 0,
+          selected_package_id: dbLead.Select_Package_Option || prev.selected_package_id || '',
         }));
 
         // Keep selectedLead object in sync with fresh database values
@@ -2267,13 +2272,13 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           if (!prev || prev.lead_id !== dbLead.lead_id) return prev;
           return {
             ...prev,
-            customer_name: dbLead.customer_name || prev.customer_name,
-            mobile: dbLead.mobile ? String(dbLead.mobile) : prev.mobile,
-            whatsapp_number: dbLead.whatsapp_number ? String(dbLead.whatsapp_number) : prev.whatsapp_number,
-            email: dbLead.email ?? prev.email,
-            lead_source: dbLead.lead_source || prev.lead_source,
-            Specify_Custom_Lead_Source_Name: dbLead.Specify_Custom_Lead_Source_Name || prev.Specify_Custom_Lead_Source_Name,
-            status: dbLead.status || dbLead.current_status || prev.status,
+            customer_name: dbLead.customer_name || '',
+            mobile: dbLead.mobile ? String(dbLead.mobile) : '',
+            whatsapp_number: dbLead.whatsapp_number ? String(dbLead.whatsapp_number) : '',
+            email: dbLead.email ?? '',
+            lead_source: dbLead.lead_source || '',
+            Specify_Custom_Lead_Source_Name: dbLead.Specify_Custom_Lead_Source_Name || '',
+            status: dbLead.status || dbLead.current_status || '',
           };
         });
       } catch (err) {
@@ -2286,50 +2291,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     return () => { isMounted = false; };
   }, [selectedLead?.lead_id, supabaseClient]);
 
-  // Step 1 Customer Details Automatic Data Hydration from Supabase
-  React.useEffect(() => {
-    if (!selectedLead?.lead_id || selectedLead.lead_id === 'DRAFT-LEAD' || !supabaseClient) return;
-
-    let isMounted = true;
-
-    const hydrateCustomerDetails = async () => {
-      try {
-        const { data: leadData, error } = await supabaseClient
-          .from('leads')
-          .select('*')
-          .eq('lead_id', selectedLead.lead_id)
-          .maybeSingle();
-
-        if (error || !leadData || !isMounted) return;
-
-        setWizardLeadData(prev => ({
-          ...prev,
-          customer_name: leadData.customer_name || prev.customer_name || selectedLead.customer_name || '',
-          mobile: String(leadData.mobile || prev.mobile || selectedLead.mobile || ''),
-          whatsapp_number: String(leadData.whatsapp_number || prev.whatsapp_number || leadData.mobile || prev.mobile || selectedLead.whatsapp_number || selectedLead.mobile || ''),
-          email: leadData.email ?? prev.email ?? selectedLead.email ?? '',
-          lead_source: leadData.lead_source || prev.lead_source || selectedLead.lead_source || 'Reference',
-          Specify_Custom_Lead_Source_Name: leadData.Specify_Custom_Lead_Source_Name || prev.Specify_Custom_Lead_Source_Name || selectedLead.Specify_Custom_Lead_Source_Name || '',
-          address: leadData.address || prev.address || selectedLead.address || '',
-          city: leadData.city || prev.city || selectedLead.city || '',
-          state: leadData.state || prev.state || selectedLead.state || '',
-          pincode: leadData.pincode || prev.pincode || selectedLead.pincode || '',
-          client_residence_address: leadData.client_residence_address || prev.client_residence_address || selectedLead.client_residence_address || '',
-          desired_event_shoot_type: leadData.desired_event_shoot_type || prev.desired_event_shoot_type || selectedLead.desired_event_shoot_type || '',
-          selected_package_id: prev.Select_Package_Option || prev.selected_package_id || leadData.Select_Package_Option || selectedLead.Select_Package_Option || '',
-          status: leadData.status || leadData.current_status || prev.status || selectedLead.status || '',
-        }));
-      } catch (err) {
-        console.warn("Failed to hydrate customer details from Supabase", err);
-      }
-    };
-
-    hydrateCustomerDetails();
-
-    return () => { isMounted = false; };
-  }, [selectedLead?.lead_id, supabaseClient]);
-
-  // Step 2 Automatic Data Persistence & Prefill
+  // Step 2 Automatic Data Persistence & Prefill from Supabase
   React.useEffect(() => {
     const isStep2 = (activeTab === 'create' && wizardStep === 2) || (activeTab === 'crm' && crmWizardStep === 2);
     const activeLeadId = activeTab === 'create' ? createdLeadId : selectedLead?.lead_id;
@@ -2340,73 +2302,68 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
 
     const loadStep2DataFromDB = async () => {
       try {
-        // 1. Fetch lead details
-        const { data: leadData, error: leadErr } = await supabaseClient
-          .from('leads')
-          .select('*')
-          .eq('lead_id', activeLeadId)
-          .maybeSingle();
+        // 1. Fetch lead details and lead_events in parallel
+        const [leadRes, eventsRes] = await Promise.all([
+          supabaseClient
+            .from('leads')
+            .select('*')
+            .eq('lead_id', activeLeadId)
+            .maybeSingle(),
+          supabaseClient
+            .from('lead_events')
+            .select('*')
+            .eq('lead_id', activeLeadId)
+            .order('created_at', { ascending: true })
+        ]);
 
-        if (leadErr) {
-          console.error("Error fetching lead for step 2:", leadErr);
+        if (leadRes.error) {
+          console.error("Error fetching lead for step 2:", leadRes.error);
           return;
         }
-
-        if (!isMounted) return;
-
-        // 2. Fetch lead events
-        const { data: eventsData, error: eventsErr } = await supabaseClient
-          .from('lead_events')
-          .select('*')
-          .eq('lead_id', activeLeadId);
-
-        if (eventsErr) {
-          console.error("Error fetching events for step 2:", eventsErr);
+        if (eventsRes.error) {
+          console.error("Error fetching events for step 2:", eventsRes.error);
           return;
         }
-
         if (!isMounted) return;
+
+        const leadData = leadRes.data;
+        const eventsData = eventsRes.data;
 
         if (leadData) {
-          // Restore follow-up details
-          if (leadData.next_follow_up_date) {
-            setStep2FollowUpDate(leadData.next_follow_up_date);
-          }
-          if (leadData.follow_up_notes) {
-            setStep2FollowUpNotes(leadData.follow_up_notes);
-          }
-          
+          setStep2FollowUpDate(leadData.Next_Follow_up_Date || leadData.next_follow_up_date || '');
+          setStep2FollowUpNotes(leadData['Follow-up Notes'] || leadData.follow_up_notes || '');
+
           setWizardLeadData(prev => ({
             ...prev,
-            lead_source: leadData.lead_source || prev.lead_source,
-            Specify_Custom_Lead_Source_Name: leadData.Specify_Custom_Lead_Source_Name || prev.Specify_Custom_Lead_Source_Name,
-            client_residence_address: leadData.client_residence_address || prev.client_residence_address,
-            city: leadData.city || prev.city,
-            state: leadData.state || prev.state,
-            pincode: leadData.pincode || prev.pincode,
-            reference_source: leadData.reference_source || prev.reference_source,
+            lead_source: leadData.lead_source || '',
+            Specify_Custom_Lead_Source_Name: leadData.Specify_Custom_Lead_Source_Name || '',
+            client_residence_address: leadData.client_residence_address || '',
+            city: leadData.city || '',
+            state: leadData.state || '',
+            pincode: leadData.pincode || '',
+            reference_source: leadData.reference_source || '',
           }));
         }
 
         if (eventsData && eventsData.length > 0) {
           const mappedEvents: LeadEvent[] = eventsData.map(ev => ({
             id: ev.id,
-            event_type: ev.event_type,
-            event_name: ev.event_name,
-            event_date: ev.event_date,
-            event_start_date: ev.event_date,
+            event_type: ev.event_type || '',
+            event_name: ev.event_name || '',
+            event_date: ev.event_date || '',
+            event_start_date: ev.event_date || '',
             event_end_date: ev.event_end_date || ev.Event_End_Date || '',
-            event_location: ev.event_location,
-            event_event_shoot_type: ev.event_shoot_type,
-            guest_pax: ev.guest_pax,
-            staff_pax: ev.staff_pax,
-            event_start_time: ev.event_start_time,
-            event_end_time: ev.event_end_time,
-            google_maps_link: ev.google_maps_link,
-            assigned_staff_names: ev.assigned_staff_names,
-            assigned_staff_mobiles: ev.assigned_staff_mobiles,
-            reporting_date: ev.reporting_date,
-            reporting_time: ev.reporting_time
+            event_location: ev.event_location || '',
+            event_shoot_type: ev.event_shoot_type || '',
+            guest_pax: ev.guest_pax !== null && ev.guest_pax !== undefined ? ev.guest_pax : ('' as any),
+            staff_pax: ev.staff_pax !== null && ev.staff_pax !== undefined ? ev.staff_pax : ('' as any),
+            event_start_time: ev.event_start_time || '',
+            event_end_time: ev.event_end_time || '',
+            google_maps_link: ev.google_maps_link || '',
+            assigned_staff_names: ev.assigned_staff_names || '',
+            assigned_staff_mobiles: ev.assigned_staff_mobiles || '',
+            reporting_date: ev.reporting_date || '',
+            reporting_time: ev.reporting_time || ''
           }));
 
           if (activeTab === 'create') {
@@ -2415,24 +2372,65 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
             setCrmEvents(mappedEvents);
           }
 
-          // Pre-fill the form with the first event's details
-          const firstEv = mappedEvents[0];
+          if (mappedEvents.length === 1) {
+            const firstEv = mappedEvents[0];
+            setEventForm({
+              event_type: firstEv.event_type || '',
+              event_name: firstEv.event_name || '',
+              event_date: firstEv.event_date || '',
+              event_start_date: firstEv.event_date || '',
+              event_end_date: firstEv.event_end_date || (firstEv as any).Event_End_Date || '',
+              event_location: firstEv.event_location || '',
+              event_shoot_type: firstEv.event_shoot_type || '',
+              guest_pax: firstEv.guest_pax !== null && firstEv.guest_pax !== undefined ? firstEv.guest_pax : ('' as any),
+              staff_pax: firstEv.staff_pax !== null && firstEv.staff_pax !== undefined ? firstEv.staff_pax : ('' as any),
+              event_start_time: firstEv.event_start_time || '',
+              event_end_time: firstEv.event_end_time || '',
+              google_maps_link: firstEv.google_maps_link || ''
+            });
+            setEditingEventId(firstEv.id);
+            setShowEventForm(true);
+          } else {
+            // Multiple events saved: display all saved event cards cleanly so none are hidden
+            setEventForm({
+              event_type: '',
+              event_name: '',
+              event_shoot_type: '',
+              event_date: '',
+              event_start_date: '',
+              event_end_date: '',
+              event_location: '',
+              guest_pax: '' as any,
+              staff_pax: '' as any,
+              event_start_time: '',
+              event_end_time: '',
+              google_maps_link: ''
+            });
+            setEditingEventId(null);
+            setShowEventForm(false);
+          }
+        } else {
+          if (activeTab === 'create') {
+            setCreateEvents([]);
+          } else {
+            setCrmEvents([]);
+          }
           setEventForm({
-            event_type: firstEv.event_type || '',
-            event_name: firstEv.event_name || '',
-            event_date: firstEv.event_date || '',
-            event_start_date: firstEv.event_date || '',
-            event_end_date: firstEv.event_end_date || (firstEv as any).Event_End_Date || '',
-            event_location: firstEv.event_location || '',
-            event_event_shoot_type: firstEv.event_shoot_type || '',
-            guest_pax: firstEv.guest_pax || '',
-            staff_pax: firstEv.staff_pax || '',
-            event_start_time: firstEv.event_start_time || '',
-            event_end_time: firstEv.event_end_time || '',
-            google_maps_link: firstEv.google_maps_link || ''
+            event_type: '',
+            event_name: '',
+            event_shoot_type: '',
+            event_date: '',
+            event_start_date: '',
+            event_end_date: '',
+            event_location: '',
+            guest_pax: '' as any,
+            staff_pax: '' as any,
+            event_start_time: '',
+            event_end_time: '',
+            google_maps_link: ''
           });
-          setEditingEventId(firstEv.id);
-          setShowEventForm(true); // Force form to display so fields are not blank
+          setEditingEventId(null);
+          setShowEventForm(true);
         }
       } catch (err) {
         console.error("Error in loadStep2DataFromDB effect:", err);
@@ -4416,6 +4414,22 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     setSelectedLead(fullLead);
     const initialEvents = normalizeCrmArray<LeadEvent>(fullLead.events);
     setCrmEvents(initialEvents);
+    setEventForm({
+      event_type: '',
+      event_name: '',
+      event_shoot_type: '',
+      event_date: '',
+      event_start_date: '',
+      event_end_date: '',
+      event_start_time: '',
+      event_end_time: '',
+      event_location: '',
+      google_maps_link: '',
+      guest_pax: '' as any,
+      staff_pax: '' as any
+    });
+    setEditingEventId(null);
+    setShowEventForm(initialEvents.length === 0);
 
     // Always fetch fresh events to ensure no cached EV- IDs are used
     let eventsForCheck = initialEvents;
@@ -4427,10 +4441,18 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           .eq('lead_id', fullLead.lead_id)
           .order('created_at', { ascending: true });
         
-        if (!error && freshEvents && freshEvents.length > 0) {
-          setCrmEvents(freshEvents as LeadEvent[]);
-          eventsForCheck = freshEvents as LeadEvent[];
-          setSelectedLead(prev => prev ? { ...prev, events: freshEvents as LeadEvent[] } : prev);
+        if (!error && Array.isArray(freshEvents)) {
+          const normalizedFresh: LeadEvent[] = freshEvents.map((ev: any) => ({
+            ...ev,
+            event_start_date: ev.event_date || '',
+            event_end_date: ev.event_end_date || ev.Event_End_Date || '',
+            guest_pax: ev.guest_pax !== null && ev.guest_pax !== undefined ? ev.guest_pax : ('' as any),
+            staff_pax: ev.staff_pax !== null && ev.staff_pax !== undefined ? ev.staff_pax : ('' as any)
+          }));
+          setCrmEvents(normalizedFresh);
+          eventsForCheck = normalizedFresh;
+          setShowEventForm(normalizedFresh.length === 0);
+          setSelectedLead(prev => prev ? { ...prev, events: normalizedFresh } : prev);
         }
       } catch (err) {
         console.warn("Failed to load fresh events on selection", err);
@@ -4476,9 +4498,11 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     );
 
     const localSavedStep = localStorage.getItem(`crm_last_step_${lead.lead_id}`);
-    const remarksMatch = fullLead.remarks?.match(/\[CRM_COMPLETED_STEP:\s*(\d+)\]/);
+    const remarksMatches = Array.from((fullLead.remarks || '').matchAll(/\[CRM_COMPLETED_STEP:\s*(\d+)\]/g));
     const localStepVal = localSavedStep && !isNaN(parseInt(localSavedStep, 10)) ? parseInt(localSavedStep, 10) : 0;
-    const remarksStepVal = remarksMatch && !isNaN(parseInt(remarksMatch[1], 10)) ? parseInt(remarksMatch[1], 10) : 0;
+    const remarksStepVal = remarksMatches.length > 0
+      ? Math.max(...remarksMatches.map(m => parseInt(m[1], 10) || 0))
+      : 0;
     const explicitStep = Math.max(localStepVal, remarksStepVal) || null;
 
     const isConfirmedLead = ['Confirm Order', 'Order Confirmed', 'Event Scheduled', 'Event Started', 'Event Completed', 'Closed'].includes(fullLead.status || '') || (fullLead as any).current_status === 'Order Confirmed' || (fullLead as any).booking_status === 'Confirmed' || orders.some(o => o.lead_id === fullLead.lead_id && o.status !== 'Cancelled');
@@ -4488,17 +4512,25 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     let startStep = 1;
     if (isConfirmedLead && isUnlockedLead) {
       startStep = 3;
-    } else if (explicitStep) {
-      if (explicitStep >= 2) startStep = 3;
-      else if (explicitStep === 1) startStep = 2;
+    } else if (hasQuotationOrPackage || (explicitStep !== null && explicitStep >= 2)) {
+      startStep = 3;
+    } else if (eventsForCheck.length > 0) {
+      startStep = 3;
+    } else if (explicitStep === 1 || hasCustomerDetails) {
+      startStep = 2;
     } else {
-      if (hasQuotationOrPackage) startStep = 3;
-      else if (hasCustomerDetails) startStep = 2;
-      else startStep = 1;
+      startStep = 1;
     }
 
     const finalStep = targetStep || startStep;
-    const completedStep = Math.max(finalStep === 3 ? 3 : (startStep === 3 ? (hasQuotationOrPackage ? 3 : 2) : startStep - 1), explicitStep || 1);
+    let completedStep = 0;
+    if (hasQuotationOrPackage || (explicitStep !== null && explicitStep >= 3)) {
+      completedStep = 3;
+    } else if (eventsForCheck.length > 0 || (explicitStep !== null && explicitStep >= 2)) {
+      completedStep = 2;
+    } else if (explicitStep === 1 || hasCustomerDetails) {
+      completedStep = 1;
+    }
     setCrmHighestStep(completedStep);
     setCrmWizardStep(finalStep);
     
@@ -4574,7 +4606,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     setWizardLeadData({
       customer_name: fullLead.customer_name || '',
       mobile: fullLead.mobile ? String(fullLead.mobile) : '',
-      whatsapp_number: fullLead.whatsapp_number ? String(fullLead.whatsapp_number) : (fullLead.mobile ? String(fullLead.mobile) : ''),
+      whatsapp_number: fullLead.whatsapp_number ? String(fullLead.whatsapp_number) : '',
       email: fullLead.email || '',
       address: fullLead.address || '',
       city: latestQuote?.city || fullLead.city || '',
@@ -4586,7 +4618,6 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       event_type: fullLead.event_type || '',
       custom_event_name: fullLead.custom_event_name || '',
       event_name: evName,
-      event_event_shoot_type: evShootType,
       event_date: evDate,
       event_start_date: evStartDate,
       event_end_date: evEndDate,
@@ -5226,8 +5257,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     }
   };
 
-  const handleSaveStep = async (step: number) => {
-    if (!selectedLead) return;
+  const handleSaveStep = async (step: number, advanceStep: boolean = true) => {
+    if (!selectedLead || isSaving) return;
     if (isCrmLocked) {
       showToastMsg(
         isMultiEventLead
@@ -5294,7 +5325,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           };
         });
 
-        showToastMsg("CRM Updated Successfully.", "success");
+        showToastMsg(advanceStep ? "Step 1 saved! Continuing to Step 2." : "Step 1 saved successfully! You can return anytime to complete Step 2.", "success");
       } else if (step === 2) {
         if (isStep2Locked) {
           showToastMsg("Event details are locked after order confirmation.", "error");
@@ -5409,8 +5440,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         }
 
 
-        // Perform direct save for Step 2 without showing follow-up popup
-        await handleSaveStep2Direct();
+        // Perform direct save for Step 2 with the newly constructed finalEventsList (avoids stale state closure)
+        await handleSaveStep2Direct(finalEventsList);
         return;
       } else if (step === 3) {
         if (isStep3Locked) {
@@ -5747,11 +5778,13 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       }
 
       if (step < 3) {
-        let nextStep = step + 1;
-        setCrmWizardStep(nextStep);
-        setTimeout(() => {
-          document.getElementById('crm-wizard-scroll-container')?.scrollTo({ top: 0, behavior: 'smooth' });
-        }, 50);
+        if (advanceStep) {
+          let nextStep = step + 1;
+          setCrmWizardStep(nextStep);
+          setTimeout(() => {
+            document.getElementById('crm-wizard-scroll-container')?.scrollTo({ top: 0, behavior: 'smooth' });
+          }, 50);
+        }
       } else {
         setSelectedLead(null);
       }
@@ -5889,35 +5922,61 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       const firstEvent = finalEventsList[0];
 
       const formattedEventTime = validateAndFormatTime(firstEvent.event_start_time, "Event Start Time");
+      const formattedEventEndTime = validateAndFormatTime(firstEvent.event_end_time, "Event End Time");
       const formattedReportingTime = validateAndFormatTime(isCreateFlow ? reportingTime : wizardLeadData.reporting_time, "Reporting Time");
 
-      await updateLead(currentLeadId, {
+      const parseOptionalPax = (val: any): number | null => {
+        if (val === '' || val === null || val === undefined) return null;
+        const n = Number(val);
+        return isNaN(n) ? null : Math.max(0, Math.floor(n));
+      };
+      const parsedGuestPax = parseOptionalPax(firstEvent.guest_pax);
+      const parsedStaffPax = parseOptionalPax(firstEvent.staff_pax);
+
+      const existingLeadRec = leads.find(l => l.lead_id === currentLeadId) || (!isCreateFlow ? selectedLead : null);
+      const step2Remarks = appendCompletedStep(existingLeadRec?.remarks || (isCreateFlow ? createForm.remarks : wizardLeadData.remarks) || '', 2);
+
+      const step2LeadPayload: any = {
         event_type: firstEvent.event_type === 'Other' ? 'Other' : firstEvent.event_type,
-        custom_event_name: firstEvent.event_name,
-        custom_event_type: firstEvent.event_type === 'Other' ? firstEvent.event_name : undefined,
+        custom_event_name: firstEvent.event_name || null,
+        custom_event_type: firstEvent.event_type === 'Other' ? (firstEvent.event_name || null) : null,
         event_date: firstEvent.event_date,
         Event_End_Date: firstEvent.event_end_date || (firstEvent as any).Event_End_Date || null,
         event_time: formattedEventTime || null,
-        event_start_time: firstEvent.event_start_time || null,
-        event_end_time: firstEvent.event_end_time || null,
+        event_start_time: formattedEventTime || null,
+        event_end_time: formattedEventEndTime || null,
         reporting_time: formattedReportingTime || null,
         event_location: firstEvent.event_location,
-        google_maps_link: firstEvent.google_maps_link || '',
-        lead_source: isCreateFlow ? createForm.lead_source : wizardLeadData.lead_source,
-        event_shoot_type: firstEvent.event_shoot_type || '',
-        client_residence_address: isCreateFlow ? createForm.client_residence_address : wizardLeadData.client_residence_address,
-        city: isCreateFlow ? createForm.city : wizardLeadData.city,
-        state: isCreateFlow ? createForm.state : wizardLeadData.state,
-        pincode: isCreateFlow ? createForm.pincode : wizardLeadData.pincode,
-        total_pax: Number(firstEvent.guest_pax) !== '' && firstEvent.guest_pax != null ? Number(firstEvent.guest_pax) : undefined,
-        guest_pax: Number(firstEvent.guest_pax) !== '' && firstEvent.guest_pax != null ? Number(firstEvent.guest_pax) : undefined,
-        staff_pax: Number(firstEvent.staff_pax) !== '' && firstEvent.staff_pax != null ? Number(firstEvent.staff_pax) : undefined,
-        reference_source: isCreateFlow ? createForm.reference_source : wizardLeadData.reference_source || '',
-        selected_package_id: isCreateFlow ? (createForm.selected_package_id || selectedPkgIds[0] || '') : (wizardLeadData.selected_package_id || wizardLeadData.selected_package_id || selectedLead?.Select_Package_Option || ''),
+        google_maps_link: firstEvent.google_maps_link || null,
+        event_shoot_type: firstEvent.event_shoot_type || (firstEvent as any).event_event_shoot_type || '',
+        total_pax: parsedGuestPax ?? 0,
+        guest_pax: parsedGuestPax,
+        staff_pax: parsedStaffPax,
+        remarks: step2Remarks,
         events: finalEventsList
-      });
+      };
 
-      let reloadedEvents = finalEventsList;
+      // Only include Step 1 / address fields if present so we never overwrite saved Step 1 values with blanks
+      const effectiveLeadSource = isCreateFlow ? createForm.lead_source : (wizardLeadData.lead_source || existingLeadRec?.lead_source || '');
+      if (effectiveLeadSource) step2LeadPayload.lead_source = effectiveLeadSource;
+      const effectiveResidence = isCreateFlow ? createForm.client_residence_address : (wizardLeadData.client_residence_address || existingLeadRec?.client_residence_address || '');
+      if (effectiveResidence) step2LeadPayload.client_residence_address = effectiveResidence;
+      const effectiveCity = isCreateFlow ? createForm.city : (wizardLeadData.city || existingLeadRec?.city || '');
+      if (effectiveCity) step2LeadPayload.city = effectiveCity;
+      const effectiveState = isCreateFlow ? createForm.state : (wizardLeadData.state || existingLeadRec?.state || '');
+      if (effectiveState) step2LeadPayload.state = effectiveState;
+      const effectivePincode = isCreateFlow ? createForm.pincode : (wizardLeadData.pincode || existingLeadRec?.pincode || '');
+      if (effectivePincode) step2LeadPayload.pincode = effectivePincode;
+      const effectiveRefSource = isCreateFlow ? createForm.reference_source : (wizardLeadData.reference_source || existingLeadRec?.reference_source || '');
+      if (effectiveRefSource !== undefined) step2LeadPayload.reference_source = effectiveRefSource;
+      const effectivePkgId = isCreateFlow
+        ? (createForm.selected_package_id || selectedPkgIds[0] || '')
+        : (wizardLeadData.selected_package_id || selectedLead?.Select_Package_Option || '');
+      if (effectivePkgId) step2LeadPayload.selected_package_id = effectivePkgId;
+
+      await updateLead(currentLeadId, step2LeadPayload);
+
+      let reloadedEvents: LeadEvent[] = finalEventsList;
       if (supabaseClient) {
         const { data: dbEvents, error: dbErr } = await supabaseClient
           .from('lead_events')
@@ -5925,8 +5984,14 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           .eq('lead_id', currentLeadId)
           .order('created_at', { ascending: true });
           
-        if (!dbErr && dbEvents && dbEvents.length > 0) {
-          reloadedEvents = dbEvents as LeadEvent[];
+        if (!dbErr && Array.isArray(dbEvents) && dbEvents.length > 0) {
+          reloadedEvents = dbEvents.map((ev: any) => ({
+            ...ev,
+            event_start_date: ev.event_date || '',
+            event_end_date: ev.event_end_date || ev.Event_End_Date || '',
+            guest_pax: ev.guest_pax !== null && ev.guest_pax !== undefined ? ev.guest_pax : ('' as any),
+            staff_pax: ev.staff_pax !== null && ev.staff_pax !== undefined ? ev.staff_pax : ('' as any)
+          })) as LeadEvent[];
           if (isCreateFlow) {
             setCreateEvents(reloadedEvents);
           } else {
@@ -5935,20 +6000,11 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         }
       }
 
-      if (isCreateFlow) {
-        // Await confirmation from Supabase that the lead and events are persisted before initializing Step 3
-        if (supabaseClient && currentLeadId) {
-          try {
-            await supabaseClient
-              .from('leads')
-              .select('lead_id')
-              .eq('lead_id', currentLeadId)
-              .maybeSingle();
-          } catch (refetchErr) {
-            console.warn("Silent confirmation before Step 3 failed:", refetchErr);
-          }
-        }
+      setEditingEventId(null);
+      setShowEventForm(false);
 
+      if (isCreateFlow) {
+        localStorage.setItem(`crm_last_step_${currentLeadId}`, '2');
         if (selectedPkgIds.length === 0) {
           setSelectedPkgIds(['Custom Package']);
           setWizardLeadData(prev => ({ ...prev, selected_package_id: 'Custom Package' }));
@@ -5965,6 +6021,21 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           if (!prev) return null;
           return {
             ...prev,
+            event_type: step2LeadPayload.event_type,
+            custom_event_name: step2LeadPayload.custom_event_name,
+            custom_event_type: step2LeadPayload.custom_event_type,
+            event_date: step2LeadPayload.event_date,
+            Event_End_Date: step2LeadPayload.Event_End_Date,
+            event_time: step2LeadPayload.event_time,
+            event_start_time: step2LeadPayload.event_start_time,
+            event_end_time: step2LeadPayload.event_end_time,
+            event_location: step2LeadPayload.event_location,
+            google_maps_link: step2LeadPayload.google_maps_link,
+            event_shoot_type: step2LeadPayload.event_shoot_type,
+            guest_pax: step2LeadPayload.guest_pax,
+            staff_pax: step2LeadPayload.staff_pax,
+            total_pax: step2LeadPayload.total_pax,
+            remarks: step2Remarks,
             events: reloadedEvents
           };
         });
@@ -6436,7 +6507,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           id: `EV-${Math.floor(1000 + Math.random() * 9000)}`,
           event_type: eventForm.event_type || '',
           event_name: eventForm.event_name || '',
-          event_event_shoot_type: eventForm.event_shoot_type || '',
+          event_shoot_type: eventForm.event_shoot_type || '',
           event_date: eventForm.event_date || '',
           event_start_time: eventForm.event_start_time || '',
           event_end_time: eventForm.event_end_time || '',
@@ -6463,12 +6534,12 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         state: createForm.state || existingLead?.state || '',
         pincode: createForm.pincode || existingLead?.pincode || '',
         
-        event_type: firstEvent.event_type || '',
-        custom_event_name: firstEvent.event_name || '',
-        event_date: firstEvent.event_date || '',
+        event_type: firstEvent.event_type || null,
+        custom_event_name: firstEvent.event_name || null,
+        event_date: firstEvent.event_date || null,
         event_start_time: firstEvent.event_start_time || null,
         event_end_time: firstEvent.event_end_time || null,
-        event_location: firstEvent.event_location || '',
+        event_location: firstEvent.event_location || null,
         google_maps_link: firstEvent.google_maps_link || '',
         event_shoot_type: firstEvent.event_shoot_type || '',
         guest_pax: Number(firstEvent.guest_pax) !== '' && firstEvent.guest_pax != null ? Number(firstEvent.guest_pax) : undefined,
@@ -6853,8 +6924,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       return `${hh}:${minutes}`;
     }
 
-    // Check if it's in 24-hour format with or without seconds (e.g., "14:30", "14:30:00", "8:30:00")
-    const hhmmssMatch = clean.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+    // Check if it's in 24-hour format with or without seconds/timezone (e.g., "14:30", "14:30:00", "14:30:00+00")
+    const hhmmssMatch = clean.match(/^(\d{1,2}):(\d{2})(?::\d{2})?(?:[+-]\d{2}(?::?\d{2})?|Z)?$/i);
     if (hhmmssMatch) {
       const hh = String(parseInt(hhmmssMatch[1], 10)).padStart(2, '0');
       const mm = hhmmssMatch[2];
@@ -6881,8 +6952,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       return clean;
     }
 
-    // Match 24-hour format HH:MM or HH:MM:SS
-    const match = clean.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+    // Match 24-hour format HH:MM or HH:MM:SS (with optional Postgres timetz suffix like +00)
+    const match = clean.match(/^(\d{1,2}):(\d{2})(?::\d{2})?(?:[+-]\d{2}(?::?\d{2})?|Z)?$/i);
     if (!match) {
       return clean;
     }
@@ -7160,6 +7231,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
                 Event Location * (Venue Address)
               </label>
               <textarea
+                id="input_event_location"
                 required
                 rows={3}
                 placeholder="Enter the full event location and venue address details"
@@ -7539,11 +7611,10 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     );
   };
 
-  const handleWizardNext = async () => {
+  const saveStep1CreateFlow = async (advanceToStep2: boolean) => {
     if (isSaving) return;
-
+    pendingStep1AdvanceRef.current = advanceToStep2;
     let finalUser: any = null;
-
     if (wizardStep === 1) {
       if (!createForm.mobile) {
         showValidationError("input_mobile", "Phone Number is required.");
@@ -7745,6 +7816,10 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         const finalSource = createForm.lead_source === 'Other' ? 'Other' : createForm.lead_source;
         const customLeadSourceName = createForm.lead_source === 'Other' && otherSource.trim() !== '' ? otherSource.trim() : null;
         let finalId = createdLeadId;
+        const step1Remarks = appendCompletedStep(
+          getRemarksPayload(createForm.remarks, internalNotes, followUpDate, createForm.whatsapp_number, createForm.address, createForm.city, createForm.client_residence_address),
+          1
+        );
         if (!createdLeadId) {
           const newId = await addLead({
             customer_name: createForm.customer_name || '',
@@ -7764,14 +7839,14 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
             total_pax: createForm.total_pax !== '' ? Number(createForm.total_pax) : undefined,
             reference_source: createForm.reference_source,
             booking_status: createForm.booking_status || undefined,
-            event_type: createForm.event_type || '',
-            event_date: createForm.event_date || '',
-            event_time: createForm.event_time || '',
-            event_location: createForm.event_location || '',
+            event_type: null,
+            event_date: null,
+            event_time: null,
+            event_location: null,
             budget: Number(createForm.budget) || 0,
-            remarks: getRemarksPayload(createForm.remarks, internalNotes, followUpDate, createForm.whatsapp_number, createForm.address, createForm.city, createForm.client_residence_address),
+            remarks: step1Remarks,
             next_follow_up_date: followUpDate || undefined,
-          follow_up_notes: internalNotes || undefined,
+            follow_up_notes: internalNotes || undefined,
             
           });
           setCreatedLeadId(newId);
@@ -7795,13 +7870,16 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
             total_pax: createForm.total_pax !== '' ? Number(createForm.total_pax) : undefined,
             reference_source: createForm.reference_source,
             booking_status: createForm.booking_status || undefined,
-            remarks: getRemarksPayload(createForm.remarks, internalNotes, followUpDate, createForm.whatsapp_number, createForm.address, createForm.city, createForm.client_residence_address),
+            remarks: step1Remarks,
             next_follow_up_date: followUpDate || undefined,
-          follow_up_notes: internalNotes || undefined,
+            follow_up_notes: internalNotes || undefined,
             
           });
         }
-        const isEdit = !!createdLeadId;
+        if (finalId) {
+          const prevStoredStep = parseInt(localStorage.getItem(`crm_last_step_${finalId}`) || '0', 10) || 0;
+          localStorage.setItem(`crm_last_step_${finalId}`, String(Math.max(1, prevStoredStep)));
+        }
 
         const newLeadObj: Lead = {
           lead_id: finalId || '',
@@ -7810,7 +7888,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           alternate_mobile: (createForm.alternate_mobile && String(createForm.alternate_mobile).trim() !== '' && String(createForm.alternate_mobile).trim() !== '+91') ? String(createForm.alternate_mobile) : undefined,
           email: createForm.email,
           lead_source: finalSource,
-            Specify_Custom_Lead_Source_Name: customLeadSourceName,
+          Specify_Custom_Lead_Source_Name: customLeadSourceName,
           whatsapp_number: createForm.whatsapp_number,
           address: createForm.address,
           city: createForm.city,
@@ -7822,12 +7900,12 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           total_pax: createForm.total_pax !== '' ? Number(createForm.total_pax) : undefined,
           reference_source: createForm.reference_source,
           booking_status: createForm.booking_status || 'Pending',
-          event_type: createForm.event_type || 'Other',
-          event_date: createForm.event_date || new Date().toISOString().split('T')[0],
-          event_time: createForm.event_time || '12:00',
-          event_location: createForm.event_location || 'TBD',
+          event_type: null,
+          event_date: null,
+          event_time: null,
+          event_location: null,
           budget: Number(createForm.budget) || 0,
-          remarks: getRemarksPayload(createForm.remarks, internalNotes, followUpDate, createForm.whatsapp_number, createForm.address, createForm.city, createForm.client_residence_address),
+          remarks: step1Remarks,
           next_follow_up_date: followUpDate || undefined,
           follow_up_notes: internalNotes || undefined,
 
@@ -7837,10 +7915,12 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           created_by: finalUser?.name || currentUser?.name || 'Sales Team'
         };
 
-        // Stay in Create Lead form, and advance to Step 2
-        setWizardStep(2);
-
-        showToastMsg("Inbound quotation created successfully! Continuing to Step 2.", "success");
+        if (advanceToStep2) {
+          setWizardStep(2);
+          showToastMsg("Step 1 saved! Continuing to Step 2.", "success");
+        } else {
+          showToastMsg("Step 1 saved successfully! You can return anytime to continue Step 2.", "success");
+        }
       } catch (err: any) {
         console.error("Step 1 saving failed:", err);
   
@@ -7985,7 +8065,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       const firstEvent = finalEventsList[0];
 
       try {
-        await handleSaveStep2Direct();
+        await handleSaveStep2Direct(finalEventsList);
       } catch (err: any) {
         console.error("Step 2 saving failed:", err);
   
@@ -8016,6 +8096,14 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       }
     }
 
+  };
+
+  const handleSaveStep1Only = async () => {
+    await saveStep1CreateFlow(false);
+  };
+
+  const handleWizardNext = async () => {
+    await saveStep1CreateFlow(true);
   };
 
   const handleStatusSave = async () => {
@@ -8244,7 +8332,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   const handleDuplicateContinue = async () => {
     setShowDuplicateWarning(false);
     bypassDuplicateCheckRef.current = true;
-    await handleWizardNext();
+    await saveStep1CreateFlow(pendingStep1AdvanceRef.current);
     bypassDuplicateCheckRef.current = false;
   };
 
@@ -8468,7 +8556,6 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       showToastMsg("Reporting Details Saved Successfully.", "success");
 
       // Auto-open Confirm Order modal once reporting details are saved
-      const today = new Date().toISOString().split('T')[0];
       const linkedOrder = orders?.find(o => o.lead_id === updatedLead.lead_id);
       const linkedPayment = linkedOrder ? payments?.find(p => p.order_id === linkedOrder.order_id) : null;
       const calcAdvance = linkedPayment 
@@ -8494,7 +8581,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           package_name: packages?.find((p) => String(p.package_id) === String(updatedLead.Select_Package_Option))?.package_name || updatedLead.Select_Package_Option || prev.package_name || '',
           quotation_amount: step3Amt || prev.quotation_amount || 0,
           advance_received: typeof calcAdvance === 'number' && !isNaN(calcAdvance) ? calcAdvance : ((prev.advance_received !== '' && prev.advance_received !== undefined && prev.advance_received !== null && !isNaN(Number(prev.advance_received))) ? Number(prev.advance_received) : 0),
-          event_date: updatedLead.event_date || prev.event_date || today,
+          event_date: updatedLead.event_date || prev.event_date || '',
           event_time: updatedLead.event_time || prev.event_time || ''
         };
       });
@@ -8514,7 +8601,6 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     }
     await handleSelectLead(lead);
 
-    const today = new Date().toISOString().split('T')[0];
     const linkedOrder = orders?.find((o: any) => o.lead_id === lead.lead_id);
     const linkedPayment = linkedOrder ? payments?.find((p: any) => p.order_id === linkedOrder.order_id) : null;
     const calcAdvance = linkedPayment 
@@ -8540,7 +8626,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       package_name: packages?.find((p: any) => String(p.package_id) === String(lead.Select_Package_Option))?.package_name || lead.Select_Package_Option || '',
       quotation_amount: step3Amt || Number(lead.Final_Quotation_Amount) || Number((lead as any).final_quotation_amount) || 0,
       advance_received: calcAdvance,
-      event_date: lead.event_date || (lead.events && lead.events[0]?.event_date) || today,
+      event_date: lead.event_date || (lead.events && lead.events[0]?.event_date) || '',
       event_time: lead.event_time || (lead.events && (lead.events[0]?.event_start_time || (lead.events[0] as any)?.event_time)) || ''
     });
     initEventsReporting(lead);
@@ -9143,6 +9229,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     handleSendWhatsAppQuote,
     handleStatusSave,
     handleSubmitUnlockRequest,
+    handleSaveStep1Only,
     handleWizardNext,
     initEventsReporting,
     internalNotes,

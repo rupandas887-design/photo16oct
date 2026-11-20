@@ -183,11 +183,8 @@ export const getSortedLeadEvents = (lead?: Lead | any, orders?: any[]): UnifiedL
     lead.event_location ||
     (lead as any).venue_address ||
     (lead as any).venue ||
-    lead.address ||
-    lead.city ||
     linkedOrder?.event_location ||
     (linkedOrder as any)?.venue_address ||
-    (linkedOrder as any)?.address ||
     ''
   );
 

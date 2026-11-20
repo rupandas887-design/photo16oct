@@ -153,6 +153,7 @@ export const SalesCrmWizard: React.FC<SalesCrmWizardProps> = (props) => {
     customSource,
     setCustomSource,
     handleWizardNext,
+    handleSaveStep1Only,
     existingCustomerData,
     useExistingCustomerData,
     discardExistingCustomerData,
@@ -258,7 +259,7 @@ export const SalesCrmWizard: React.FC<SalesCrmWizardProps> = (props) => {
       Select_Package_Option: activePkgId,
       selected_package_id: activePkgId,
       events: activeEventsList,
-      event_date: (activeEventsList[0]?.event_date) || targetLead.event_date || createForm.event_date || new Date().toISOString().split('T')[0],
+      event_date: (activeEventsList[0]?.event_date) || targetLead.event_date || createForm.event_date || '',
       event_time: (activeEventsList[0]?.event_time) || targetLead.event_time || createForm.event_time || ''
     };
 
@@ -293,7 +294,7 @@ export const SalesCrmWizard: React.FC<SalesCrmWizardProps> = (props) => {
         package_name: packages?.find((p: any) => String(p.package_id) === String(activePkgId))?.package_name || activePkgId,
         quotation_amount: step3Amount || Number(leadForConfirmation.Final_Quotation_Amount) || 0,
         advance_received: calcAdvance,
-        event_date: (activeEventsList[0]?.event_date) || leadForConfirmation.event_date || today,
+        event_date: (activeEventsList[0]?.event_date) || leadForConfirmation.event_date || '',
         event_time: (activeEventsList[0]?.event_time) || leadForConfirmation.event_time || ''
       });
       if (initEventsReporting) {
@@ -556,18 +557,31 @@ export const SalesCrmWizard: React.FC<SalesCrmWizardProps> = (props) => {
 
               {/* Next or Save */}
               {wizardStep < 3 ? (
-                <button
-                  type="button"
-                  onClick={handleWizardNext}
-                  disabled={isSaving || (wizardStep === 3 && selectedPkgIds.length === 0)}
-                  className={`px-5.5 py-2 text-xs font-bold text-white rounded-xl shadow-lg border border-transparent transition-colors flex items-center gap-1.5 ${
-                    wizardStep === 3 && selectedPkgIds.length === 0
-                      ? 'bg-slate-800 text-slate-500 border border-slate-850 cursor-not-allowed opacity-50 shadow-none'
-                      : 'bg-cyan-600 hover:bg-cyan-500 shadow-cyan-500/10 cursor-pointer'
-                  }`}
-                >
-                  {isSaving ? 'Processing...' : 'Save & Continue →'}
-                </button>
+                <div className="flex items-center gap-2">
+                  {wizardStep === 1 && handleSaveStep1Only && (
+                    <button
+                      type="button"
+                      id="btn_create_save_step1_only"
+                      onClick={handleSaveStep1Only}
+                      disabled={isSaving}
+                      className="px-4 py-2 text-xs font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-xl border border-slate-700 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {isSaving ? 'Saving...' : 'Save Step 1'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleWizardNext}
+                    disabled={isSaving || (wizardStep === 3 && selectedPkgIds.length === 0)}
+                    className={`px-5.5 py-2 text-xs font-bold text-white rounded-xl shadow-lg border border-transparent transition-colors flex items-center gap-1.5 ${
+                      wizardStep === 3 && selectedPkgIds.length === 0
+                        ? 'bg-slate-800 text-slate-500 border border-slate-850 cursor-not-allowed opacity-50 shadow-none'
+                        : 'bg-cyan-600 hover:bg-cyan-500 shadow-cyan-500/10 cursor-pointer'
+                    }`}
+                  >
+                    {isSaving ? 'Processing...' : 'Save & Continue →'}
+                  </button>
+                </div>
               ) : (
                 <div className="flex items-center gap-2">
                   {!isCreatedLeadConfirmed && (
@@ -1595,7 +1609,7 @@ export const SalesCrmWizard: React.FC<SalesCrmWizardProps> = (props) => {
                                 package_name: packages?.find((p) => String(p.package_id) === String(wizardLeadData.selected_package_id || selectedLead.Select_Package_Option))?.package_name || wizardLeadData.selected_package_id || selectedLead.Select_Package_Option || '',
                                 quotation_amount: step3Amount || Number(selectedLead.Final_Quotation_Amount) || Number((selectedLead as any).final_quotation_amount) || 0,
                                 advance_received: calcAdvance,
-                                event_date: selectedLead.event_date || today,
+                                event_date: selectedLead.event_date || '',
                                 event_time: selectedLead.event_time || ''
                               });
                               if (initEventsReporting) {
@@ -1615,6 +1629,21 @@ export const SalesCrmWizard: React.FC<SalesCrmWizardProps> = (props) => {
                         >
                           <CheckSquare className="w-3.5 h-3.5" />
                           <span>ORDER CONFIRMED</span>
+                        </button>
+                      )}
+                      {crmWizardStep === 1 && (
+                        <button
+                          type="button"
+                          id="btn_crm_save_step1_only"
+                          onClick={() => handleSaveStep(1, false)}
+                          disabled={isSaving || isCrmLocked || isStep1Locked}
+                          className={`w-full sm:w-auto h-9 sm:h-7 px-3.5 py-1.5 sm:py-1 text-xs font-mono font-bold uppercase rounded transition-all flex items-center justify-center gap-1.5 border ${
+                            isCrmLocked || isStep1Locked
+                              ? 'bg-slate-800 text-slate-500 border-slate-800 cursor-not-allowed opacity-50'
+                              : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700 cursor-pointer'
+                          }`}
+                        >
+                          <span>{isSaving ? 'Saving...' : 'Save Step 1'}</span>
                         </button>
                       )}
                       <button

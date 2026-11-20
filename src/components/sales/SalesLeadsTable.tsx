@@ -1152,7 +1152,7 @@ export const SalesLeadsTable: React.FC<SalesLeadsTableProps> = (props) => {
                                                     package_name: packages?.find((p: any) => String(p.package_id) === String(lead.Select_Package_Option))?.package_name || lead.Select_Package_Option || '',
                                                     quotation_amount: step3Amount || Number(lead.Final_Quotation_Amount) || Number((lead as any).final_quotation_amount) || 0,
                                                     advance_received: calcAdvance,
-                                                    event_date: lead.event_date || today,
+                                                    event_date: lead.event_date || '',
                                                     event_time: lead.event_time || ''
                                                   });
                                                   initEventsReporting(lead);
