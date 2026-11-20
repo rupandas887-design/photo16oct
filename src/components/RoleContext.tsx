@@ -2297,14 +2297,14 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({ children
         'Next_Follow_up_Date', 'Follow-up Notes', 'Lost_Reason', 'Lost_Notes'
       ],
       orders: [
-        'order_id', 'lead_id', 'customer_name', 'mobile', 'event_type', 'custom_event_type', 'custom_event_name', 'shoot_type', 'event_date', 
-        'event_time', 'event_location', 'package_name', 'quotation_amount', 'advance_received', 
-        'balance_amount', 'order_status', 'current_stage', 'sales_person', 'created_at', 
-        'updated_by', 'updated_at', 'whatsapp_number', 'client_residence_address', 'city', 'state', 'pincode', 'Select_Package_Option', 
-        'desired_event_shoot_type', 'reporting_time', 'Reporting_date', 'package_price', 'deliverables_description', 
-        'Team_member', 'Team_Members', 'team_members', 'Team_members', 'team_member',
-        'notes_special_customizations', 'quotation_discount', 'additional_services_cost', 'Quotation_Discount', 'Additional_Services_Cost', 'Specify_Custom_Lead_Source_Name', 'Final_Quotation_Amount',
-        'total_pax', 'reference_source', 'lead_value', 'lead_score', 'booking_status'
+        'order_id', 'lead_id', 'customer_name', 'mobile', 'event_type', 'custom_event_type', 'custom_event_name', 'shoot_type', 'event_date',
+        'event_time', 'event_location', 'package_name', 'quotation_amount', 'advance_received',
+        'balance_amount', 'order_status', 'current_stage', 'sales_person', 'created_at',
+        'updated_by', 'updated_at', 'whatsapp_number', 'client_residence_address', 'city', 'state', 'pincode',
+        'desired_event_shoot_type', 'reporting_time', 'Reporting_date', 'package_price', 'deliverables_description',
+        'notes_special_customizations', 'quotation_discount', 'additional_services_cost',
+        'Final_Package_Amount', 'Advance_Collected', 'Transaction_ID', 'Payment_Mode',
+        'Lost_Reason', 'Lost_Notes', 'client_communication_proof', 'customer_communication_proof', 'proof_url'
       ],
       operations: [
         'operation_id', 'order_id', 'photographer_assigned', 'videographer_assigned', 
@@ -6086,27 +6086,33 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     const resolvedRemarks = `${targetLead.remarks || ''}\n[Booking Confirmed Update ${new Date().toISOString().split('T')[0]}]: ${notes || 'No extra notes'}. Payment Mode: ${paymentMode || 'N/A'}`;
     const timestamp = new Date().toISOString();
 
-    const leadDiscount = Number(targetLead.quotation_discount || targetLead.Quotation_Discount || 0);
-    const leadAdditional = Number(targetLead.additional_services_cost || targetLead.Additional_Services_Cost || 0);
-    const rawPkgPrice = Number(targetLead.package_price || 0);
-    const rawBudget = Number(targetLead.budget || 0);
+    let freshDbLead: any = null;
+    if (supabaseClient) {
+      try {
+        const { data } = await supabaseClient
+          .from('leads')
+          .select('*')
+          .eq('lead_id', leadId)
+          .maybeSingle();
+        if (data) freshDbLead = data;
+      } catch (_) {}
+    }
 
-    const resolvedPackageBasePrice = (() => {
-      if (rawPkgPrice > 0) {
-        if (leadDiscount > 0 && rawPkgPrice === quotationAmount) {
-          // Recover original base price if previously overwritten with quotationAmount
-          return rawPkgPrice + leadDiscount - leadAdditional;
-        }
-        return rawPkgPrice;
-      }
-      if (rawBudget > 0) {
-        if (leadDiscount > 0 && rawBudget === quotationAmount) {
-          return rawBudget + leadDiscount - leadAdditional;
-        }
-        return rawBudget;
-      }
-      return Math.max(0, quotationAmount + leadDiscount - leadAdditional);
-    })();
+    const effectiveLead = freshDbLead ? { ...targetLead, ...freshDbLead } : targetLead;
+    const leadDiscount = Number(effectiveLead.Quotation_Discount ?? effectiveLead.quotation_discount ?? 0);
+    const leadAdditional = Number(effectiveLead.Additional_Services_Cost ?? effectiveLead.additional_services_cost ?? 0);
+    const rawPkgPrice = Number(effectiveLead.package_price || 0);
+    const rawBudget = Number(effectiveLead.budget || 0);
+
+    // Package Base Price must always retain the original package amount — NEVER add discount to base price.
+    const resolvedPackageBasePrice = rawPkgPrice > 0
+      ? rawPkgPrice
+      : (rawBudget > 0 ? rawBudget : Number(quotationAmount || 0));
+
+    // Final Quotation Amount = Package Base Price - Quotation Discount (+ Additional Services Cost if any)
+    const resolvedFinalQuotationAmount = resolvedPackageBasePrice > 0
+      ? Math.max(0, resolvedPackageBasePrice - leadDiscount + leadAdditional)
+      : Number(quotationAmount || 0);
 
     const resLead = await pushUpdate('leads', 'lead_id', leadId, { 
       status: 'Order Confirmed', 
@@ -6116,16 +6122,20 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       booking_date: new Date().toISOString().split('T')[0],
       booking_time: new Date().toLocaleTimeString(),
       package_name: packageName,
-      Final_Package_Amount: quotationAmount,
-      final_package_amount: quotationAmount,
-      Final_Quotation_Amount: quotationAmount,
+      Final_Package_Amount: resolvedFinalQuotationAmount,
+      final_package_amount: resolvedFinalQuotationAmount,
+      Final_Quotation_Amount: resolvedFinalQuotationAmount,
+      Quotation_Discount: leadDiscount,
+      quotation_discount: leadDiscount,
+      Additional_Services_Cost: leadAdditional,
+      additional_services_cost: leadAdditional,
       advance_collected: advanceReceived,
       payment_mode: paymentMode || 'N/A',
       transaction_id: cleanTxnId || undefined,
       contract_notes: notes || 'No extra notes',
-      event_date: eventDate || targetLead.event_date,
-      event_time: eventTime || targetLead.event_time,
-      reporting_time: reportingTime || targetLead.reporting_time,
+      event_date: eventDate || effectiveLead.event_date,
+      event_time: eventTime || effectiveLead.event_time,
+      reporting_time: reportingTime || effectiveLead.reporting_time,
       remarks: resolvedRemarks,
       updated_by: currentUserName, 
       updated_at: timestamp,
@@ -6203,48 +6213,51 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
     
     if (orderExistsInDb) {
       const rOrd = await pushUpdate('orders', 'order_id', masterOrderId, {
-        customer_name: targetLead.customer_name,
-        mobile: targetLead.mobile,
-        event_type: targetLead.event_type,
-        custom_event_name: targetLead.custom_event_name || '',
-        custom_event_type: targetLead.custom_event_type || '',
-        event_date: eventDate || targetLead.event_date || undefined,
-        event_time: eventTime || targetLead.event_time || undefined,
-        reporting_time: reportingTime || targetLead.reporting_time || undefined,
-        event_location: targetLead.event_location,
+        customer_name: effectiveLead.customer_name,
+        mobile: effectiveLead.mobile,
+        event_type: effectiveLead.event_type,
+        custom_event_name: effectiveLead.custom_event_name || '',
+        custom_event_type: effectiveLead.custom_event_type || '',
+        event_date: eventDate || effectiveLead.event_date || undefined,
+        event_time: eventTime || effectiveLead.event_time || undefined,
+        reporting_time: reportingTime || effectiveLead.reporting_time || undefined,
+        event_location: effectiveLead.event_location,
         package_name: packageName,
-        quotation_amount: quotationAmount,
+        quotation_amount: resolvedFinalQuotationAmount,
         advance_received: 0,
-        balance_amount: quotationAmount,
+        balance_amount: resolvedFinalQuotationAmount,
         order_status: 'Confirmed',
         current_stage: 'Order Confirmed',
         sales_person: currentUserName,
         updated_by: currentUserName,
         updated_at: timestamp,
-        client_residence_address: targetLead.client_residence_address || '',
-        city: targetLead.city || '',
-        state: targetLead.state || '',
-        pincode: targetLead.pincode || '',
-        desired_event_shoot_type: targetLead.desired_event_shoot_type || '',
+        client_residence_address: effectiveLead.client_residence_address || '',
+        city: effectiveLead.city || '',
+        state: effectiveLead.state || '',
+        pincode: effectiveLead.pincode || '',
+        desired_event_shoot_type: effectiveLead.desired_event_shoot_type || '',
         package_price: resolvedPackageBasePrice,
-        deliverables_description: targetLead.deliverables_description || '',
-        notes_special_customizations: targetLead.notes_special_customizations || '',
+        deliverables_description: effectiveLead.deliverables_description || '',
+        notes_special_customizations: effectiveLead.notes_special_customizations || '',
         quotation_discount: leadDiscount,
         additional_services_cost: leadAdditional,
       });
       if (!rOrd?.success) throw new Error("Failed to update existing order: " + rOrd?.error);
       setOrders(prev => prev.map(o => o.order_id === masterOrderId ? {
         ...o,
-        customer_name: targetLead.customer_name,
-        mobile: targetLead.mobile,
-        event_type: targetLead.event_type,
-        event_date: eventDate || targetLead.event_date || o.event_date,
-        event_time: eventTime || targetLead.event_time || o.event_time,
-        reporting_time: reportingTime || targetLead.reporting_time || o.reporting_time,
-        event_location: targetLead.event_location,
+        customer_name: effectiveLead.customer_name,
+        mobile: effectiveLead.mobile,
+        event_type: effectiveLead.event_type,
+        event_date: eventDate || effectiveLead.event_date || o.event_date,
+        event_time: eventTime || effectiveLead.event_time || o.event_time,
+        reporting_time: reportingTime || effectiveLead.reporting_time || o.reporting_time,
+        event_location: effectiveLead.event_location,
         package_name: packageName,
         package_price: resolvedPackageBasePrice,
-        quotation_amount: quotationAmount,
+        quotation_discount: leadDiscount,
+        additional_services_cost: leadAdditional,
+        quotation_amount: resolvedFinalQuotationAmount,
+        balance_amount: resolvedFinalQuotationAmount,
         order_status: 'Confirmed',
         current_stage: 'Order Confirmed',
         updated_at: timestamp
@@ -6253,36 +6266,36 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       const newOrder: Order = {
         order_id: masterOrderId,
         lead_id: leadId,
-        customer_name: targetLead.customer_name,
-        mobile: targetLead.mobile,
-        event_type: targetLead.event_type,
-        custom_event_name: targetLead.custom_event_name || '',
-        custom_event_type: targetLead.custom_event_type || '',
-        shoot_type: targetLead.shoot_type || '',
-        event_date: eventDate || targetLead.event_date || undefined,
-        event_time: eventTime || targetLead.event_time || undefined,
-        reporting_time: reportingTime || targetLead.reporting_time || undefined,
-        event_location: targetLead.event_location,
+        customer_name: effectiveLead.customer_name,
+        mobile: effectiveLead.mobile,
+        event_type: effectiveLead.event_type,
+        custom_event_name: effectiveLead.custom_event_name || '',
+        custom_event_type: effectiveLead.custom_event_type || '',
+        shoot_type: effectiveLead.shoot_type || '',
+        event_date: eventDate || effectiveLead.event_date || undefined,
+        event_time: eventTime || effectiveLead.event_time || undefined,
+        reporting_time: reportingTime || effectiveLead.reporting_time || undefined,
+        event_location: effectiveLead.event_location,
         package_name: packageName,
-        quotation_amount: quotationAmount,
+        quotation_amount: resolvedFinalQuotationAmount,
         advance_received: 0,
-        balance_amount: quotationAmount,
+        balance_amount: resolvedFinalQuotationAmount,
         order_status: 'Confirmed',
         current_stage: 'Order Confirmed',
         sales_person: currentUserName,
         created_at: timestamp,
         updated_by: currentUserName,
         updated_at: timestamp,
-        whatsapp_number: targetLead.whatsapp_number || undefined,
-        address: targetLead.address || '',
-        city: targetLead.city || '',
-        state: targetLead.state || '',
-        pincode: targetLead.pincode || '',
-        client_residence_address: targetLead.client_residence_address || '',
-        desired_event_shoot_type: targetLead.desired_event_shoot_type || '',
+        whatsapp_number: effectiveLead.whatsapp_number || undefined,
+        address: effectiveLead.address || '',
+        city: effectiveLead.city || '',
+        state: effectiveLead.state || '',
+        pincode: effectiveLead.pincode || '',
+        client_residence_address: effectiveLead.client_residence_address || '',
+        desired_event_shoot_type: effectiveLead.desired_event_shoot_type || '',
         package_price: resolvedPackageBasePrice,
-        deliverables_description: targetLead.deliverables_description || '',
-        notes_special_customizations: targetLead.notes_special_customizations || '',
+        deliverables_description: effectiveLead.deliverables_description || '',
+        notes_special_customizations: effectiveLead.notes_special_customizations || '',
         quotation_discount: leadDiscount,
         additional_services_cost: leadAdditional,
       };
@@ -6322,9 +6335,9 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       const newPayment: Payment = {
         payment_id: paymentId,
         order_id: masterOrderId,
-        quotation_amount: quotationAmount,
+        quotation_amount: resolvedFinalQuotationAmount,
         advance_received: 0,
-        balance_due: quotationAmount,
+        balance_due: resolvedFinalQuotationAmount,
         final_payment_received: 0,
         payment_date: new Date().toISOString().split('T')[0],
         payment_proof_url: undefined,
@@ -6347,9 +6360,9 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       const hasAdvance = advanceReceived > 0;
       const initialPaymentStatus: PaymentStatus = hasAdvance ? 'Waiting for Approval' : 'Pending';
       const updatedPaymentPayload = {
-        quotation_amount: quotationAmount,
+        quotation_amount: resolvedFinalQuotationAmount,
         advance_received: 0,
-        balance_due: quotationAmount,
+        balance_due: resolvedFinalQuotationAmount,
         payment_date: new Date().toISOString().split('T')[0],
         payment_status: initialPaymentStatus,
         transaction_id: cleanTxnId || undefined,
@@ -6497,6 +6510,14 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
             status: 'Order Confirmed',
             current_status: 'Order Confirmed',
             quotation_locked: true,
+            package_price: resolvedPackageBasePrice,
+            budget: resolvedPackageBasePrice,
+            Quotation_Discount: leadDiscount,
+            quotation_discount: leadDiscount,
+            Additional_Services_Cost: leadAdditional,
+            Final_Quotation_Amount: resolvedFinalQuotationAmount,
+            Final_Package_Amount: resolvedFinalQuotationAmount,
+            final_package_amount: resolvedFinalQuotationAmount,
             event_date: eventDate || ld.event_date,
             event_time: eventTime || ld.event_time,
             reporting_time: reportingTime || ld.reporting_time,
@@ -11100,7 +11121,7 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
       })
     );
 
-    // Sync team members to linked orders in memory and database
+    // Sync team members to linked orders in memory (orders table does not store team_members column directly)
     const incomingTeamVal = (finalUpdates as any).Team_member ?? (finalUpdates as any).Team_Members ?? (finalUpdates as any).team_members;
     if (incomingTeamVal !== undefined) {
       setOrders((prev) =>
@@ -11117,13 +11138,6 @@ const safeParseResponse = async (response: Response): Promise<{ ok: boolean; dat
           return o;
         })
       );
-      const linkedOrders = orders.filter(o => o.lead_id === leadId);
-      for (const lo of linkedOrders) {
-        pushUpdate('orders', 'order_id', lo.order_id, {
-          team_members: incomingTeamVal,
-          updated_at: timestamp
-        }).catch(err => console.warn('Could not sync team_members to orders table', err));
-      }
     }
 
     const newStatus = finalUpdates.current_status;

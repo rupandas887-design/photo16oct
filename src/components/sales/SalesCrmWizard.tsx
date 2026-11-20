@@ -226,17 +226,35 @@ export const SalesCrmWizard: React.FC<SalesCrmWizardProps> = (props) => {
     : (salesStatus === 'Order Confirmed' || wizardLeadData.status === 'Order Confirmed');
 
   const handleCreateFlowOrderConfirm = () => {
+    const activeBasePrice = Number(
+      (props.wizardLeadData?.package_cost !== '' && props.wizardLeadData?.package_cost !== undefined && props.wizardLeadData?.package_cost !== null && !isNaN(Number(props.wizardLeadData?.package_cost)))
+        ? props.wizardLeadData.package_cost
+        : (props.wizardLeadData?.package_price || subtotal || createdLeadRecord?.package_price || createdLeadRecord?.budget || 0)
+    );
+    const activeDiscount = (props.quoteDiscount !== '' && props.quoteDiscount !== undefined && props.quoteDiscount !== null && !isNaN(Number(props.quoteDiscount)))
+      ? Number(props.quoteDiscount)
+      : Number(createdLeadRecord?.Quotation_Discount ?? (createdLeadRecord as any)?.quotation_discount ?? 0);
+    const activeAdditional = (props.quoteAdditional !== '' && props.quoteAdditional !== undefined && props.quoteAdditional !== null && !isNaN(Number(props.quoteAdditional)))
+      ? Number(props.quoteAdditional)
+      : Number(createdLeadRecord?.Additional_Services_Cost ?? (createdLeadRecord as any)?.additional_services_cost ?? 0);
+    const computedFinalAmt = activeBasePrice > 0
+      ? Math.max(0, activeBasePrice - activeDiscount + activeAdditional)
+      : (dynamicFinalAmt || finalTotal || Number(createdLeadRecord?.Final_Quotation_Amount || 0));
+
     const targetLead = createdLeadRecord || {
       lead_id: createdLeadId || 'NEW-LEAD',
       customer_name: createForm.customer_name,
       mobile: createForm.mobile,
       whatsapp_number: createForm.whatsapp_number,
       status: 'Create Quote',
-      budget: finalTotal,
-      package_price: finalTotal,
-      Final_Quotation_Amount: finalTotal,
-      Final_Package_Amount: finalTotal,
-      final_package_amount: finalTotal,
+      budget: activeBasePrice,
+      package_price: activeBasePrice,
+      Quotation_Discount: activeDiscount,
+      quotation_discount: activeDiscount,
+      Additional_Services_Cost: activeAdditional,
+      Final_Quotation_Amount: computedFinalAmt,
+      Final_Package_Amount: computedFinalAmt,
+      final_package_amount: computedFinalAmt,
       Select_Package_Option: selectedPkgIds[0] || createForm.selected_package_id || createForm.Select_Package_Option || 'Custom Package',
       events: createEvents && createEvents.length > 0 ? createEvents : []
     } as Lead;
@@ -251,11 +269,14 @@ export const SalesCrmWizard: React.FC<SalesCrmWizardProps> = (props) => {
       mobile: targetLead.mobile || createForm.mobile,
       whatsapp_number: targetLead.whatsapp_number || createForm.whatsapp_number,
       status: targetLead.status || 'Create Quote',
-      budget: finalTotal || targetLead.budget,
-      package_price: targetLead.package_price || finalTotal,
-      Final_Quotation_Amount: finalTotal || targetLead.Final_Quotation_Amount,
-      Final_Package_Amount: finalTotal || targetLead.Final_Package_Amount,
-      final_package_amount: finalTotal || targetLead.final_package_amount,
+      budget: activeBasePrice || targetLead.budget,
+      package_price: activeBasePrice || targetLead.package_price,
+      Quotation_Discount: activeDiscount,
+      quotation_discount: activeDiscount,
+      Additional_Services_Cost: activeAdditional,
+      Final_Quotation_Amount: computedFinalAmt || targetLead.Final_Quotation_Amount,
+      Final_Package_Amount: computedFinalAmt || targetLead.Final_Package_Amount,
+      final_package_amount: computedFinalAmt || targetLead.final_package_amount,
       Select_Package_Option: activePkgId,
       selected_package_id: activePkgId,
       events: activeEventsList,
@@ -274,9 +295,9 @@ export const SalesCrmWizard: React.FC<SalesCrmWizardProps> = (props) => {
         ? ((linkedPayment.advance_received ?? 0) + (linkedPayment.final_payment_received ?? 0)) 
         : (linkedOrder 
             ? (linkedOrder.advance_received ?? 0) 
-            : (leadForConfirmation.advance_collected !== undefined && leadForConfirmation.advance_collected !== null && leadForConfirmation.advance_collected !== ''
+            : (leadForConfirmation.advance_collected !== undefined && leadForConfirmation.advance_collected !== null && String(leadForConfirmation.advance_collected) !== ''
                 ? Number(leadForConfirmation.advance_collected) 
-                : (wizardLeadData.advance_received !== undefined && wizardLeadData.advance_received !== null && wizardLeadData.advance_received !== ''
+                : (wizardLeadData.advance_received !== undefined && wizardLeadData.advance_received !== null && String(wizardLeadData.advance_received) !== ''
                     ? Number(wizardLeadData.advance_received)
                     : 0)));
 

@@ -289,6 +289,21 @@ async function startServer() {
     let healed = false;
     const nextPayload = { ...payload };
 
+    const appendFallbackNote = (fieldName: string, val: any) => {
+      // Never re-add remarks or notes if that column itself was just stripped (prevents infinite self-healing loop)
+      if (fieldName === 'remarks' || fieldName === 'notes') return;
+      const currentRemarks = nextPayload.remarks || nextPayload.notes || '';
+      const annotation = `[System Fallback - ${fieldName}]: ${val}`;
+      if (nextPayload.remarks !== undefined) {
+        nextPayload.remarks = currentRemarks ? `${currentRemarks}\n${annotation}` : annotation;
+      } else if (nextPayload.notes !== undefined) {
+        nextPayload.notes = currentRemarks ? `${currentRemarks}\n${annotation}` : annotation;
+      } else if (['leads', 'operations', 'production'].includes(table)) {
+        // Note: 'orders' table has no 'remarks' or 'notes' column in Supabase
+        nextPayload.remarks = annotation;
+      }
+    };
+
     // Common columns that might be missing or cause schema cache errors
     const potentialStaleCols = [
       'deliverables_description',
@@ -302,7 +317,18 @@ async function startServer() {
       'booking_status',
       'reporting_time',
       'quotation_discount',
+      'Quotation_Discount',
       'additional_services_cost',
+      'Additional_Services_Cost',
+      'Final_Quotation_Amount',
+      'Specify_Custom_Lead_Source_Name',
+      'team_members',
+      'Team_Members',
+      'Team_member',
+      'Team_members',
+      'team_member',
+      'remarks',
+      'notes',
       'whatsapp_number',
       'client_residence_address',
       'address',
@@ -328,17 +354,7 @@ async function startServer() {
       console.warn(`[Server Self-Healing] Found specific stale column "${colName}" for table "${table}". Stripping...`);
       const val = nextPayload[colName];
       delete nextPayload[colName];
-      
-      // Save the stripped value to remarks/notes
-      const currentRemarks = nextPayload.remarks || nextPayload.notes || '';
-      const annotation = `[System Fallback - ${colName}]: ${val}`;
-      if (nextPayload.remarks !== undefined) {
-        nextPayload.remarks = currentRemarks ? `${currentRemarks}\n${annotation}` : annotation;
-      } else if (nextPayload.notes !== undefined) {
-        nextPayload.notes = currentRemarks ? `${currentRemarks}\n${annotation}` : annotation;
-      } else if (['leads', 'orders', 'operations', 'production'].includes(table)) {
-        nextPayload.remarks = annotation;
-      }
+      appendFallbackNote(colName, val);
       healed = true;
     }
 
@@ -348,16 +364,7 @@ async function startServer() {
         console.warn(`[Server Self-Healing] Stripping matching stale column "${col}" from error message...`);
         const val = nextPayload[col];
         delete nextPayload[col];
-        
-        const currentRemarks = nextPayload.remarks || nextPayload.notes || '';
-        const annotation = `[System Fallback - ${col}]: ${val}`;
-        if (nextPayload.remarks !== undefined) {
-          nextPayload.remarks = currentRemarks ? `${currentRemarks}\n${annotation}` : annotation;
-        } else if (nextPayload.notes !== undefined) {
-          nextPayload.notes = currentRemarks ? `${currentRemarks}\n${annotation}` : annotation;
-        } else if (['leads', 'orders', 'operations', 'production'].includes(table)) {
-          nextPayload.remarks = annotation;
-        }
+        appendFallbackNote(col, val);
         healed = true;
       }
     }
@@ -378,15 +385,7 @@ async function startServer() {
           } else {
             const val = nextPayload[k];
             delete nextPayload[k];
-            const currentRemarks = nextPayload.remarks || nextPayload.notes || '';
-            const annotation = `[System Fallback - ${k}]: ${val}`;
-            if (nextPayload.remarks !== undefined) {
-              nextPayload.remarks = currentRemarks ? `${currentRemarks}\n${annotation}` : annotation;
-            } else if (nextPayload.notes !== undefined) {
-              nextPayload.notes = currentRemarks ? `${currentRemarks}\n${annotation}` : annotation;
-            } else if (['leads', 'orders', 'operations', 'production'].includes(table)) {
-              nextPayload.remarks = annotation;
-            }
+            appendFallbackNote(k, val);
           }
           healed = true;
           break;
@@ -771,6 +770,59 @@ async function startServer() {
         }
       }
       for (const field of ['event_time', 'event_start_time', 'event_end_time', 'reporting_time', 'booking_time']) {
+        if (field in clone) {
+          clone[field] = normalizeTimeForPostgres(clone[field]);
+        }
+      }
+    }
+
+    if (table === 'orders') {
+      const validOrderCols = new Set([
+        'order_id', 'lead_id', 'customer_name', 'mobile', 'event_type', 'custom_event_type',
+        'custom_event_name', 'event_date', 'event_time', 'event_location', 'package_name',
+        'quotation_amount', 'advance_received', 'balance_amount', 'order_status',
+        'current_stage', 'sales_person', 'created_at', 'updated_by', 'updated_at',
+        'client_residence_address', 'city', 'state', 'pincode', 'desired_event_shoot_type',
+        'reporting_time', 'package_price', 'deliverables_description',
+        'notes_special_customizations', 'quotation_discount', 'additional_services_cost',
+        'shoot_type', 'whatsapp_number', 'Reporting_date', 'Final_Package_Amount',
+        'Advance_Collected', 'Transaction_ID', 'Payment_Mode', 'Lost_Reason', 'Lost_Notes',
+        'client_communication_proof', 'customer_communication_proof', 'proof_url'
+      ]);
+      if ('Final_Quotation_Amount' in clone && !('Final_Package_Amount' in clone)) {
+        clone.Final_Package_Amount = clone.Final_Quotation_Amount;
+      }
+      if ('final_package_amount' in clone && !('Final_Package_Amount' in clone)) {
+        clone.Final_Package_Amount = clone.final_package_amount;
+      }
+      if ('Quotation_Discount' in clone && !('quotation_discount' in clone)) {
+        clone.quotation_discount = clone.Quotation_Discount;
+      }
+      if ('Additional_Services_Cost' in clone && !('additional_services_cost' in clone)) {
+        clone.additional_services_cost = clone.Additional_Services_Cost;
+      }
+      if ('reporting_date' in clone && !('Reporting_date' in clone)) {
+        clone.Reporting_date = clone.reporting_date;
+      }
+      for (const k of Object.keys(clone)) {
+        if (!validOrderCols.has(k)) {
+          delete clone[k];
+        }
+      }
+      for (const field of ['event_date', 'Reporting_date']) {
+        if (field in clone) {
+          const val = clone[field];
+          if (val === undefined || val === null) {
+            clone[field] = null;
+          } else {
+            const trimmed = String(val).trim();
+            if (trimmed === '' || trimmed === 'null' || trimmed === 'undefined') {
+              clone[field] = null;
+            }
+          }
+        }
+      }
+      for (const field of ['event_time', 'reporting_time']) {
         if (field in clone) {
           clone[field] = normalizeTimeForPostgres(clone[field]);
         }
@@ -1500,6 +1552,10 @@ async function startServer() {
 
     while (retriesLeft > 0) {
       retriesLeft--;
+      if (operation === 'update' && currentPayload && !Array.isArray(currentPayload) && Object.keys(currentPayload).length === 0) {
+        return { success: true, data: [] };
+      }
+
       let res: any;
       if (operation === 'insert') {
         res = await db.from(table).insert(currentPayload).select();
@@ -1545,14 +1601,6 @@ async function startServer() {
               created_at: new Date().toISOString()
             }, { onConflict: 'package_id' });
           } catch (e) {}
-        }
-      }
-
-      if (operation === 'update' && res.error) {
-        console.warn(`[Server DB] Update failed on table ${table} where ${matchCol}=${matchVal}. Falling back to upsert.`);
-        const upsertRes = await db.from(table).upsert(currentPayload).select();
-        if (!upsertRes.error) {
-          return { success: true, data: upsertRes.data };
         }
       }
 
@@ -1639,13 +1687,22 @@ async function startServer() {
       }
 
       lastError = res.error;
+      // Attempt self-healing BEFORE any upsert fallback so stale columns or invalid syntax are fixed on update first
       const healed = healPayload(table, currentPayload, res.error.message || String(res.error));
       if (healed) {
         console.log(`[Server Self-Healing Loop] Stripped non-matching field, retrying ${operation} on ${table}: ${res.error.message}`);
         currentPayload = healed;
-      } else {
-        break;
+        continue;
       }
+
+      if (operation === 'update' && res.error && matchCol && matchVal !== undefined && !Array.isArray(currentPayload)) {
+        const upsertPayload = { ...currentPayload, [matchCol]: matchVal };
+        const upsertRes = await db.from(table).upsert(upsertPayload, { onConflict: matchCol }).select();
+        if (!upsertRes.error) {
+          return { success: true, data: upsertRes.data };
+        }
+      }
+      break;
     }
 
     if (!['activity_logs', 'notifications', 'analytics_snapshots', 'login_logs', 'staff_task_submissions'].includes(table)) {

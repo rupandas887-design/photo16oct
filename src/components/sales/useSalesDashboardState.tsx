@@ -1223,6 +1223,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   // Packages creation hooks
   const [selectedPkgIds, setSelectedPkgIds] = useState<string[]>([]);
   const [leadDiscount, setLeadDiscount] = useState<number>(0);
+  const [quoteDiscount, setQuoteDiscount] = useState<number | ''>('');
+  const [quoteAdditional, setQuoteAdditional] = useState<number | ''>('');
   const [isPkgDropdownOpen, setIsPkgDropdownOpen] = useState(false);
   const [pkgSearchQuery, setPkgSearchQuery] = useState('');
 
@@ -1231,7 +1233,13 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   
   // Package Selection Price is editable, so subtotal sums the edited prices
   const subtotal = selectedPkgs.reduce((sum, item) => sum + (pkgPrices[item.id] !== undefined ? pkgPrices[item.id] : item.cost), 0);
-  const finalTotal = Math.max(0, subtotal - leadDiscount);
+  const effectiveQuoteDiscount = quoteDiscount !== '' && quoteDiscount !== null && quoteDiscount !== undefined && !isNaN(Number(quoteDiscount))
+    ? Number(quoteDiscount)
+    : (Number(leadDiscount) || 0);
+  const effectiveQuoteAdditional = quoteAdditional !== '' && quoteAdditional !== null && quoteAdditional !== undefined && !isNaN(Number(quoteAdditional))
+    ? Number(quoteAdditional)
+    : 0;
+  const finalTotal = Math.max(0, subtotal + effectiveQuoteAdditional - effectiveQuoteDiscount);
 
   // Sync package configurations on changes
   React.useEffect(() => {
@@ -1277,11 +1285,11 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
   }, [selectedPkgIds, PACKAGES_LIST]);
 
   React.useEffect(() => {
-    // Only auto-override if packages are actively selected
+    // Only auto-override if packages are actively selected (budget tracks Package Base Price before discount)
     if (selectedPkgIds.length > 0) {
       setCreateForm(prev => ({
         ...prev,
-        budget: finalTotal,
+        budget: subtotal,
         selected_package_id: selectedPkgIds[0] || ''
       }));
     } else {
@@ -1290,7 +1298,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         selected_package_id: ''
       }));
     }
-  }, [finalTotal, selectedPkgIds]);
+  }, [subtotal, selectedPkgIds]);
 
   // Body scroll lock effect when Create Lead modal is open (REMOVED to allow scrolling on smaller screens)
   React.useEffect(() => {
@@ -1471,12 +1479,16 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
 
     console.log('TEAM MEMBERS SAVE', { leadId, teamMembers: flatTeamMembers, serialized: safeTeamMembersText });
 
+    const resolvedFallbackBase = dynamicBaseSum > 0
+      ? dynamicBaseSum
+      : (selectedLead?.package_price ? Number(selectedLead.package_price) : (selectedLead?.budget ? Number(selectedLead.budget) : null));
+
     const cleanPkgCost = packageCostOverride !== undefined ? packageCostOverride : (
       wizardLeadData.package_cost !== "" && wizardLeadData.package_cost != null && !isNaN(Number(wizardLeadData.package_cost))
       ? Number(wizardLeadData.package_cost)
       : (wizardLeadData.package_price !== "" && wizardLeadData.package_price != null && !isNaN(Number(wizardLeadData.package_price))
         ? Number(wizardLeadData.package_price)
-        : (wizardLeadData.budget ? Number(wizardLeadData.budget) : null))
+        : (wizardLeadData.budget ? Number(wizardLeadData.budget) : resolvedFallbackBase))
     );
 
     const cleanDiscount = discountOverride !== undefined ? (discountOverride || 0) : (
@@ -1508,6 +1520,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       Add_Deliverable: safeDeliverablesText,
       Select_Package_Option: pkgId,
       Quotation_Discount: cleanDiscount,
+      quotation_discount: cleanDiscount,
       Additional_Services_Cost: cleanAdditional,
       Final_Quotation_Amount: cleanFinalAmt,
       Final_Package_Amount: cleanFinalAmt,
@@ -1535,6 +1548,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
             Add_Deliverable: safeDeliverablesText,
             Select_Package_Option: pkgId,
             Quotation_Discount: cleanDiscount,
+            quotation_discount: cleanDiscount,
             Additional_Services_Cost: cleanAdditional,
             Final_Quotation_Amount: cleanFinalAmt,
             Final_Package_Amount: cleanFinalAmt,
@@ -1876,8 +1890,6 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       setSalesStaffMobile(currentUser.mobile);
     }
   }, [currentUser]);
-  const [quoteDiscount, setQuoteDiscount] = useState<number | ''>('');
-  const [quoteAdditional, setQuoteAdditional] = useState<number | ''>('');
   
   const [quoteServices, setQuoteServices] = useState<{ id: string; name: string; qty: number; price: number; isAdditional?: boolean }[]>([]);
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
@@ -2467,9 +2479,15 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     if (showConfirmModal) {
       if (selectedLead) {
          initEventsReporting(selectedLead);
+         const baseP = Number(selectedLead.package_price || (selectedLead as any).package_cost || selectedLead.budget || 0);
+         const disc = Number(selectedLead.Quotation_Discount ?? (selectedLead as any).quotation_discount ?? quoteDiscount ?? 0);
+         const addl = Number(selectedLead.Additional_Services_Cost ?? (selectedLead as any).additional_services_cost ?? quoteAdditional ?? 0);
+         const computedAmt = baseP > 0
+           ? Math.max(0, baseP - disc + addl)
+           : (Number(selectedLead.Final_Quotation_Amount) || Number((selectedLead as any).final_quotation_amount) || Number(wizardLeadData.final_amount) || Number(selectedLead.final_amount) || 0);
          setConfirmForm(prev => ({
             ...prev,
-            quotation_amount: Number(selectedLead.Final_Quotation_Amount) || Number((selectedLead as any).final_quotation_amount) || Number(wizardLeadData.final_amount) || Number(selectedLead.final_amount) || prev.quotation_amount || 0
+            quotation_amount: computedAmt || prev.quotation_amount || 0
          }));
       }
     }
@@ -2872,8 +2890,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         package_name: activePkgs.map(p => p.package_name).join(' + '),
         package_price: finalBasePkgSum,
         quotation_amount: finalBasePkgSum + Number(quoteAdditional || 0),
-        discount: quoteDiscount,
-        discount_amount: quoteDiscount,
+        discount: Number(quoteDiscount || 0),
+        discount_amount: Number(quoteDiscount || 0),
         additional_services_cost: Number(quoteAdditional || 0),
         final_quotation_amount: finalAmt,
         final_amount: finalAmt,
@@ -2940,14 +2958,14 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
             return {
               package_id: lp.package_id!,
               package_name: lp.package_name || 'Selected Package',
-              package_cost: isPrimary ? Number(wizardLeadData.package_cost) : lp.package_cost,
+              package_cost: isPrimary ? Number(wizardLeadData.package_cost || finalBasePkgSum) : lp.package_cost,
               quantity: lp.quantity || 1,
-              total_amount: isPrimary ? Number(wizardLeadData.package_cost) : lp.total_amount,
-              discount: lp.discount || 0,
-              final_amount: isPrimary ? Number(wizardLeadData.package_cost) : lp.final_amount,
+              total_amount: isPrimary ? Number(wizardLeadData.package_cost || finalBasePkgSum) : lp.total_amount,
+              discount: isPrimary ? Number(quoteDiscount || 0) : (lp.discount || 0),
+              final_amount: isPrimary ? finalAmt : lp.final_amount,
               deliverables_description: isPrimary ? activeDeliverablesText : lp.deliverables_description,
               notes_special_customizations: isPrimary ? wizardLeadData.notes : lp.notes_special_customizations,
-              additional_services_cost: lp.additional_services_cost || 0,
+              additional_services_cost: isPrimary ? Number(quoteAdditional || 0) : (lp.additional_services_cost || 0),
               team_members: incStr || lp.team_members || '',
               deliverables: delStr || lp.deliverables || '',
               ...(hasNewInclusions ? { editable_inclusions: editableInclusions, Team_Members_Included: teamMembersJson } : {}),
@@ -2962,7 +2980,10 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
 
         setWizardLeadData(prev => ({
           ...prev,
-          budget: finalAmt,
+          budget: finalBasePkgSum,
+          package_price: finalBasePkgSum,
+          package_cost: finalBasePkgSum,
+          final_amount: finalAmt,
           final_quoted_amount: finalAmt,
           status: 'Quotation Sent' as CurrentStage,
           remarks: updatedRemarks,
@@ -2973,7 +2994,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           team_members: activeTeamMembersText
         }));
         await updateLead(leadObj.lead_id, {
-          budget: finalAmt,
+          budget: finalBasePkgSum,
           status: 'Quotation Sent' as CurrentStage,
           package_price: finalBasePkgSum,
           deliverables_description: activeDeliverablesText,
@@ -2982,8 +3003,12 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           team_members: activeTeamMembersText,
           notes_special_customizations: leadObj.notes_special_customizations,
           Quotation_Discount: quoteDiscount === "" ? null : Number(quoteDiscount),
+          quotation_discount: quoteDiscount === "" ? 0 : Number(quoteDiscount),
           Additional_Services_Cost: quoteAdditional === "" ? null : Number(quoteAdditional),
           Final_Quotation_Amount: finalAmt,
+          Final_Package_Amount: finalAmt,
+          final_package_amount: finalAmt,
+          _explicit_step3_save: true,
           
           client_residence_address: leadObj.client_residence_address,
           city: leadObj.city,
@@ -3005,11 +3030,11 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       } else {
         setCreateForm(prev => ({
           ...prev,
-          budget: finalAmt
+          budget: finalBasePkgSum
         }));
         setSalesStatus('Quotation Sent');
         await updateLead(createdLeadId!, {
-          budget: finalAmt,
+          budget: finalBasePkgSum,
           status: 'Quotation Sent' as CurrentStage,
           package_price: finalBasePkgSum,
           deliverables_description: activeDeliverablesText,
@@ -3018,8 +3043,12 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           team_members: activeTeamMembersText,
           notes_special_customizations: leadObj.notes_special_customizations,
           Quotation_Discount: quoteDiscount === "" ? null : Number(quoteDiscount),
+          quotation_discount: quoteDiscount === "" ? 0 : Number(quoteDiscount),
           Additional_Services_Cost: quoteAdditional === "" ? null : Number(quoteAdditional),
           Final_Quotation_Amount: finalAmt,
+          Final_Package_Amount: finalAmt,
+          final_package_amount: finalAmt,
+          _explicit_step3_save: true,
           sales_staff_name: salesStaffName,
           sales_staff_mobile: salesStaffMobile,
           client_residence_address: leadObj.client_residence_address,
@@ -3443,7 +3472,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
                     package_cost: rawVal,
                     package_price: parsedNum,
                     budget: parsedNum,
-                    final_quoted_amount: parsedNum
+                    final_quoted_amount: Math.max(0, parsedNum - Number(quoteDiscount || 0) + Number(quoteAdditional || 0))
                   }));
                   if (currentPkg) {
                     setPkgPrices(prev => ({ ...prev, [currentPkg]: parsedNum }));
@@ -4539,8 +4568,10 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     } else {
     }
 
-    setQuoteDiscount(fullLead.Quotation_Discount ?? latestQuote?.discount_amount ?? 0);
-    setQuoteAdditional(fullLead.Additional_Services_Cost ?? latestQuote?.additional_services_cost ?? 0);
+    const resolvedQuoteDisc = fullLead.Quotation_Discount ?? (fullLead as any).quotation_discount ?? primaryLP?.discount ?? latestQuote?.discount_amount ?? 0;
+    const resolvedQuoteAdd = fullLead.Additional_Services_Cost ?? (fullLead as any).additional_services_cost ?? primaryLP?.additional_services_cost ?? latestQuote?.additional_services_cost ?? 0;
+    setQuoteDiscount(resolvedQuoteDisc);
+    setQuoteAdditional(resolvedQuoteAdd);
     if (latestQuote) {
       setActiveQuoteNum(latestQuote.quotation_number || '');
       const quoteSalesName = getCleanSalesStaffName(latestQuote.sales_staff_name || lead.sales_staff_name, lead);
@@ -4584,11 +4615,12 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     setInternalNotes(fullLead.follow_up_notes || '');
     setFollowUpDate(fullLead.next_follow_up_date || '');
     
-    const leadDiscount = Number(fullLead.Quotation_Discount || fullLead.quotation_discount || latestQuote?.discount_amount || 0);
-    const leadAdditional = Number(fullLead.Additional_Services_Cost || fullLead.additional_services_cost || latestQuote?.additional_services_cost || 0);
+    const leadDiscount = Number(resolvedQuoteDisc || 0);
+    const leadAdditional = Number(resolvedQuoteAdd || 0);
     const finalAmountVal = Number(fullLead.Final_Quotation_Amount || fullLead.final_quotation_amount || fullLead.final_amount || latestQuote?.final_amount || 0);
 
-    let cleanPkgPrice = (fullLead.package_price && Number(fullLead.package_price) > 0)
+    // Retrieve exact saved Package Base Price without EVER adding discount to it
+    const cleanPkgPrice = (fullLead.package_price && Number(fullLead.package_price) > 0)
       ? Number(fullLead.package_price)
       : ((primaryLP?.package_cost && Number(primaryLP.package_cost) > 0)
         ? Number(primaryLP.package_cost)
@@ -4598,12 +4630,13 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
             ? Number(fullLead.budget)
             : (matchedPkg ? Number(matchedPkg.price) : 0))));
 
-    // Safety guard: if cleanPkgPrice was previously saved as the discounted final amount, recover original base price
-    if (leadDiscount > 0 && cleanPkgPrice > 0 && finalAmountVal > 0 && cleanPkgPrice === finalAmountVal) {
-      cleanPkgPrice = cleanPkgPrice + leadDiscount - leadAdditional;
-    }
+    // Final Quotation Amount = Package Base Price - Quotation Discount (+ Additional Services Cost if any)
+    const computedFinalAmt = cleanPkgPrice > 0
+      ? Math.max(0, cleanPkgPrice - leadDiscount + leadAdditional)
+      : (finalAmountVal || 0);
     
     setWizardLeadData({
+      lead_id: fullLead.lead_id,
       customer_name: fullLead.customer_name || '',
       mobile: fullLead.mobile ? String(fullLead.mobile) : '',
       whatsapp_number: fullLead.whatsapp_number ? String(fullLead.whatsapp_number) : '',
@@ -4639,7 +4672,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       notes: fullLead.remarks || '',
       // Step 4
       budget: cleanPkgPrice || fullLead.budget || latestQuote?.quotation_amount || 0,
-      final_quoted_amount: fullLead.Final_Quotation_Amount ?? latestQuote?.final_amount ?? (primaryLP ? Number(primaryLP.final_amount) : 0),
+      final_quoted_amount: computedFinalAmt,
       remarks: fullLead.remarks || '',
       next_follow_up_date: '',
       // Step 5
@@ -4651,9 +4684,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       // Order Confirmed Rule fields
       confirmed_event_date: fullLead.booking_date || fullLead.event_date || '',
       confirmed_event_time: fullLead.booking_time || fullLead.event_time || '',
-      final_amount: (fullLead.Final_Package_Amount !== null && fullLead.Final_Package_Amount !== undefined && !isNaN(Number(fullLead.Final_Package_Amount)) && Number(fullLead.Final_Package_Amount) > 0)
-        ? Number(fullLead.Final_Package_Amount)
-        : (Number(fullLead.final_package_amount) || Number(fullLead.Final_Quotation_Amount) || (Number((fullLead as any).final_amount) > 0 ? Number((fullLead as any).final_amount) : 0)),
+      final_amount: computedFinalAmt,
       advance_received: (fullLead.advance_collected !== undefined && fullLead.advance_collected !== null && fullLead.advance_collected !== '') ? Number(fullLead.advance_collected) : 0,
       total_pax: fullLead.total_pax || 0,
       reference_source: fullLead.reference_source || '',
@@ -4674,9 +4705,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       advance_received: 0,
       payment_mode: 'UPI',
     });
-    const resolvedQuoteAmt = getStep3FinalQuotationAmount(fullLead, {
-      dynamicFinalAmt,
-      wizardLeadData,
+    const resolvedQuoteAmt = computedFinalAmt || getStep3FinalQuotationAmount(fullLead, {
       quotations: allQuotations,
       leads: allLeads,
       orders: allOrders,
@@ -4684,7 +4713,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     });
     setConfirmForm({
       package_name: packages?.find((p) => String(p.package_id) === String(lead.Select_Package_Option))?.package_name || lead.Select_Package_Option || '',
-      quotation_amount: resolvedQuoteAmt || Number(fullLead.Final_Quotation_Amount) || Number((fullLead as any).final_quotation_amount) || (Number(wizardLeadData.final_amount) > 0 ? Number(wizardLeadData.final_amount) : 0),
+      quotation_amount: resolvedQuoteAmt,
       advance_received: 0,
       event_date: lead.event_date || '',
       event_time: lead.event_time || '',
@@ -4692,6 +4721,14 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       notes: '',
       transaction_id: '',
     });
+
+    return {
+      fullLead,
+      cleanPkgPrice,
+      leadDiscount,
+      leadAdditional,
+      calculatedFinalAmt: resolvedQuoteAmt
+    };
   };
 
   const handlePackageDropdownChange = (packageId: string) => {
@@ -5068,6 +5105,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
               sales_staff_name: effectiveSalesName,
               sales_staff_mobile: effectiveSalesMobile,
               Quotation_Discount: cleanDiscount,
+              quotation_discount: cleanDiscount || 0,
               Additional_Services_Cost: cleanAdditional,
               Final_Quotation_Amount: cleanFinalAmt,
               Final_Package_Amount: cleanFinalAmt,
@@ -5097,6 +5135,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           sales_staff_name: effectiveSalesName,
           sales_staff_mobile: effectiveSalesMobile,
           Quotation_Discount: cleanDiscount,
+          quotation_discount: cleanDiscount || 0,
           Additional_Services_Cost: cleanAdditional,
           Final_Quotation_Amount: cleanFinalAmt,
           Final_Package_Amount: cleanFinalAmt,
@@ -5504,6 +5543,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
               sales_staff_name: effectiveSalesName,
               sales_staff_mobile: effectiveSalesMobile,
               Quotation_Discount: cleanDiscount,
+              quotation_discount: cleanDiscount || 0,
               Additional_Services_Cost: cleanAdditional,
               Final_Quotation_Amount: cleanFinalAmt,
               Final_Package_Amount: cleanFinalAmt,
@@ -5537,6 +5577,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           sales_staff_name: effectiveSalesName,
           sales_staff_mobile: effectiveSalesMobile,
           Quotation_Discount: cleanDiscount,
+          quotation_discount: cleanDiscount || 0,
           Additional_Services_Cost: cleanAdditional,
           Final_Quotation_Amount: cleanFinalAmt,
           Final_Package_Amount: cleanFinalAmt,
@@ -8121,11 +8162,11 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
           package_cost: pkgPrices[pkg.id] !== undefined ? pkgPrices[pkg.id] : pkg.cost,
           quantity: 1,
           total_amount: pkgPrices[pkg.id] !== undefined ? pkgPrices[pkg.id] : pkg.cost,
-          discount: leadDiscount,
-          final_amount: pkgPrices[pkg.id] !== undefined ? pkgPrices[pkg.id] : pkg.cost,
+          discount: effectiveQuoteDiscount,
+          final_amount: finalTotal,
           deliverables_description: pkgDeliverables[pkg.id] || pkg.deliverables || 'N/A',
           notes_special_customizations: pkgNotes[pkg.id] || '',
-          additional_services_cost: 0,
+          additional_services_cost: effectiveQuoteAdditional,
           team_members: pkg.team_members || '',
           deliverables: pkg.deliverables || ''
         }));
@@ -8146,10 +8187,12 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         budget: subtotal,
         package_price: subtotal,
         Quotation_Discount: quoteDiscount === "" ? null : Number(quoteDiscount),
+        quotation_discount: quoteDiscount === "" ? 0 : Number(quoteDiscount),
         Additional_Services_Cost: quoteAdditional === "" ? null : Number(quoteAdditional),
         Final_Quotation_Amount: finalTotal,
         Final_Package_Amount: finalTotal,
         final_package_amount: finalTotal,
+        _explicit_step3_save: true,
         selected_package_id: activePkgId as any,
         Select_Package_Option: activePkgId,
         deliverables_description: deliverablesText || selectedPkgs.map(p => pkgDeliverables[p.id] || p.deliverables || 'N/A').join('\n'),
@@ -8191,6 +8234,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         budget: subtotal,
         package_price: subtotal,
         Quotation_Discount: quoteDiscount === "" ? null : Number(quoteDiscount),
+        quotation_discount: quoteDiscount === "" ? 0 : Number(quoteDiscount),
         Additional_Services_Cost: quoteAdditional === "" ? null : Number(quoteAdditional),
         Final_Quotation_Amount: finalTotal,
         Final_Package_Amount: finalTotal,
@@ -8599,37 +8643,89 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     if (setOpenDropdownLeadId) {
       setOpenDropdownLeadId(null);
     }
-    await handleSelectLead(lead);
 
-    const linkedOrder = orders?.find((o: any) => o.lead_id === lead.lead_id);
+    // Flush any live Step 3 Base Price / Discount edits for this exact lead before reloading from Supabase
+    const isEditingThisLeadStep3 = Boolean(
+      lead?.lead_id &&
+      lead.lead_id !== 'DRAFT-LEAD' &&
+      ((activeTab === 'create' && createdLeadId === lead.lead_id && wizardStep === 3) ||
+       (selectedLead?.lead_id === lead.lead_id && crmWizardStep === 3))
+    );
+
+    if (step3SaveTimeoutRef.current) {
+      clearTimeout(step3SaveTimeoutRef.current);
+      step3SaveTimeoutRef.current = null;
+    }
+
+    if (isEditingThisLeadStep3 && supabaseClient) {
+      const liveBasePrice = Number(
+        wizardLeadData.package_cost !== '' && wizardLeadData.package_cost != null && !isNaN(Number(wizardLeadData.package_cost))
+          ? wizardLeadData.package_cost
+          : (wizardLeadData.package_price !== '' && wizardLeadData.package_price != null && !isNaN(Number(wizardLeadData.package_price))
+            ? wizardLeadData.package_price
+            : (lead.package_price || lead.budget || dynamicBaseSum || 0))
+      );
+      const liveDiscount = quoteDiscount !== '' && quoteDiscount != null && !isNaN(Number(quoteDiscount))
+        ? Number(quoteDiscount)
+        : Number(lead.Quotation_Discount ?? lead.quotation_discount ?? 0);
+      const liveAdditional = quoteAdditional !== '' && quoteAdditional != null && !isNaN(Number(quoteAdditional))
+        ? Number(quoteAdditional)
+        : Number(lead.Additional_Services_Cost ?? lead.additional_services_cost ?? 0);
+      const liveFinalAmt = Math.max(0, liveBasePrice - liveDiscount + liveAdditional);
+      const livePkgId = wizardLeadData.selected_package_id || lead.Select_Package_Option || selectedPkgIds[0] || 'Custom Package';
+
+      if (liveBasePrice > 0) {
+        try {
+          await supabaseClient
+            .from('leads')
+            .update({
+              Select_Package_Option: livePkgId,
+              package_price: liveBasePrice,
+              budget: liveBasePrice,
+              Quotation_Discount: liveDiscount,
+              quotation_discount: liveDiscount,
+              Additional_Services_Cost: liveAdditional,
+              Final_Quotation_Amount: liveFinalAmt,
+              Final_Package_Amount: liveFinalAmt,
+              final_package_amount: liveFinalAmt,
+              updated_at: new Date().toISOString()
+            })
+            .eq('lead_id', lead.lead_id);
+        } catch (flushErr) {
+          console.warn('Pre-confirmation Step 3 flush warning:', flushErr);
+        }
+      }
+    }
+
+    const selectedResult = await handleSelectLead(lead);
+    const activeLeadObj = selectedResult?.fullLead || lead;
+
+    const linkedOrder = orders?.find((o: any) => o.lead_id === activeLeadObj.lead_id);
     const linkedPayment = linkedOrder ? payments?.find((p: any) => p.order_id === linkedOrder.order_id) : null;
     const calcAdvance = linkedPayment 
       ? ((linkedPayment.advance_received ?? 0) + (linkedPayment.final_payment_received ?? 0)) 
       : (linkedOrder 
           ? (linkedOrder.advance_received ?? 0) 
-          : (lead.advance_collected !== undefined && lead.advance_collected !== null && lead.advance_collected !== ''
-              ? Number(lead.advance_collected) 
+          : (activeLeadObj.advance_collected !== undefined && activeLeadObj.advance_collected !== null && activeLeadObj.advance_collected !== ''
+              ? Number(activeLeadObj.advance_collected) 
               : 0));
 
-    const step3Amt = getStep3FinalQuotationAmount(lead, {
-      dynamicFinalAmt,
-      wizardLeadData,
+    const step3Amt = selectedResult?.calculatedFinalAmt || getStep3FinalQuotationAmount(activeLeadObj, {
       quotations: allQuotations,
       leads: allLeads,
       orders: allOrders,
-      leadPackages,
-      confirmFormQuotationAmount: confirmForm.quotation_amount
+      leadPackages
     });
 
     setConfirmForm({
       ...confirmForm,
-      package_name: packages?.find((p: any) => String(p.package_id) === String(lead.Select_Package_Option))?.package_name || lead.Select_Package_Option || '',
-      quotation_amount: step3Amt || Number(lead.Final_Quotation_Amount) || Number((lead as any).final_quotation_amount) || 0,
+      package_name: packages?.find((p: any) => String(p.package_id) === String(activeLeadObj.Select_Package_Option))?.package_name || activeLeadObj.Select_Package_Option || '',
+      quotation_amount: step3Amt || Number(activeLeadObj.Final_Quotation_Amount) || Number((activeLeadObj as any).final_quotation_amount) || 0,
       advance_received: calcAdvance,
-      event_date: lead.event_date || (lead.events && lead.events[0]?.event_date) || '',
-      event_time: lead.event_time || (lead.events && (lead.events[0]?.event_start_time || (lead.events[0] as any)?.event_time)) || ''
+      event_date: activeLeadObj.event_date || (activeLeadObj.events && activeLeadObj.events[0]?.event_date) || '',
+      event_time: activeLeadObj.event_time || (activeLeadObj.events && (activeLeadObj.events[0]?.event_start_time || (activeLeadObj.events[0] as any)?.event_time)) || ''
     });
-    initEventsReporting(lead);
+    initEventsReporting(activeLeadObj);
     setShowConfirmModal(true);
   };
 
@@ -8656,15 +8752,18 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
     }) || Number(confirmForm.quotation_amount) || Number(selectedLead.Final_Quotation_Amount) || Number((selectedLead as any).final_quotation_amount) || 0;
     if (!effectiveFinalAmt || effectiveFinalAmt <= 0 || isNaN(effectiveFinalAmt)) {
       showToastMsg("Please enter Final Amount.", "error");
+      inFlightConfirmRef.current = false;
       return;
     }
     const numAdvance = (confirmForm.advance_received !== '' && confirmForm.advance_received !== undefined && confirmForm.advance_received !== null) ? Number(confirmForm.advance_received) : 0;
     if (isNaN(numAdvance) || numAdvance < 0) {
       showToastMsg("Please enter a valid Advance Paid Amount.", "error");
+      inFlightConfirmRef.current = false;
       return;
     }
     if (!confirmForm.transaction_id || !confirmForm.transaction_id.trim()) {
       showToastMsg("Please enter Payment Tracking ID / Transaction Reference Number.", "error");
+      inFlightConfirmRef.current = false;
       return;
     }
 
@@ -8686,10 +8785,12 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         const evTitle = ev.event_name || ev.event_type || `Event ${i + 1}`;
         if (!rep?.reporting_date || !rep.reporting_date.trim()) {
           showToastMsg(`Please enter Reporting Date for ${evTitle}.`, "error");
+          inFlightConfirmRef.current = false;
           return;
         }
         if (!rep?.reporting_time || !rep.reporting_time.trim()) {
           showToastMsg(`Please enter Reporting Time for ${evTitle}.`, "error");
+          inFlightConfirmRef.current = false;
           return;
         }
       }
@@ -8700,10 +8801,12 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       };
       if (!rep?.reporting_date || !rep.reporting_date.trim()) {
         showToastMsg("Please enter Reporting Date.", "error");
+        inFlightConfirmRef.current = false;
         return;
       }
       if (!rep?.reporting_time || !rep.reporting_time.trim()) {
         showToastMsg("Please enter Reporting Time.", "error");
+        inFlightConfirmRef.current = false;
         return;
       }
     }
@@ -8758,28 +8861,38 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       const safeTeamMembersText = teamMembersText;
       const safeDeliverablesText = deliverablesText;
 
-      // Ensure original Package Base Price remains intact and is never overwritten by discount or final quotation amount
-      const resolvedDiscount = Number(selectedLead.quotation_discount || selectedLead.Quotation_Discount || quoteDiscount || 0);
-      const resolvedAdditional = Number(selectedLead.additional_services_cost || selectedLead.Additional_Services_Cost || quoteAdditional || 0);
+      // Ensure original Package Base Price remains intact and is never overwritten or increased by discount
+      const resolvedDiscount = Number(
+        selectedLead.Quotation_Discount ??
+        (selectedLead as any).quotation_discount ??
+        (quoteDiscount !== '' && quoteDiscount !== null && quoteDiscount !== undefined ? quoteDiscount : 0)
+      );
+      const resolvedAdditional = Number(
+        selectedLead.Additional_Services_Cost ??
+        (selectedLead as any).additional_services_cost ??
+        (quoteAdditional !== '' && quoteAdditional !== null && quoteAdditional !== undefined ? quoteAdditional : 0)
+      );
 
       const originalBasePrice = (() => {
-        const costVal = Number(wizardLeadData.package_cost);
-        if (!isNaN(costVal) && costVal > 0) return costVal;
-        const priceVal = Number(wizardLeadData.package_price);
-        if (!isNaN(priceVal) && priceVal > 0) return priceVal;
         const leadPriceVal = Number(selectedLead.package_price);
-        if (!isNaN(leadPriceVal) && leadPriceVal > 0) {
-          if (resolvedDiscount > 0 && leadPriceVal === Number(effectiveFinalAmt)) {
-            return leadPriceVal + resolvedDiscount - resolvedAdditional;
-          }
-          return leadPriceVal;
+        if (!isNaN(leadPriceVal) && leadPriceVal > 0) return leadPriceVal;
+        if (wizardLeadData.lead_id === selectedLead.lead_id || activeTab === 'create') {
+          const costVal = Number(wizardLeadData.package_cost);
+          if (!isNaN(costVal) && costVal > 0) return costVal;
+          const priceVal = Number(wizardLeadData.package_price);
+          if (!isNaN(priceVal) && priceVal > 0) return priceVal;
         }
         const leadCostVal = Number(selectedLead.package_cost);
         if (!isNaN(leadCostVal) && leadCostVal > 0) return leadCostVal;
         const leadBudgetVal = Number(selectedLead.budget);
         if (!isNaN(leadBudgetVal) && leadBudgetVal > 0) return leadBudgetVal;
-        return Math.max(0, Number(effectiveFinalAmt) + resolvedDiscount - resolvedAdditional);
+        return Number(effectiveFinalAmt) || 0;
       })();
+
+      // Final Quotation Amount = Package Base Price - Quotation Discount (+ Additional Services Cost if any)
+      const confirmedFinalQuotationAmt = originalBasePrice > 0
+        ? Math.max(0, originalBasePrice - resolvedDiscount + resolvedAdditional)
+        : effectiveFinalAmt;
 
       if (supabaseClient) {
         try {
@@ -8795,10 +8908,11 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
               package_price: originalBasePrice,
               budget: originalBasePrice,
               Quotation_Discount: resolvedDiscount,
+              quotation_discount: resolvedDiscount,
               Additional_Services_Cost: resolvedAdditional,
-              Final_Quotation_Amount: effectiveFinalAmt,
-              Final_Package_Amount: effectiveFinalAmt,
-              final_package_amount: effectiveFinalAmt
+              Final_Quotation_Amount: confirmedFinalQuotationAmt,
+              Final_Package_Amount: confirmedFinalQuotationAmt,
+              final_package_amount: confirmedFinalQuotationAmt
             })
             .eq('lead_id', selectedLead.lead_id);
 
@@ -8819,7 +8933,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
             total_amount: originalBasePrice,
             discount: resolvedDiscount,
             additional_services_cost: resolvedAdditional,
-            final_amount: effectiveFinalAmt,
+            final_amount: confirmedFinalQuotationAmt,
             Team_Members_Included: teamMembersJson,
             editable_inclusions: editableInclusions,
             deliverables_descriptionn: deliverablesJson,
@@ -8883,7 +8997,7 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
       await confirmOrder(
         selectedLead.lead_id,
         confirmForm.package_name,
-        effectiveFinalAmt,
+        confirmedFinalQuotationAmt,
         numAdvance,
         confirmForm.event_date,
         confirmForm.event_time,
@@ -8900,6 +9014,8 @@ export const useSalesDashboardState = (externalActiveTab?: string, externalSetAc
         package_cost: originalBasePrice,
         package_price: originalBasePrice,
         budget: originalBasePrice,
+        final_amount: confirmedFinalQuotationAmt,
+        final_quoted_amount: confirmedFinalQuotationAmt,
         advance_received: numAdvance,
         status: 'Order Confirmed'
       }));

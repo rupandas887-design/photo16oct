@@ -1291,11 +1291,11 @@ export const generateQuotationPDF = (
       const primaryCost = Number(activePkgs[0].package_cost || activePkgs[0].price || 0);
       if (primaryCost > 0) return primaryCost;
     }
-    if (lead?.Final_Quotation_Amount !== undefined && lead?.Final_Quotation_Amount !== null && Number(lead.Final_Quotation_Amount) > 0) {
-      return Math.max(0, Number(lead.Final_Quotation_Amount) + Number(discountValue || 0) - Number(additionalCharges || 0));
-    }
     if (lead?.budget !== undefined && lead?.budget !== null && Number(lead.budget) > 0) {
       return Number(lead.budget);
+    }
+    if (lead?.Final_Quotation_Amount !== undefined && lead?.Final_Quotation_Amount !== null && Number(lead.Final_Quotation_Amount) > 0) {
+      return Number(lead.Final_Quotation_Amount);
     }
     return 0;
   };
@@ -2554,8 +2554,14 @@ export function getStep3FinalQuotationAmount(
     }
   }
 
-  // 2. Saved Final Quotation Amount on targetLead object (Final_Quotation_Amount takes strict priority)
+  // 2. Saved Final Quotation Amount on targetLead object (respecting Base Price - Discount formula)
   if (targetLead) {
+    const baseP = Number(targetLead.package_price || targetLead.package_cost || targetLead.budget || 0);
+    const disc = Number(targetLead.Quotation_Discount ?? targetLead.quotation_discount ?? 0);
+    const addl = Number(targetLead.Additional_Services_Cost ?? targetLead.additional_services_cost ?? 0);
+    if (baseP > 0) {
+      return Math.max(0, baseP - disc + addl);
+    }
     const val = targetLead.Final_Quotation_Amount ?? targetLead.final_quotation_amount;
     if (val !== undefined && val !== null && val !== '' && !isNaN(Number(val)) && Number(val) > 0) {
       return Number(val);
@@ -2566,6 +2572,12 @@ export function getStep3FinalQuotationAmount(
   if (leadId && Array.isArray(options?.leads)) {
     const matched = options.leads.find((l: any) => l.lead_id === leadId);
     if (matched) {
+      const baseP = Number(matched.package_price || matched.package_cost || matched.budget || 0);
+      const disc = Number(matched.Quotation_Discount ?? matched.quotation_discount ?? 0);
+      const addl = Number(matched.Additional_Services_Cost ?? matched.additional_services_cost ?? 0);
+      if (baseP > 0) {
+        return Math.max(0, baseP - disc + addl);
+      }
       const val = matched.Final_Quotation_Amount ?? matched.final_quotation_amount;
       if (val !== undefined && val !== null && val !== '' && !isNaN(Number(val)) && Number(val) > 0) {
         return Number(val);
